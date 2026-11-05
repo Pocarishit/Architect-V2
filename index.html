@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Architect</title>
+  <meta name="description" content="Architect — personal system. Paths for tasks, Blueprint for planning.">
+  <meta name="theme-color" content="#000000">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:wght@400..900&family=Space+Grotesk:wght@300..700&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Noto+Sans:ital,wght@0,400..700;1,400..700&family=Instrument+Serif:ital@0;1&family=Caveat:wght@400..700&display=swap">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/board.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('architect.theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    })();
+  </script>
+  <script src="config.js"></script>
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+  <noscript>Architect needs JavaScript to run.</noscript>
+</body>
+</html>

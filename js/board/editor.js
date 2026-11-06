@@ -78,7 +78,13 @@ export class Editor {
     this.liveLayer = h('div', { class: 'bp-layer' });
     this.overlay = h('div', { class: 'bp-overlay' });
     this.world.append(this.frameLayer, this.elLayer, this.liveLayer, this.overlay);
-    this.vp.append(this.world);
+    // Dot grid as an SVG pattern: CSS radial-gradient dots disappear in Firefox-based
+    // browsers (Zen, Firefox) whenever the spacing lands on fractional pixels.
+    const gid = `bp-dots-${Math.random().toString(36).slice(2, 8)}`;
+    this.gridDot = s('circle', { cx: '1.25', cy: '1.25', r: '1.15', class: 'bp-grid-dot' });
+    this.gridPattern = s('pattern', { id: gid, width: '24', height: '24', patternUnits: 'userSpaceOnUse' }, this.gridDot);
+    this.grid = s('svg', { class: 'bp-grid', 'aria-hidden': 'true' }, s('defs', {}, this.gridPattern), s('rect', { width: '100%', height: '100%', fill: `url(#${gid})` }));
+    this.vp.append(this.grid, this.world);
     this.host.append(this.vp);
 
     const L = (target, type, fn, opts) => {
@@ -152,8 +158,11 @@ export class Editor {
     let step = 24 * z;
     while (step < 14) step *= 4;
     while (step > 96) step /= 4;
-    this.vp.style.backgroundSize = `${step}px ${step}px`;
-    this.vp.style.backgroundPosition = `${x}px ${y}px`;
+    const mod = (v) => ((v % step) + step) % step;
+    this.gridPattern.setAttribute('width', step);
+    this.gridPattern.setAttribute('height', step);
+    this.gridPattern.setAttribute('x', mod(x) - 1.25);
+    this.gridPattern.setAttribute('y', mod(y) - 1.25);
     this.vp.classList.toggle('no-grid', !this.prefs.grid);
     if (this._lastZ !== z) { this._lastZ = z; this.renderOverlay(); }
     this.emit('camera', this.cam);
@@ -384,7 +393,13 @@ export class Editor {
     world.querySelectorAll('iframe').forEach((f) => {
       f.replaceWith(h('div', { class: 'el-print-card' }, icon('embed', 22), h('span', {}, f.title || 'Embed'), h('small', {}, f.dataset.src || f.src || '')));
     });
-    const vp = h('div', { class: ['bp-viewport', 'bp-print', !this.prefs.grid && 'no-grid'] }, world);
+    const pid = `bp-dots-print-${Math.random().toString(36).slice(2, 8)}`;
+    const mod = (v) => ((v % 24) + 24) % 24;
+    const grid = s('svg', { class: 'bp-grid', 'aria-hidden': 'true' },
+      s('defs', {}, s('pattern', { id: pid, width: '24', height: '24', x: String(mod(pad - b.x) - 1.25), y: String(mod(pad - b.y) - 1.25), patternUnits: 'userSpaceOnUse' },
+        s('circle', { cx: '1.25', cy: '1.25', r: '1.15', class: 'bp-grid-dot' }))),
+      s('rect', { width: '100%', height: '100%', fill: `url(#${pid})` }));
+    const vp = h('div', { class: ['bp-viewport', 'bp-print', !this.prefs.grid && 'no-grid'] }, grid, world);
     return { content: vp, width: Math.ceil(b.w + pad * 2), height: Math.ceil(b.h + pad * 2) };
   }
 

@@ -17,12 +17,13 @@ body.is-board .outlet { position: fixed; inset: 0; }
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
-  background-image: radial-gradient(circle at 1px 1px, var(--grid-dot) 1.1px, transparent 1.4px);
   outline: none;
   cursor: default;
   --iz: 1;
 }
-.bp-viewport.no-grid { background-image: none; }
+.bp-grid { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: block; }
+.bp-grid-dot { fill: var(--grid-dot); }
+.bp-viewport.no-grid .bp-grid { display: none; }
 .bp-viewport[data-tool="hand"], .bp-viewport.is-space { cursor: grab; }
 .bp-viewport.is-panning { cursor: grabbing; }
 .bp-viewport[data-tool="sticky"], .bp-viewport[data-tool="text"], .bp-viewport[data-tool="shape"],

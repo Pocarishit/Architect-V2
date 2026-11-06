@@ -65,7 +65,7 @@ function route() {
   // Tracker, Countdown and Meter live under one tab, switched by a small strip on top.
   const GROUP = [['tracker', 'Tracker'], ['countdown', 'Countdown'], ['meter', 'Meter']];
   if (GROUP.some(([id]) => id === r.view)) {
-    shell.outlet.append(h('nav', { class: 'subtabs', 'aria-label': 'Tracker sections' },
+    shell.outlet.append(h('nav', { class: 'subtabs', 'aria-label': 'Metrics sections' },
       GROUP.map(([id, label]) => h('a', { href: `#/${id}`, class: ['subtab', id === r.view && 'is-on'], 'aria-current': id === r.view ? 'page' : null }, label))));
   }
   if (r.view === 'paths') view = mountPaths(shell.outlet, r.id);

@@ -216,3 +216,38 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 grant execute on function public.shared_add(uuid, text), public.shared_remove(uuid, uuid), public.shared_people() to authenticated;
+
+-- ---------- Parasite tickets: a chat per problem ----------
+create table if not exists public.parasite_messages (
+  id           uuid primary key default gen_random_uuid(),
+  parasite_id  uuid not null references public.parasites (id) on delete cascade,
+  user_id      uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  body         text not null check (char_length(body) between 1 and 2000),
+  created_at   timestamptz not null default now()
+);
+create index if not exists parasite_messages_ticket_idx on public.parasite_messages (parasite_id, created_at);
+alter table public.parasite_messages enable row level security;
+
+create or replace function public.on_parasite(p uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.parasites where id = p and (user_id = auth.uid() or auth.uid() = any (members)));
+$$;
+
+drop policy if exists "parasite messages: read" on public.parasite_messages;
+create policy "parasite messages: read" on public.parasite_messages
+  for select to authenticated using (public.on_parasite(parasite_id));
+drop policy if exists "parasite messages: write" on public.parasite_messages;
+create policy "parasite messages: write" on public.parasite_messages
+  for insert to authenticated with check (user_id = auth.uid() and public.on_parasite(parasite_id));
+drop policy if exists "parasite messages: delete own" on public.parasite_messages;
+create policy "parasite messages: delete own" on public.parasite_messages
+  for delete to authenticated using (user_id = auth.uid());
+grant select, insert, delete on table public.parasite_messages to authenticated;
+grant execute on function public.on_parasite(uuid) to authenticated;
+
+-- ---------- Parasites as tickets: status, labels, attempts, history ----------
+alter table public.parasites add column if not exists status text not null default 'open';
+alter table public.parasites add column if not exists labels text[] not null default '{}';
+update public.parasites set status = 'solved' where broken_at is not null and status = 'open';
+alter table public.parasite_messages add column if not exists kind text not null default 'msg';   -- msg | attempt | event
+alter table public.parasite_messages add column if not exists outcome text;                         -- failed | partial | worked

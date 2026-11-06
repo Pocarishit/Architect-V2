@@ -70,7 +70,7 @@ function route() {
   }
   if (r.view === 'paths') view = mountPaths(shell.outlet, r.id);
   else if (r.view === 'tracker') view = mountTracker(shell.outlet);
-  else if (r.view === 'parasites') view = mountParasites(shell.outlet);
+  else if (r.view === 'parasites') view = mountParasites(shell.outlet, r.id);
   else if (r.view === 'countdown') view = mountCountdown(shell.outlet);
   else if (r.view === 'meter') view = mountMeter(shell.outlet);
   else if (r.view === 'blueprint') view = mountArchive(shell.outlet, r.id);

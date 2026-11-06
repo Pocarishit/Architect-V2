@@ -112,10 +112,6 @@ export function mountPaths(root, initialOpen = null) {
         ? h('input', { class: 'paths-title-input', value: title, maxlength: 32, 'data-rename-title': '1', 'aria-label': 'Page title' })
         : h('h1', { class: 'paths-title', 'data-act': 'rename-title', title: 'Click to rename', tabindex: '0' }, title),
       h('div', { class: 'paths-meta' },
-        h('span', { class: 'label' }, fmtDate()),
-        h('div', { class: 'meter', role: 'img', 'aria-label': `${done} of ${total} tasks done` },
-          Array.from({ length: segs }, (_, i) => h('i', { class: i < filled ? 'on' : null }))),
-        h('span', { class: 'meter-count' }, `${done}/${total}`),
         h('button', { class: 'icon-btn sm', type: 'button', 'data-act': 'export-pdf', 'aria-label': 'Export as PDF', 'data-tip': 'Export PDF' }, icon('download', 16))));
   }
 

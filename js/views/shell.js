@@ -15,6 +15,7 @@ export function toggleTheme() { setTheme(currentTheme() === 'dark' ? 'light' : '
 export function mountShell(root, { session }) {
   const navPaths = h('a', { href: '#/paths' }, 'Paths');
   const navBlue = h('a', { href: '#/blueprint' }, 'Blueprint');
+  const navTrack = h('a', { href: '#/tracker' }, 'Tracker');
   const clock = h('time', { class: 'clock', 'aria-label': 'Current time' }, fmtClock());
   const themeBtn = h('button', { class: 'icon-btn', 'aria-label': 'Switch light or dark', 'data-tip': 'Theme', onclick: toggleTheme }, icon('theme', 18));
   const userBtn = h('button', { class: 'user-btn', 'aria-label': 'Account' },
@@ -35,7 +36,7 @@ export function mountShell(root, { session }) {
   const el = h('div', { class: 'shell' },
     h('header', { class: 'shell-head' },
       h('a', { class: 'wordmark', href: '#/paths', 'aria-label': 'Architect home' }, 'Architect'),
-      h('nav', { class: 'nav', 'aria-label': 'Sections' }, navPaths, navBlue),
+      h('nav', { class: 'nav', 'aria-label': 'Sections' }, navPaths, navBlue, navTrack),
       h('div', { class: 'head-right' },
         !configured ? h('span', { class: 'mode-chip', title: 'Data is stored in this browser. Add your Supabase keys to config.js to sync.' }, h('i'), 'Local') : null,
         clock, themeBtn, userBtn)),
@@ -51,6 +52,8 @@ export function mountShell(root, { session }) {
       navBlue.classList.toggle('active', view === 'blueprint' || view === 'board');
       navPaths.toggleAttribute('aria-current', view === 'paths');
       navBlue.toggleAttribute('aria-current', view === 'blueprint');
+      navTrack.classList.toggle('active', view === 'tracker');
+      navTrack.toggleAttribute('aria-current', view === 'tracker');
     },
     destroy() { clearInterval(tick); el.remove(); },
   };

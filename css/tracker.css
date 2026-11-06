@@ -1,0 +1,203 @@
+/* ============================================================
+   Tracker — daily effort log, streak calendar, trends
+   ============================================================ */
+
+.tk-head { align-items: center; margin-bottom: 22px; }
+.tk-title { margin-left: 0; padding: 6px 0; cursor: default; }
+.tk-title:hover { background: none; }
+.tk-head-actions { display: flex; gap: 8px; }
+.tk-hint { color: var(--fg-3); font-size: 13px; margin: 0; }
+
+.tk-layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, 1fr); gap: 16px; align-items: start; }
+.tk-side { display: grid; gap: 16px; min-width: 0; }
+.tk-card { background: var(--s1); border: 1px solid var(--line); border-radius: var(--r-xl); padding: 22px; min-width: 0; }
+
+.tk-stat-label { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
+.tk-section-title, .tk-month h2 {
+  margin: 0; font-family: var(--f-dot); font-weight: 800; font-size: 22px; line-height: 1; letter-spacing: .03em; text-transform: uppercase;
+}
+
+/* ---------- Calendar card ---------- */
+.tk-cal-head { display: grid; gap: 18px; margin-bottom: 16px; }
+.tk-month { display: flex; align-items: center; gap: 6px; }
+.tk-month h2 { min-width: 0; margin: 0 4px; }
+.tk-stats { display: flex; flex-wrap: wrap; gap: 14px 28px; }
+.tk-stat { display: grid; gap: 4px; }
+.tk-stat-val { font-family: var(--f-dot); font-weight: 800; font-size: 24px; line-height: 1; font-variant-numeric: tabular-nums; }
+
+.tk-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
+.tk-chip {
+  height: 30px; padding: 0 12px; border-radius: var(--pill); border: 1px solid var(--line-2);
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-2);
+  transition: background .12s, color .12s, border-color .12s;
+}
+.tk-chip:hover { color: var(--fg); border-color: var(--fg-3); }
+.tk-chip.is-on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+
+.tk-cal {
+  --cell: clamp(32px, 6.2vw, 50px);
+  display: grid;
+  grid-template-columns: repeat(7, var(--cell)) calc(var(--cell) + 4px);
+  grid-auto-rows: var(--cell);
+  justify-content: space-between;
+  row-gap: 12px;
+}
+.tk-wd { display: grid; place-items: center; align-self: end; height: 20px; font-family: var(--f-mono); font-size: 11px; color: var(--fg-3); }
+
+.tk-day {
+  position: relative; width: var(--cell); height: var(--cell); border-radius: 50%;
+  display: grid; place-items: center;
+  font-family: var(--f-mono); font-size: 12px; color: var(--fg-2);
+  transition: transform .12s var(--ease);
+}
+.tk-day:not(:disabled):hover { transform: scale(1.06); }
+.tk-day:not(:disabled):active { transform: scale(.96); }
+.tk-day:disabled { cursor: default; }
+.tk-day-num { position: relative; z-index: 1; font-variant-numeric: tabular-nums; }
+/* Effort ring: fills clockwise toward the day's goal. */
+.tk-day-ring {
+  position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(var(--fg) calc(var(--p, 0) * 360deg), var(--line-2) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+  opacity: 0;
+}
+.tk-day.is-on { background: var(--s3); color: var(--fg); }
+.tk-day.is-on .tk-day-ring { opacity: 1; }
+.tk-day.is-goal { background: var(--fg); color: var(--bg); font-weight: 700; }
+.tk-day.is-goal .tk-day-ring { opacity: 0; }
+.tk-day.is-missed { box-shadow: inset 0 0 0 1px var(--line-2); color: var(--fg-4); }
+.tk-day.is-future { color: var(--fg-4); }
+.tk-day.is-out { opacity: .32; }
+.tk-day.is-today:not(.is-on) { box-shadow: inset 0 0 0 1.5px var(--fg); color: var(--fg); font-weight: 700; }
+.tk-day.is-today::after {
+  content: ''; position: absolute; left: 50%; bottom: -8px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--red);
+}
+.tk-day.is-picked { outline: 1.5px solid var(--fg); outline-offset: 3px; }
+.tk-day-up {
+  position: absolute; top: -1px; right: -1px; z-index: 2; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--fg); box-shadow: 0 0 0 2px var(--s1);
+}
+.tk-day.is-goal .tk-day-up { background: var(--fg); }
+
+/* Weekly rail: a check for a full week, the day count for a partial one, the streak on this week. */
+.tk-rail {
+  grid-column: 8; display: grid; grid-auto-rows: var(--cell); row-gap: 12px;
+  border-radius: var(--pill); background: var(--s2); border: 1px solid var(--line);
+  justify-items: center; align-items: center;
+}
+.tk-rail-mark { display: grid; place-items: center; font-family: var(--f-dot); font-weight: 800; font-size: 15px; color: var(--fg-2); }
+.tk-rail-mark.is-empty { width: 4px; height: 4px; border-radius: 50%; background: var(--fg-4); }
+.tk-rail-mark.is-full { width: 22px; height: 22px; border-radius: 50%; background: var(--fg); color: var(--bg); }
+.tk-rail-mark.is-flame {
+  width: calc(var(--cell) - 2px); height: calc(var(--cell) - 2px); border-radius: 50%;
+  background: var(--red); color: #fff; gap: 0; align-content: center; line-height: 1;
+}
+.tk-rail-mark.is-flame b { font-size: 14px; font-weight: 800; margin-top: -1px; }
+.tk-rail-mark.is-flame .ic { width: 14px; height: 14px; }
+.tk-rail-mark.is-pending { background: transparent; color: var(--red); box-shadow: inset 0 0 0 1.5px var(--red); }
+
+/* ---------- Day log ---------- */
+.tk-log-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.tk-log-title { margin: 6px 0 0; font-family: var(--f-dot); font-weight: 800; font-size: 28px; line-height: 1; text-transform: uppercase; letter-spacing: .02em; }
+.tk-log-score {
+  --size: 58px;
+  position: relative; flex: none; width: var(--size); height: var(--size); border-radius: 50%;
+  display: flex; align-items: baseline; justify-content: center; padding-top: 19px;
+  font-family: var(--f-dot); font-weight: 800; font-size: 20px; line-height: 1;
+}
+.tk-log-score::before {
+  content: ''; position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(var(--fg) calc(var(--p, 0) * 360deg), var(--line-2) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+}
+.tk-log-score small { font-size: 11px; margin-left: 1px; color: var(--fg-3); }
+.tk-log-score.is-goal { background: var(--fg); color: var(--bg); }
+.tk-log-score.is-goal small { color: var(--bg); opacity: .6; }
+.tk-log-score.is-goal::before { display: none; }
+
+.tk-warn {
+  display: flex; align-items: center; gap: 8px; margin: -4px 0 16px; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent); color: var(--fg);
+  font-family: var(--f-mono); font-size: 11.5px; letter-spacing: .02em;
+}
+.tk-warn i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
+
+.tk-fields { display: grid; gap: 10px; }
+.tk-field { display: grid; gap: 8px; padding: 14px; border-radius: 16px; background: var(--s2); border: 1px solid var(--line); }
+.tk-field-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.tk-field-name { font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.tk-delta { font-family: var(--f-mono); font-size: 10.5px; color: var(--fg-3); white-space: nowrap; }
+.tk-delta.is-up { color: var(--fg); }
+.tk-delta.is-down { color: var(--red); }
+.tk-field-row { display: flex; align-items: center; gap: 8px; }
+.tk-step {
+  flex: none; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center;
+  border: 1px solid var(--line-2); color: var(--fg-2); transition: background .12s, color .12s;
+}
+.tk-step:hover { background: var(--s3); color: var(--fg); }
+.tk-step:active { transform: scale(.94); }
+.tk-input-wrap {
+  flex: 1; min-width: 0; display: flex; align-items: baseline; justify-content: center; gap: 4px;
+  height: 46px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--s1);
+  cursor: text; transition: border-color .12s;
+}
+.tk-input-wrap:focus-within { border-color: var(--fg); }
+.tk-input {
+  width: 100%; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--fg);
+  font-family: var(--f-dot); font-weight: 800; font-size: 28px; text-align: center; font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield; appearance: textfield;
+}
+.tk-input:focus { outline: none; }
+.tk-input::placeholder { color: var(--fg-4); }
+.tk-input::-webkit-outer-spin-button, .tk-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.tk-unit { flex: none; font-family: var(--f-mono); font-size: 12px; color: var(--fg-3); align-self: center; }
+.tk-goal { display: flex; align-items: center; gap: 10px; }
+.tk-goal span { flex: none; font-family: var(--f-mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3); }
+.tk-goal-bar { position: relative; flex: 1; height: 3px; border-radius: 3px; background: var(--line-2); overflow: hidden; }
+.tk-goal-bar::after { content: ''; position: absolute; inset: 0 auto 0 0; width: calc(var(--p, 0) * 100%); background: var(--fg); border-radius: inherit; transition: width .3s var(--ease); }
+
+.tk-note { display: grid; gap: 8px; margin-top: 12px; }
+.tk-note textarea { min-height: 64px; resize: vertical; font-family: var(--f-sans); padding: 10px 12px; height: auto; line-height: 1.4; }
+
+/* ---------- Trends ---------- */
+.tk-trends { display: grid; gap: 10px; }
+.tk-trends-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.tk-trend {
+  display: grid; gap: 10px; padding: 14px; border-radius: 16px; text-align: left;
+  border: 1px solid var(--line); background: var(--s2); transition: border-color .12s;
+}
+.tk-trend:hover { border-color: var(--line-2); }
+.tk-trend.is-on { border-color: var(--fg); }
+.tk-trend-top { display: flex; align-items: baseline; gap: 8px; }
+.tk-trend-top .tk-field-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-trend-total { font-family: var(--f-dot); font-weight: 800; font-size: 20px; line-height: 1; font-variant-numeric: tabular-nums; }
+.tk-bars { display: grid; grid-template-columns: repeat(14, 1fr); gap: 4px; }
+.tk-bar { display: grid; grid-template-rows: repeat(8, 1fr); gap: 2px; justify-items: center; }
+.tk-bar i { width: 5px; height: 5px; border-radius: 50%; background: var(--line-2); }
+.tk-bar i.on { background: var(--fg); }
+.tk-bar.is-today i.on { background: var(--red); }
+.tk-trend-foot { display: flex; justify-content: space-between; gap: 10px; font-family: var(--f-mono); font-size: 10.5px; color: var(--fg-3); letter-spacing: .02em; }
+
+/* ---------- Metrics editor ---------- */
+.tk-medit { display: grid; gap: 8px; }
+.tk-medit-row { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, .8fr) minmax(0, .9fr) 32px; gap: 8px; align-items: center; }
+.tk-medit-row.is-head span { font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
+.tk-medit-add { justify-self: start; margin-top: 4px; }
+
+/* ---------- Small screens ---------- */
+@media (max-width: 960px) {
+  .tk-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .tk-card { padding: 16px; border-radius: 20px; }
+  .tk-cal { --cell: min(10.4vw, 46px); row-gap: 10px; }
+  .tk-day { font-size: 11px; }
+  .tk-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+  .tk-trends-head .tk-stat-label { display: none; }
+  .tk-chips { flex-wrap: nowrap; overflow-x: auto; margin: 0 -16px 18px; padding: 0 16px; scrollbar-width: none; }
+  .tk-chip { flex: none; }
+  .tk-stat-val { font-size: 20px; }
+  .tk-medit-row { grid-template-columns: minmax(0, 1fr) 64px 64px 28px; gap: 6px; }
+}

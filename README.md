@@ -3,6 +3,7 @@
 Personal system in black and white.
 
 - **Paths** — your kanban: Morning, Afternoon, Atemporal, Futures, Cache.
+- **Tracker** — log daily effort (hours, money, outreach — your own metrics), with a streak calendar and 14-day trends.
 - **Blueprint** — an infinite planning board (stickies, text, shapes, connectors, pen, frames, images, videos, embeds), with **Archives** for folders, renaming and pinning.
 - Username + password login, everything saved to your own Supabase project.
 
@@ -13,7 +14,7 @@ No build step and no dependencies: plain HTML, CSS and JavaScript modules.
 ## 1. Set up Supabase (about 5 minutes)
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. **SQL Editor → New query** → paste all of `supabase/schema.sql` → **Run**.
+2. **SQL Editor → New query** → paste all of `supabase/schema.sql` → **Run**. (Already set up? Run it again — it adds the Tracker tables and keeps your data.)
    This creates the tables, row-level security (each user only sees their own rows) and a private `architect-media` storage bucket.
 3. **Authentication → Sign In / Providers → Email** → turn **Confirm email** **off** → Save.
    Usernames are stored as `username@architect.local`; no email is ever sent, so confirmation must be off.
@@ -52,6 +53,10 @@ Or from the folder: `npx vercel`. Routing uses `#/…` URLs, so no rewrites are 
 - `+` or **Add task**, type, `Enter` to add another, `Esc` to stop.
 - Click a task to edit it; `···` for note, duplicate, move, delete.
 - Drag tasks between paths. Double-click a path name to rename; `···` on a path to move, clear done, or delete it.
+- Click the page title to rename it.
+- Select tasks: ⌘/Ctrl-click, Shift-click for a range, drag a lasso across empty space, the select-all icon on a path, or ⌘/Ctrl+A (hovered path; again for everything). Then Done / Move / Delete from the bar, or `Delete`. Deletes can be undone.
+- Drag a selection to move it all at once. Drag a path by its header to reorder paths (on phones: long-press a tile, then drag).
+- Download icon (top right) exports every path to one PDF page.
 - A red **Now** marker shows on Morning / Afternoon (and Evening / Night if you add them) at the matching time of day.
 
 **Blueprint**
@@ -61,7 +66,12 @@ Or from the folder: `npx vercel`. Routing uses `#/…` URLs, so no rewrites are 
 - Paste or drop images and videos straight onto the board. Paste a YouTube / Vimeo / Loom / TikTok / Twitch / Spotify / Google Drive / Figma / Maps link to embed it; double-click a video to play it.
 - `⌘/Ctrl+Z` undo, `⌘/Ctrl+D` duplicate, `⌘/Ctrl+G` group, `⇧⌘/Ctrl+Shift+L` lock, `]` / `[` front/back, `⇧1` fit all, `⌘/Ctrl+F` find, `?` all shortcuts.
 - Frames become slides: **Present** (top right) walks through them with the arrow keys.
-- `···` → Export / Import a board as JSON.
+- `···` → Export as PDF (`⌘/Ctrl+P`, whole board on one page — pick “Save as PDF”), or Export / Import as JSON.
+
+**Tracker**
+- Pick a day, enter your numbers (± steps them). Rings fill toward each metric's daily goal; a solid day means every goal was hit; a small dot means you beat the day before.
+- Streak = days in a row with anything logged. The flame shows it on this week; a check marks a full week.
+- **Metrics** edits names, units and daily goals.
 - Boards save automatically (status dot next to the name).
 
 ## Notes

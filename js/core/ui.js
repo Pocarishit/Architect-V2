@@ -4,13 +4,14 @@ import { kbd } from './util.js';
 
 /* ---------- Toasts ---------- */
 let toastHost = null;
-export function toast(message, { tone = 'default', ms = 2800 } = {}) {
+export function toast(message, { tone = 'default', ms = 2800, action = null } = {}) {
   if (!toastHost || !toastHost.isConnected) {
     toastHost = h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
     document.body.append(toastHost);
   }
   const label = h('span', {}, message);
-  const t = h('div', { class: ['toast', `toast-${tone}`] }, tone === 'error' ? h('i', { class: 'toast-dot' }) : null, label);
+  const t = h('div', { class: ['toast', `toast-${tone}`, action && 'has-action'] }, tone === 'error' ? h('i', { class: 'toast-dot' }) : null, label);
+  if (action) t.append(h('button', { class: 'toast-act', type: 'button', onclick: () => { close(); action.onClick(); } }, action.label));
   toastHost.append(t);
   requestAnimationFrame(() => t.classList.add('in'));
   let timer = null;

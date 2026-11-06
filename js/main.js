@@ -5,6 +5,8 @@ import { mountLogin } from './views/login.js';
 import { mountShell } from './views/shell.js';
 import { mountPaths } from './views/paths.js';
 import { mountArchive } from './views/archive.js';
+import { mountTracker } from './views/tracker.js';
+import { resetPrefs } from './data/prefs.js';
 import { mountBoard } from './board/board.js';
 
 const app = document.getElementById('app');
@@ -57,6 +59,7 @@ function route() {
   document.body.classList.toggle('is-board', r.view === 'board');
   window.scrollTo(0, 0);
   if (r.view === 'paths') view = mountPaths(shell.outlet, r.id);
+  else if (r.view === 'tracker') view = mountTracker(shell.outlet);
   else if (r.view === 'blueprint') view = mountArchive(shell.outlet, r.id);
   else if (r.view === 'board') view = mountBoard(shell.outlet, r.id);
 }
@@ -70,6 +73,7 @@ async function boot() {
   }
   api.auth.onChange((s) => {
     const was = !!session;
+    if (session?.user?.id !== s?.user?.id) resetPrefs();
     session = s;
     if (was !== !!s) render();
   });

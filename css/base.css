@@ -125,6 +125,7 @@ kbd { font-family: var(--f-mono); font-size: 11px; color: var(--fg-3); }
 .btn-ghost { border-color: transparent; color: var(--fg-2); }
 .btn-ghost:hover { color: var(--fg); background: var(--s2); border-color: transparent; }
 .btn .ic { margin-left: -4px; }
+.btn.sm { height: 32px; padding: 0 14px; font-size: 11px; }
 
 .icon-btn {
   width: 34px;
@@ -191,6 +192,8 @@ kbd { font-family: var(--f-mono); font-size: 11px; color: var(--fg-3); }
 }
 .toast.in { opacity: 1; transform: none; }
 .toast-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); flex: none; }
+.toast.has-action { pointer-events: auto; padding-right: 6px; }
+.toast-act { height: 26px; padding: 0 12px; border-radius: var(--pill); background: var(--bg); color: var(--fg); font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
 
 /* ---------- Menus & popovers ---------- */
 .menu, .popover {
@@ -290,3 +293,24 @@ kbd { font-family: var(--f-mono); font-size: 11px; color: var(--fg-3); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }
+
+/* ---------- PDF export (print) ---------- */
+.print-root { display: none; }
+@media print {
+  body.is-printing > *:not(.print-root) { display: none !important; }
+  body.is-printing { background: var(--bg); min-height: 0; }
+  body.is-printing .print-root { display: block; }
+  .print-sheet {
+    position: relative; overflow: hidden; break-inside: avoid; page-break-inside: avoid;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .print-inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  .print-sheet * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+.bp-print { position: absolute; inset: 0; overflow: hidden; touch-action: auto; }
+.el-print-card {
+  width: 100%; height: 100%; display: grid; place-content: center; justify-items: center; gap: 6px;
+  border: 1px dashed var(--line-2); border-radius: 10px; background: var(--s1); color: var(--fg-3);
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; text-align: center; padding: 8px;
+}
+.el-print-card small { font-size: 9px; text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; max-width: 100%; opacity: .7; }

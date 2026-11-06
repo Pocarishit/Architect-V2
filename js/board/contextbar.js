@@ -223,11 +223,12 @@ export function createContextBar(page, editor, { sendToPaths, present, openLink,
     const fs = common(texty, 'fontSize', null);
     const autoOk = texty.every((e) => e.type === 'sticky');
     const base = fs ?? (autoOk ? 18 : texty[0].fontSize || 22);
-    const input = h('input', { class: 'ctx-size', value: fs != null ? String(fs) : (autoOk ? 'Auto' : ''), 'aria-label': 'Font size', inputmode: 'numeric', maxlength: 3 });
+    const shown = fs != null ? String(Math.round(fs * 10) / 10) : (autoOk ? 'Auto' : '');
+    const input = h('input', { class: 'ctx-size', value: shown, 'aria-label': 'Font size', inputmode: 'numeric', maxlength: 5 });
     const apply = () => {
       const v = Math.round(parseFloat(input.value));
-      if (v >= 4 && v <= 400 && v !== fs) set({ fontSize: v }, TXT);
-      else input.value = fs != null ? String(fs) : (autoOk ? 'Auto' : '');
+      if (v >= 1 && v <= 400 && v !== fs) set({ fontSize: v }, TXT);
+      else input.value = shown;
     };
     input.addEventListener('focus', () => input.select());
     input.addEventListener('keydown', (e) => {

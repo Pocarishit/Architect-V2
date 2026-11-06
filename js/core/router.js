@@ -1,9 +1,10 @@
-// Hash router: #/paths, #/blueprint, #/blueprint/<folderId>, #/board/<boardId>
+// Hash router: #/paths, #/tracker, #/blueprint, #/blueprint/<folderId>, #/board/<boardId>
 export function parseRoute() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   const [view, id] = parts;
   if (view === 'paths') return { view: 'paths', id: id || null };
   if (view === 'blueprint') return { view: 'blueprint', id: id || null };
+  if (view === 'tracker') return { view: 'tracker' };
   if (view === 'board' && id) return { view: 'board', id };
   return { view: 'paths', redirect: true };
 }

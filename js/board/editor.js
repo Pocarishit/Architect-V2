@@ -348,6 +348,46 @@ export class Editor {
   /* ================= state ================= */
   selected() { return [...this.sel].map((id) => this.byId.get(id)).filter(Boolean); }
 
+  // A static copy of the whole board, laid out at 1:1 around its content — for PDF export.
+  printable(pad = 64) {
+    if (!this.els.length) return null;
+    const rects = this.els.map((e) => {
+      const r = { ...rectOf(e, this.byId) };
+      const n = this.nodes.get(e.id);
+      if (n && e.type !== 'line') { r.w = Math.max(r.w, n.offsetWidth); r.h = Math.max(r.h, n.offsetHeight); }
+      return r;
+    });
+    const b = unionRects(rects);
+    if (!b) return null;
+    const world = h('div', { class: 'bp-world', style: { transform: `translate(${pad - b.x}px, ${pad - b.y}px)` } });
+    const frames = this.frameLayer.cloneNode(true);
+    const els = this.elLayer.cloneNode(true);
+    world.append(frames, els);
+    world.querySelectorAll('.is-selected, .is-live').forEach((n) => n.classList.remove('is-selected', 'is-live'));
+    world.querySelectorAll('[contenteditable]').forEach((n) => n.removeAttribute('contenteditable'));
+    world.querySelectorAll('.el-shield').forEach((n) => n.remove());
+    // Videos: freeze the current frame when the browser allows it; embeds: a labelled card.
+    const liveVideos = [...this.elLayer.querySelectorAll('video')];
+    world.querySelectorAll('video').forEach((v, i) => {
+      const src = liveVideos[i];
+      let still = null;
+      try {
+        if (src && src.readyState >= 2 && src.videoWidth) {
+          const c = document.createElement('canvas');
+          c.width = src.videoWidth; c.height = src.videoHeight;
+          c.getContext('2d').drawImage(src, 0, 0);
+          still = h('img', { class: 'el-media', src: c.toDataURL('image/jpeg', 0.9), alt: '' });
+        }
+      } catch {}
+      v.replaceWith(still || h('div', { class: 'el-print-card' }, icon('video', 22), h('span', {}, 'Video')));
+    });
+    world.querySelectorAll('iframe').forEach((f) => {
+      f.replaceWith(h('div', { class: 'el-print-card' }, icon('embed', 22), h('span', {}, f.title || 'Embed'), h('small', {}, f.dataset.src || f.src || '')));
+    });
+    const vp = h('div', { class: ['bp-viewport', 'bp-print', !this.prefs.grid && 'no-grid'] }, world);
+    return { content: vp, width: Math.ceil(b.w + pad * 2), height: Math.ceil(b.h + pad * 2) };
+  }
+
   setEls(next, { commit = true, before } = {}) {
     const prev = this.els;
     if (next === prev) return;
@@ -920,7 +960,9 @@ export class Editor {
           if (!origin.has(el.id)) return el;
           const r = rects.get(el.id);
           const nr = { x: x + (r.x - ob.x) * sx, y: y + (r.y - ob.y) * sy, w: r.w * sx, h: r.h * sy };
-          return resized(el, nr, sx, sy, mapPt, single, corner);
+          // Always scale from the state at drag start: scaling the live value compounds every frame,
+          // which squashed every font in a group down to the same minimum size.
+          return resized(origin.get(el.id), nr, sx, sy, mapPt, single, corner);
         }), { commit: false });
       },
       onUp: () => { this.commitFrom(before); this.emit('selection'); },
@@ -1850,6 +1892,7 @@ export class Editor {
       else if (k === '-' || k === '_') { e.preventDefault(); this.zoomBy(0.8); }
       else if (k === '0') { e.preventDefault(); this.zoomTo(1); }
       else if (k === 'e') { e.preventDefault(); this.emit('command', 'export'); }
+      else if (k === 'p') { e.preventDefault(); this.emit('command', 'export-pdf'); }
       return;
     }
     if (e.altKey) {
@@ -1941,13 +1984,15 @@ function resized(el, nr, sx, sy, mapPt, single, corner) {
     const kx = nr.w / (el.w || 1), ky = nr.h / (el.h || 1);
     return { ...el, ...nr, points: (el.points || []).map(([x, y]) => [Math.round(x * kx * 100) / 100, Math.round(y * ky * 100) / 100]) };
   }
+  // Fine rounding and a low floor keep size differences intact even when a big group is shrunk a lot.
+  const scaleFont = (f, k) => Math.max(1, Math.round(f * k * 100) / 100);
   if (el.type === 'text') {
-    const out = { ...el, x: nr.x, y: nr.y, w: Math.max(24, nr.w), autoW: false };
-    if (single && corner) out.fontSize = Math.max(6, Math.round((el.fontSize || 22) * sx * 2) / 2);
-    else if (!single) out.fontSize = Math.max(6, Math.round((el.fontSize || 22) * Math.min(sx, sy) * 2) / 2);
+    const out = { ...el, x: nr.x, y: nr.y, w: Math.max(4, nr.w), autoW: false };
+    if (single && corner) out.fontSize = scaleFont(el.fontSize || 22, sx);
+    else if (!single) out.fontSize = scaleFont(el.fontSize || 22, Math.min(sx, sy));
     return out;
   }
   const out = { ...el, ...nr };
-  if (!single && el.fontSize && (el.type === 'shape' || el.type === 'sticky')) out.fontSize = Math.max(6, Math.round(el.fontSize * Math.min(sx, sy) * 2) / 2);
+  if (!single && el.fontSize && (el.type === 'shape' || el.type === 'sticky')) out.fontSize = scaleFont(el.fontSize, Math.min(sx, sy));
   return out;
 }

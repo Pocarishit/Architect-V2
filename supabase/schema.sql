@@ -71,11 +71,33 @@ create table if not exists public.blueprints (
 create index if not exists archive_folders_user_idx on public.archive_folders (user_id, parent_id);
 create index if not exists blueprints_user_idx      on public.blueprints (user_id, folder_id, updated_at desc);
 
+-- ─────────────────────────────────────────────
+-- Tracker (daily effort log) + per-user settings
+-- ─────────────────────────────────────────────
+create table if not exists public.streak_days (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  day         date not null,
+  vals        jsonb not null default '{}'::jsonb,
+  note        text not null default '',
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  unique (user_id, day)
+);
+
+create table if not exists public.architect_prefs (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null default auth.uid() references auth.users (id) on delete cascade unique,
+  data        jsonb not null default '{}'::jsonb,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
 -- updated_at triggers
 do $$
 declare t text;
 begin
-  foreach t in array array['path_columns', 'path_tasks', 'archive_folders', 'blueprints'] loop
+  foreach t in array array['path_columns', 'path_tasks', 'archive_folders', 'blueprints', 'streak_days', 'architect_prefs'] loop
     execute format('drop trigger if exists %I on public.%I', t || '_touch', t);
     execute format('create trigger %I before update on public.%I for each row execute function public.architect_touch()', t || '_touch', t);
   end loop;
@@ -87,7 +109,7 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['path_columns', 'path_tasks', 'archive_folders', 'blueprints'] loop
+  foreach t in array array['path_columns', 'path_tasks', 'archive_folders', 'blueprints', 'streak_days', 'architect_prefs'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "architect owner access" on public.%I', t);
     execute format(

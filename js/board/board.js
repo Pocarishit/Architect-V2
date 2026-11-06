@@ -4,6 +4,7 @@ import { icon } from '../core/icons.js';
 import { menu, popover, toast, dialog, confirmDialog, promptDialog, closeFloating } from '../core/ui.js';
 import { uid, store, debounce, posBetween, clamp, kbd } from '../core/util.js';
 import { go } from '../core/router.js';
+import { printToPdf, pdfHint } from '../core/print.js';
 import { api, friendlyError } from '../data/api.js';
 import { Editor, CLIP_MARK } from './editor.js';
 import { createContextBar } from './contextbar.js';
@@ -459,6 +460,7 @@ export function mountBoard(root, boardId) {
       else if (cmd === 'search') openSearch();
       else if (cmd === 'shortcuts') showShortcuts();
       else if (cmd === 'export') exportJson();
+      else if (cmd === 'export-pdf') exportPdf();
       else if (cmd === 'link') askLink();
     });
     editor.on('notice', (msg) => toast(msg, { ms: 900 }));
@@ -679,7 +681,8 @@ export function mountBoard(root, boardId) {
         { label: 'Zoom to fit', icon: 'fit', kbd: '⇧1', onSelect: () => editor.zoomToFit() },
         { label: 'Keyboard shortcuts', icon: 'keyboard', kbd: '?', onSelect: showShortcuts },
         '-',
-        { label: 'Export board (.json)', icon: 'download', kbd: '⌘E', onSelect: exportJson },
+        { label: 'Export as PDF', icon: 'download', kbd: '⌘P', onSelect: exportPdf },
+        { label: 'Export board (.json)', icon: 'json', kbd: '⌘E', onSelect: exportJson },
         { label: 'Import into board', icon: 'upload', onSelect: () => jsonInput.click() },
         '-',
         { label: 'Clear board', icon: 'trash', danger: true, disabled: !editor.els.length, onSelect: clearBoard },
@@ -718,6 +721,15 @@ export function mountBoard(root, boardId) {
       else { const el = editor.makeEl('text', null, world); el.text = text.slice(0, 5000); editor.addEls([el]); }
     }
 
+    async function exportPdf() {
+      editor.finishEditing?.();
+      const p = editor.printable();
+      if (!p) { toast('Nothing on this board to export yet.'); return; }
+      const bg = getComputedStyle(document.documentElement).getPropertyValue('--canvas').trim();
+      pdfHint();
+      await printToPdf({ ...p, title: board.name || 'Blueprint', background: bg });
+    }
+
     function exportJson() {
       const data = { architect: 'blueprint', v: 1, name: board.name, exported_at: new Date().toISOString(), elements: editor.els };
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -748,7 +760,7 @@ export function mountBoard(root, boardId) {
         ['Edit', [['⌘Z / ⇧⌘Z', 'Undo / redo'], ['2 / 3-finger tap', 'Undo / redo (touch)'], ['⌘C · ⌘X · ⌘V', 'Copy · cut · paste'], ['⌥⌘C / ⌥⌘V', 'Copy / paste style'], ['⌘D', 'Duplicate'], ['Alt + drag', 'Duplicate while moving'], ['⌘G / ⇧⌘G', 'Group / ungroup'], ['⇧⌘L', 'Lock'], [']  [', 'Front / back'], ['Arrows', 'Nudge (⇧ = 10px)'], ['Tab / ⇧Tab', 'Next / previous item'], ['Click · Enter · F2', 'Edit text'], ['Del', 'Delete']]],
         ['Text', [['⌘B · ⌘I · ⌘U', 'Bold · italic · underline'], ['⇧⌘X', 'Strikethrough'], ['⌘K', 'Link'], ['⇧⌘. / ⇧⌘,', 'Bigger / smaller'], ['⇧⌘L · E · R', 'Align text (while typing)'], ['⇧⌘7 / ⇧⌘8', 'Numbered / bullet list'], ['⌘\\', 'Clear formatting'], ['⌘Enter · Esc', 'Finish typing']]],
         ['Arrange', [['⌥A · ⌥D', 'Align left · right'], ['⌥W · ⌥S', 'Align top · bottom'], ['⌥H · ⌥V', 'Align centre · middle'], ['⇧⌥H · ⇧⌥V', 'Distribute across · down']]],
-        ['View', [['⇧1', 'Fit all'], ['⇧2', 'Fit selection'], ['⌘+ / ⌘−', 'Zoom'], ['⌘0', '100%'], ['G', 'Toggle dot grid'], ['⌘F', 'Find'], ['⌘E', 'Export'], ['?', 'This list']]],
+        ['View', [['⇧1', 'Fit all'], ['⇧2', 'Fit selection'], ['⌘+ / ⌘−', 'Zoom'], ['⌘0', '100%'], ['G', 'Toggle dot grid'], ['⌘F', 'Find'], ['⌘E', 'Export JSON'], ['⌘P', 'Export PDF'], ['?', 'This list']]],
       ];
       dialog({
         title: 'Keyboard shortcuts',

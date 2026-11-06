@@ -6,31 +6,10 @@ import { go } from '../core/router.js';
 import { api, friendlyError } from '../data/api.js';
 import { loadPrefs, getPref, setPref } from '../data/prefs.js';
 import { printToPdf, pdfHint } from '../core/print.js';
+import { windowOf, stateOf, clock, logSetpoints, dayStart } from '../data/setpoints.js';
 
 export const DEFAULT_PATHS = ['Morning', 'Afternoon', 'Atemporal', 'Futures', 'Cache'];
 const DEFAULT_TITLE = 'Paths';
-
-// "Now" marker. Each path can have its own hidden time window (or none);
-// paths without a setting fall back to their name (Morning, Afternoon, Evening, Night).
-const NAME_WINDOWS = {
-  morning: ['04:00', '12:00'], afternoon: ['12:00', '18:00'], evening: ['18:00', '22:00'],
-  night: ['22:00', '04:00'], nighttime: ['22:00', '04:00'], tonight: ['22:00', '04:00'],
-};
-const mins = (hhmm) => { const [a, b] = String(hhmm || '').split(':').map(Number); return (a || 0) * 60 + (b || 0); };
-function windowOf(col) {
-  const set = (getPref('pathTimes', {}) || {})[col.id];
-  if (set) return set.none ? null : [set.start, set.end];
-  return NAME_WINDOWS[col.title.trim().toLowerCase()] || null;
-}
-function isNow(col) {
-  const w = windowOf(col);
-  if (!w) return false;
-  const d = new Date();
-  const t = d.getHours() * 60 + d.getMinutes();
-  const a = mins(w[0]), b = mins(w[1]);
-  if (a === b) return true;            // all day
-  return a < b ? t >= a && t < b : t >= a || t < b; // windows may run past midnight
-}
 
 let seeding = null;
 
@@ -120,6 +99,7 @@ export function mountPaths(root, initialOpen = null) {
     if (next) next.scrollLeft = scrollLeft;
     renderSelBar();
     focusActive();
+    if (!loading && !loadError) { lastPhases = phases(); queueLog(); }
   }
 
   function header() {
@@ -137,6 +117,16 @@ export function mountPaths(root, initialOpen = null) {
           Array.from({ length: segs }, (_, i) => h('i', { class: i < filled ? 'on' : null }))),
         h('span', { class: 'meter-count' }, `${done}/${total}`),
         h('button', { class: 'icon-btn sm', type: 'button', 'data-act': 'export-pdf', 'aria-label': 'Export as PDF', 'data-tip': 'Export PDF' }, icon('download', 16))));
+  }
+
+  // Setpoint countdown. Live: time left (HH:MM:SS). Later today: its full length, dimmed. Ended: 00:00:00.
+  function timerView(col, cls = 'pcol-timer') {
+    const st = stateOf(col, columns);
+    if (!st) return null;
+    return h('span', {
+      class: [cls, `is-${st.phase}`], 'data-timer': col.id, role: 'timer',
+      title: st.phase === 'live' ? 'Time left in this setpoint' : st.phase === 'next' ? `Starts in ${clock(st.until)}` : 'Ended for today',
+    }, clock(st.left));
   }
 
   function mobileDetailCol() {
@@ -157,11 +147,11 @@ export function mountPaths(root, initialOpen = null) {
         const list = tasksOf(col.id);
         const done = list.filter((t) => t.done).length;
         const left = list.length - done;
-        const now = isNow(col);
-        return h('button', { class: ['ptile', now && 'is-now'], type: 'button', 'data-act': 'open-col', 'data-col': col.id, 'aria-label': `${col.title}, ${left} to do` },
+        const live = stateOf(col, columns)?.phase === 'live';
+        return h('button', { class: ['ptile', live && 'is-now'], type: 'button', 'data-act': 'open-col', 'data-col': col.id, 'aria-label': `${col.title}, ${left} to do` },
           h('div', { class: 'ptile-top' },
             h('span', { class: 'ptile-count' }, String(left)),
-            now ? h('span', { class: 'now-tag' }, h('i'), 'Now') : null),
+            timerView(col, 'ptile-timer')),
           h('div', { class: 'ptile-bottom' },
             list.length ? h('div', { class: 'ptile-dots', 'aria-hidden': 'true' }, list.slice(0, 18).map((t) => h('i', { class: t.done ? 'on' : null }))) : null,
             h('span', { class: 'ptile-name' }, col.title)));
@@ -183,9 +173,8 @@ export function mountPaths(root, initialOpen = null) {
         ? h('input', { class: 'pcol-rename pdetail-rename', value: col.title, maxlength: 40, 'data-rename': col.id, 'aria-label': 'Path name' })
         : h('h1', { class: 'dot-title pdetail-title' }, col.title),
       h('div', { class: 'paths-meta' },
-        isNow(col) ? h('span', { class: 'now-tag' }, h('i'), 'Now') : null,
         h('span', { class: 'label' }, list.length ? `${list.length - done} to do` : 'Empty'),
-        h('span', { class: 'meter-count' }, `${done}/${list.length}`)));
+        timerView(col, 'pdetail-timer')));
   }
 
   function detailBody(col) {
@@ -209,20 +198,17 @@ export function mountPaths(root, initialOpen = null) {
 
   function columnView(col) {
     const list = tasksOf(col.id);
-    const done = list.filter((t) => t.done).length;
-    const now = isNow(col);
+    const live = stateOf(col, columns)?.phase === 'live';
     const renaming = renamingCol === col.id;
     const allPicked = list.length && list.every((t) => picked.has(t.id));
-    return h('section', { class: ['pcol', now && 'is-now'], 'data-col': col.id, 'aria-label': col.title },
+    return h('section', { class: ['pcol', live && 'is-now'], 'data-col': col.id, 'aria-label': col.title },
       h('header', { class: 'pcol-head', title: renaming ? null : 'Drag to reorder' },
         renaming
           ? h('input', { class: 'pcol-rename', value: col.title, maxlength: 40, 'data-rename': col.id, 'aria-label': 'Path name' })
           : h('h2', { class: 'pcol-title', 'data-act': 'rename-col', title: 'Double-click to rename · drag to reorder' }, col.title),
-        now ? h('span', { class: 'now-tag' }, h('i'), 'Now') : null,
-        h('span', { class: 'pcol-count', 'aria-label': `${done} of ${list.length} done` }, list.length ? `${done}/${list.length}` : '0'),
+        timerView(col),
         list.length ? h('button', { class: ['icon-btn', 'sm', allPicked && 'is-on'], 'data-act': 'select-col', 'aria-label': `Select all in ${col.title}`, 'aria-pressed': String(!!allPicked), 'data-tip': 'Select all' }, icon('selectAll', 16)) : null,
-        h('button', { class: 'icon-btn sm', 'data-act': 'col-menu', 'aria-label': `${col.title} options` }, icon('more', 16)),
-        h('button', { class: 'icon-btn sm', 'data-act': 'add-task', 'aria-label': `Add task to ${col.title}` }, icon('plus', 16))),
+        h('button', { class: 'icon-btn sm', 'data-act': 'col-menu', 'aria-label': `${col.title} options` }, icon('more', 16))),
       list.length ? h('div', { class: 'pcol-dots', 'aria-hidden': 'true' }, list.slice(0, 40).map((t) => h('i', { class: t.done ? 'on' : null }))) : null,
       h('div', { class: 'pcol-list', 'data-list': col.id },
         list.map(taskView),
@@ -500,22 +486,25 @@ export function mountPaths(root, initialOpen = null) {
       h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Ends'), end));
     const seg = h('div', { class: 'ptime-seg', role: 'radiogroup', 'aria-label': 'Time window' });
     const paint = () => {
-      seg.replaceChildren(...[['window', 'Time window'], ['none', 'None']].map(([id, label]) =>
+      seg.replaceChildren(...[['window', 'Setpoint'], ['none', 'None']].map(([id, label]) =>
         h('button', { type: 'button', role: 'radio', 'aria-checked': String(mode === id), class: ['ptime-opt', mode === id && 'is-on'], onclick: () => { mode = id; paint(); } }, label)));
       fields.hidden = mode !== 'window';
     };
     paint();
     const ok = await dialog({
-      title: `${col.title} — time`,
+      title: `${col.title} — setpoint`,
       body: h('div', { class: 'stack' },
         seg, fields,
-        h('p', { class: 'dlg-text ptime-hint' }, 'Only the red Now dot shows while this window is running. The times stay hidden. A window can run past midnight.')),
+        h('p', { class: 'dlg-text ptime-hint' }, 'A setpoint shows a countdown while its window runs. Finish every task in it before the timer ends to dominate it — the Tracker counts it for you. The times stay hidden; a window can run past midnight.')),
       actions: [{ label: 'Cancel', value: false }, { label: 'Save', primary: true, value: true }],
     });
     if (!ok) return;
     const all = { ...(getPref('pathTimes', {}) || {}) };
     all[col.id] = mode === 'none' ? { none: true } : { start: start.value || '00:00', end: end.value || '00:00' };
-    try { await setPref('pathTimes', all); } catch (e) { fail(e); }
+    try {
+      await setPref('pathTimes', all);
+      await setPref('spDayStart', dayStart(columns)); // partners' trackers use it to line days up
+    } catch (e) { fail(e); }
     render();
   }
 
@@ -664,7 +653,7 @@ export function mountPaths(root, initialOpen = null) {
     const n = tasksOf(col.id).length;
     menu(anchor, [
       { label: 'Rename', icon: 'edit', onSelect: () => { renamingCol = col.id; render(); } },
-      { label: 'Time window…', icon: 'clock', onSelect: () => editTime(col) },
+      { label: windowOf(col) ? 'Setpoint timer…' : 'Make setpoint…', icon: 'clock', onSelect: () => editTime(col) },
       { label: 'Select all', icon: 'selectAll', kbd: '⌘A', disabled: !n, onSelect: () => selectColumn(col) },
       { label: 'Move left', icon: 'chevronLeft', disabled: i === 0, onSelect: () => shiftColumn(col, -1) },
       { label: 'Move right', icon: 'chevronRight', disabled: i === columns.length - 1, onSelect: () => shiftColumn(col, 1) },
@@ -1050,9 +1039,24 @@ export function mountPaths(root, initialOpen = null) {
   // Stop the long-press callout / text selection menu on tiles and tasks.
   el.addEventListener('contextmenu', (e) => { if (press || e.target.closest('.ptile')) e.preventDefault(); });
 
+  // Tick the setpoint timers every second without re-rendering; re-render only when a setpoint starts or ends.
+  const phases = () => columns.map((c) => stateOf(c, columns)?.phase || '').join('|');
+  let lastPhases = '';
+  const idle = () => !editing && !composerFor && !renamingCol && !renamingTitle && !drag && !colDrag && !marquee;
   const nowTimer = setInterval(() => {
-    if (!editing && !composerFor && !renamingCol && !renamingTitle && !drag && !colDrag && !marquee) render();
-  }, 60_000);
+    if (loading || loadError) return;
+    const ph = phases();
+    if (ph !== lastPhases && idle()) { lastPhases = ph; render(); logSetpoints(columns, tasks); return; }
+    el.querySelectorAll('[data-timer]').forEach((n) => {
+      const col = columns.find((c) => c.id === n.dataset.timer);
+      const st = col && stateOf(col, columns);
+      if (st) n.textContent = clock(st.left);
+    });
+  }, 1000);
+  // Keep the setpoint log current while a timer runs (also after every change, via render()).
+  const logTimer = setInterval(() => { if (!loading && !loadError) logSetpoints(columns, tasks); }, 30_000);
+  let logT = 0;
+  const queueLog = () => { clearTimeout(logT); logT = setTimeout(() => logSetpoints(columns, tasks), 800); };
 
   render();
   load();
@@ -1068,6 +1072,8 @@ export function mountPaths(root, initialOpen = null) {
     destroy() {
       mq.removeEventListener?.('change', onMq);
       clearInterval(nowTimer);
+      clearInterval(logTimer);
+      clearTimeout(logT);
       offs.forEach((f) => f());
       document.removeEventListener('pointerdown', onDocDown, true);
       document.removeEventListener('pointerup', onDocUp, true);

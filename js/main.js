@@ -6,6 +6,9 @@ import { mountShell } from './views/shell.js';
 import { mountPaths } from './views/paths.js';
 import { mountArchive } from './views/archive.js';
 import { mountTracker } from './views/tracker.js';
+import { mountParasites } from './views/parasites.js';
+import { mountCountdown } from './views/countdown.js';
+import { mountMeter } from './views/meter.js';
 import { resetPrefs } from './data/prefs.js';
 import { mountBoard } from './board/board.js';
 
@@ -60,6 +63,9 @@ function route() {
   window.scrollTo(0, 0);
   if (r.view === 'paths') view = mountPaths(shell.outlet, r.id);
   else if (r.view === 'tracker') view = mountTracker(shell.outlet);
+  else if (r.view === 'parasites') view = mountParasites(shell.outlet);
+  else if (r.view === 'countdown') view = mountCountdown(shell.outlet);
+  else if (r.view === 'meter') view = mountMeter(shell.outlet);
   else if (r.view === 'blueprint') view = mountArchive(shell.outlet, r.id);
   else if (r.view === 'board') view = mountBoard(shell.outlet, r.id);
 }

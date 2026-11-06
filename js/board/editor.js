@@ -667,6 +667,18 @@ export class Editor {
 
   frames() { return this.els.filter((e) => e.type === 'frame'); }
 
+  // Where a hand-drawn line end may attach: boxes only (stickies, shapes, media), and only when
+  // the pointer is really on them. Text blocks have wide invisible bounds, so lines drawn near
+  // them used to snap onto them; text still connects through its connection dots.
+  bindTarget(p, excludeId) {
+    for (let i = this.els.length - 1; i >= 0; i--) {
+      const e = this.els[i];
+      if (e.id === excludeId || e.type === 'text' || !CONNECTABLE.has(e.type)) continue;
+      if (pointIn(e, p, 0)) return e;
+    }
+    return null;
+  }
+
   elementAt(p, excludeId) {
     const pad = 6 / this.cam.z;
     for (let i = this.els.length - 1; i >= 0; i--) {
@@ -789,7 +801,7 @@ export class Editor {
     if (this.g?.type === 'pinch') { this.movePinch(); return; }
     if (this.g && this.g.pointerId === e.pointerId) { this.g.onMove?.(p, e); return; }
     if (!this.g && this.tool === 'line') {
-      const t = this.elementAt(p);
+      const t = this.bindTarget(p);
       const id = t?.id || null;
       if (id !== this.bindHover) { this.bindHover = id; this.renderOverlay(); }
     }
@@ -898,7 +910,16 @@ export class Editor {
       return [...set];
     };
     ids = addFrameChildren(ids);
-    let startPos = new Map(ids.map((id) => [id, this.byId.get(id)]));
+    // A line dragged on its own lets go of whatever it was attached to (that isn't moving with it),
+    // so it moves as one piece instead of stretching back to its old anchors.
+    const moving = new Set(ids);
+    const detach = (el) => {
+      if (el.type !== 'line' || (!el.a?.id && !el.b?.id)) return el;
+      const geo = lineGeom(el, this.byId);
+      const free = (end, pt) => (end?.id && !moving.has(end.id) ? { x: pt.x, y: pt.y } : end);
+      return { ...el, a: free(el.a, geo.a), b: free(el.b, geo.b) };
+    };
+    let startPos = new Map(ids.map((id) => [id, detach(this.byId.get(id))]));
     const g = {
       type: 'move', pointerId: start.pointerId, moved: false,
       onMove: (p, e) => {
@@ -993,7 +1014,7 @@ export class Editor {
     const g = {
       type: 'endpoint', pointerId: start.pointerId,
       onMove: (p) => {
-        const t = this.elementAt(p, line.id);
+        const t = this.bindTarget(p, line.id);
         const bindId = t && t.id !== other?.id ? t.id : null;
         this.bindHover = bindId;
         const end = bindId ? { id: bindId, x: p.x, y: p.y } : { x: p.x, y: p.y };
@@ -1048,7 +1069,7 @@ export class Editor {
 
   beginLine(start) {
     const before = this.els;
-    const t0 = this.elementAt(start.p);
+    const t0 = this.bindTarget(start.p);
     const line = this.makeEl('line');
     delete line.x; delete line.y; delete line.w; delete line.h;
     line.endCap = this.opts.line === 'line' ? 'none' : (line.endCap && line.endCap !== 'none' ? line.endCap : 'arrow');
@@ -1063,7 +1084,7 @@ export class Editor {
           added = true;
           this.setEls([...this.els, line], { commit: false });
         }
-        const t = this.elementAt(p, line.id);
+        const t = this.bindTarget(p, line.id);
         const bindId = t && t.id !== line.a.id ? t.id : null;
         this.bindHover = bindId;
         const b = bindId ? { id: bindId, x: p.x, y: p.y } : { x: p.x, y: p.y };

@@ -30,9 +30,22 @@ function themeItems() {
 }
 
 export function mountShell(root, { session }) {
-  const navPaths = h('a', { href: '#/paths' }, 'Paths');
-  const navBlue = h('a', { href: '#/blueprint' }, 'Blueprint');
-  const navTrack = h('a', { href: '#/tracker' }, 'Tracker');
+  const SECTIONS = [
+    { id: 'paths', label: 'Paths', icon: 'toPaths' },
+    { id: 'blueprint', label: 'Blueprint', icon: 'frame', also: ['board'] },
+    { id: 'tracker', label: 'Tracker', icon: 'calendar' },
+    { id: 'parasites', label: 'Parasites', icon: 'bug' },
+    { id: 'countdown', label: 'Countdown', icon: 'hourglass' },
+    { id: 'meter', label: 'Meter', icon: 'chart' },
+  ];
+  const links = SECTIONS.map((sec) => h('a', { href: `#/${sec.id}` }, sec.label));
+  // Phones: one pill with the current section; tap for the rest.
+  const navCur = h('span', {}, 'Paths');
+  const navPick = h('button', { class: 'nav-pick', type: 'button', 'aria-label': 'Sections' }, navCur, icon('chevronDown', 14));
+  let current = 'paths';
+  navPick.addEventListener('click', () => menu(navPick, SECTIONS.map((sec) => ({
+    label: sec.label, icon: sec.icon, checked: current === sec.id || sec.also?.includes(current), onSelect: () => { location.hash = `#/${sec.id}`; },
+  }))));
   const clock = h('time', { class: 'clock', 'aria-label': 'Current time' }, fmtClock());
   const themeBtn = h('button', { class: 'icon-btn', 'aria-label': 'Choose theme', 'data-tip': 'Theme' }, icon('theme', 18));
   themeBtn.addEventListener('click', () => menu(themeBtn, [{ header: 'Theme' }, ...themeItems()], { align: 'end' }));
@@ -62,7 +75,8 @@ export function mountShell(root, { session }) {
   const el = h('div', { class: 'shell' },
     h('header', { class: 'shell-head' },
       h('a', { class: 'wordmark', href: '#/paths', 'aria-label': 'Architect home' }, 'Architect'),
-      h('nav', { class: 'nav', 'aria-label': 'Sections' }, navPaths, navBlue, navTrack),
+      h('nav', { class: 'nav', 'aria-label': 'Sections' }, links),
+      navPick,
       h('div', { class: 'head-right' },
         !configured ? h('span', { class: 'mode-chip', title: 'Data is stored in this browser. Add your Supabase keys to config.js to sync.' }, h('i'), 'Local') : null,
         clock, themeBtn, userBtn)),
@@ -74,12 +88,13 @@ export function mountShell(root, { session }) {
   return {
     outlet,
     setActive(view) {
-      navPaths.classList.toggle('active', view === 'paths');
-      navBlue.classList.toggle('active', view === 'blueprint' || view === 'board');
-      navPaths.toggleAttribute('aria-current', view === 'paths');
-      navBlue.toggleAttribute('aria-current', view === 'blueprint');
-      navTrack.classList.toggle('active', view === 'tracker');
-      navTrack.toggleAttribute('aria-current', view === 'tracker');
+      current = view;
+      SECTIONS.forEach((sec, i) => {
+        const on = view === sec.id || !!sec.also?.includes(view);
+        links[i].classList.toggle('active', on);
+        links[i].toggleAttribute('aria-current', on);
+        if (on) navCur.textContent = sec.label;
+      });
     },
     destroy() { clearInterval(tick); el.remove(); },
   };

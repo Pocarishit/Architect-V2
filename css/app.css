@@ -497,3 +497,39 @@ body.is-lassoing, body.is-lassoing * { user-select: none !important; cursor: cro
 .ptime-fields .input { font-family: var(--f-mono); color-scheme: inherit; }
 .ptime-hint { color: var(--fg-3); font-size: 13px; margin: 0; }
 .ptask.is-picked::after { display: none; }
+
+/* ---------- Setpoint timers ---------- */
+.pcol-head .pcol-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcol-timer {
+  margin: 0 4px 0 6px; flex: none;
+  font-family: var(--f-dot); font-weight: 800; font-size: 15px; line-height: 1; letter-spacing: .02em;
+  font-variant-numeric: tabular-nums; color: var(--fg-4);
+}
+.pcol-timer.is-live { color: var(--fg); }
+.pcol-timer.is-done { opacity: .6; }
+.pcol.is-now { border-color: var(--fg-3); }
+.ptile-timer {
+  margin-top: 6px; font-family: var(--f-dot); font-weight: 800; font-size: 13px; line-height: 1;
+  font-variant-numeric: tabular-nums; color: var(--fg-3);
+}
+.ptile.is-now .ptile-timer { color: var(--bg); }
+.pdetail-timer { margin-left: auto; font-family: var(--f-dot); font-weight: 800; font-size: 26px; line-height: 1; font-variant-numeric: tabular-nums; color: var(--fg-4); }
+.pdetail-timer.is-live { color: var(--fg); }
+
+/* ---------- Section nav: six sections ---------- */
+.nav { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.nav::-webkit-scrollbar { display: none; }
+.nav a { flex: none; }
+.nav-pick {
+  display: none; align-items: center; gap: 6px; height: 36px; padding: 0 12px 0 16px;
+  border: 1px solid var(--line); border-radius: var(--pill); background: var(--fg); color: var(--bg);
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+}
+@media (max-width: 1080px) {
+  .nav a { padding: 0 11px; }
+  .clock { display: none; }
+}
+@media (max-width: 860px) {
+  .nav { display: none; }
+  .nav-pick { display: inline-flex; }
+}

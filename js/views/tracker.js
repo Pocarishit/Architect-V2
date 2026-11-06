@@ -6,6 +6,7 @@ import { toast, dialog, confirmDialog } from '../core/ui.js';
 import { uid, debounce, plural, timeAgo } from '../core/util.js';
 import { api, friendlyError } from '../data/api.js';
 import { loadPrefs, getPref, setPref, prefsOf } from '../data/prefs.js';
+import { setpointsOf, dayStart, spDayKey, stateOf, logSetpoints, summarize, windowOf } from '../data/setpoints.js';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WD = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
@@ -19,7 +20,9 @@ const pad = (n) => String(n).padStart(2, '0');
 const keyOf = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const fromKey = (k) => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d); };
 const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
-const todayKey = () => keyOf(new Date());
+// The tracker's "today" begins with your first setpoint (e.g. 7:00), so a late-night setpoint counts for the day before.
+let DAY_START = 0;
+const todayKey = () => spDayKey(new Date(), DAY_START);
 const mondayIndex = (d) => (d.getDay() + 6) % 7;
 
 function fmtVal(m, v) {
@@ -62,17 +65,54 @@ export function mountTracker(root) {
     if (id === meId) { await loadPrefs(); m = getPref('trackerMetrics', null); }
     else m = (await prefsOf(id)).trackerMetrics;
     const p = { id, username: nameOf(id), metrics: m || DEFAULT_METRICS.map((x) => ({ ...x })), days: toDays(rows), loaded: true };
+    await loadSetpoints(p);
     people.set(id, p);
     return p;
   }
 
-  function use(p) { metrics = p.metrics; days = p.days; }
+  // Setpoint results (and, for you, your setpoint setup) for a person.
+  async function loadSetpoints(p) {
+    let rows = [];
+    try { rows = await api.db.select('setpoint_log', { order: 'day.asc', filters: { user_id: p.id } }); } catch {}
+    p.sp = new Map();
+    for (const r of rows) {
+      const k = String(r.day).slice(0, 10);
+      if (!p.sp.has(k)) p.sp.set(k, []);
+      p.sp.get(k).push(r);
+    }
+    if (p.id === meId) {
+      try {
+        const [cols, tasks] = await Promise.all([api.db.select('path_columns', { order: 'position.asc' }), api.db.select('path_tasks')]);
+        p.allCols = cols;
+        p.spCols = setpointsOf(cols);
+        p.spStart = dayStart(cols);
+        if (getPref('spDayStart', null) !== p.spStart) setPref('spDayStart', p.spStart);
+        // Opening the tracker also records any setpoint running right now.
+        if (p.spCols.length && !p._logged) {
+          p._logged = true;
+          await logSetpoints(cols, tasks);
+          return loadSetpoints(p);
+        }
+      } catch { p.spCols = []; p.spStart = 0; }
+    } else {
+      p.spCols = null;
+      p.spStart = Number((await prefsOf(p.id)).spDayStart) || 0;
+    }
+    const first = [...p.sp.keys()].sort()[0];
+    p.spFirst = first || (p.spCols?.length ? spDayKey(new Date(), p.spStart) : null);
+  }
+
+  let spRows = new Map();
+  let spCols = null;
+  let spFirst = null;
+  let allCols = [];
+  function use(p) { metrics = p.metrics; days = p.days; spRows = p.sp || new Map(); spCols = p.spCols; spFirst = p.spFirst; allCols = p.allCols || []; DAY_START = p.spStart || 0; }
 
   // Run fn as if `p` were on screen (used for partner summaries).
   function as(p, fn) {
-    const keep = [metrics, days];
+    const keep = [metrics, days, spRows, spCols, spFirst, allCols, DAY_START];
     use(p);
-    try { return fn(); } finally { [metrics, days] = keep; }
+    try { return fn(); } finally { [metrics, days, spRows, spCols, spFirst, allCols, DAY_START] = keep; }
   }
 
   async function loadComments(owner) {
@@ -99,6 +139,7 @@ export function mountTracker(root) {
     try {
       const me = await loadPerson(meId);
       use(me);
+      picked = todayKey();
       focus = getPref('trackerFocus', 'all') || 'all';
       if (focus !== 'all' && !metrics.some((m) => m.id === focus)) focus = 'all';
       await Promise.all([loadComments(meId), loadPartners()]);
@@ -126,9 +167,17 @@ export function mountTracker(root) {
   /* ---------------- Scoring ---------------- */
 
   const val = (k, mid) => Number(days.get(k)?.vals?.[mid]) || 0;
-  const active = (k) => metrics.some((m) => val(k, m.id) > 0) || !!days.get(k)?.note?.trim();
+  // Setpoints dominated on a day, out of how many you had.
+  function spOf(k) {
+    const rows = spRows.get(k) || [];
+    const tracked = spFirst && k >= spFirst && k <= todayKey();
+    return summarize(rows, tracked && spCols ? spCols.length : 0);
+  }
+  const hasSetpoints = () => !!(spCols?.length || spRows.size);
+  const active = (k) => metrics.some((m) => val(k, m.id) > 0) || !!days.get(k)?.note?.trim() || spOf(k).dominated > 0;
   // 0…1: how close the day came to its goals (for one metric, or the average across goals).
   function score(k, which = focus) {
+    if (which === 'setpoints') { const sp = spOf(k); return sp.of ? sp.dominated / sp.of : 0; }
     if (which !== 'all') {
       const m = metrics.find((x) => x.id === which);
       if (!m) return 0;
@@ -136,15 +185,18 @@ export function mountTracker(root) {
       return m.goal > 0 ? Math.min(1, v / m.goal) : (v > 0 ? 1 : 0);
     }
     const goals = metrics.filter((m) => m.goal > 0);
-    if (!goals.length) return active(k) ? 1 : 0;
-    const s = goals.reduce((a, m) => a + Math.min(1, val(k, m.id) / m.goal), 0) / goals.length;
+    const parts = goals.map((m) => Math.min(1, val(k, m.id) / m.goal));
+    const sp = spOf(k);
+    if (sp.of) parts.push(sp.dominated / sp.of); // setpoints count as one more goal
+    if (!parts.length) return active(k) ? 1 : 0;
+    const s = parts.reduce((a, b) => a + b, 0) / parts.length;
     return s || (active(k) ? 0.08 : 0);
   }
-  const raw = (k) => (focus === 'all' ? score(k, 'all') : val(k, focus));
+  const raw = (k) => (focus === 'all' ? score(k, 'all') : focus === 'setpoints' ? spOf(k).dominated : val(k, focus));
   const improved = (k) => active(k) && raw(k) > raw(keyOf(addDays(fromKey(k), -1))) && active(keyOf(addDays(fromKey(k), -1)));
 
   function streakInfo() {
-    const t = new Date();
+    const t = fromKey(todayKey());
     let d = active(keyOf(t)) ? t : addDays(t, -1);
     let current = 0;
     while (active(keyOf(d))) { current++; d = addDays(d, -1); }
@@ -243,7 +295,7 @@ export function mountTracker(root) {
       onclick: () => { focus = id; if (mine()) setPref('trackerFocus', id); render(); },
     }, label);
     return h('div', { class: 'tk-chips', role: 'group', 'aria-label': 'Show on calendar' },
-      chip('all', 'Overall'), metrics.map((m) => chip(m.id, m.name)));
+      chip('all', 'Overall'), hasSetpoints() ? chip('setpoints', 'Setpoints') : null, metrics.map((m) => chip(m.id, m.name)));
   }
 
   function calendar(s) {
@@ -326,6 +378,7 @@ export function mountTracker(root) {
       !mine() && isToday && !s.todayDone
         ? h('p', { class: 'tk-warn' }, h('i'), `${nameOf(viewing)} hasn’t logged today yet${s.current ? ` — ${plural(s.current, 'day')} streak on the line` : ''}.`)
         : null,
+      setpointsView(k),
       h('div', { class: 'tk-fields' }, metrics.map((m) => (mine() ? field(m, k, yk) : readField(m, k, yk)))),
       mine()
         ? h('label', { class: 'tk-note' },
@@ -335,6 +388,40 @@ export function mountTracker(root) {
           ? h('div', { class: 'tk-note' }, h('span', { class: 'tk-stat-label' }, 'Their note'), h('p', { class: 'tk-note-text' }, entry.note))
           : null,
       thread(k));
+  }
+
+  // Setpoints for the day: dominated (all tasks done before the timer ended), missed, running, or later.
+  function setpointsView(k) {
+    if (!hasSetpoints()) return null;
+    const rows = spRows.get(k) || [];
+    const isToday = k === todayKey();
+    const entries = [];
+    for (const c of spCols || []) entries.push({ id: c.id, title: c.title, col: c, row: rows.find((r) => r.col_id === c.id) });
+    for (const r of rows) if (!entries.some((e) => e.id === r.col_id)) entries.push({ id: r.col_id, title: r.title, row: r });
+    if (!entries.length) return null;
+    const sp = spOf(k);
+    const future = k > todayKey();
+    const items = entries.map((e) => {
+      let phase = null;
+      if (e.col && isToday && mine()) phase = stateOf(e.col, allCols)?.phase;
+      const r = e.row;
+      const won = r && r.total > 0 && r.done >= r.total;
+      let state, label;
+      if (future || phase === 'next') { state = 'next'; label = 'Later'; }
+      else if (phase === 'live') { state = 'live'; label = r ? `${r.done}/${r.total} · live` : 'Live'; }
+      else if (won) { state = 'won'; label = 'Dominated'; }
+      else if (k < (spFirst || k) || (!r && !isToday && !mine())) { state = 'none'; label = '—'; }
+      else { state = 'lost'; label = r ? (r.total ? `${r.done}/${r.total}` : 'No tasks') : 'Missed'; }
+      return h('li', { class: ['tk-sp', `is-${state}`] },
+        h('i', { class: 'tk-sp-mark' }, state === 'won' ? icon('check', 11, { weight: 2.8 }) : null),
+        h('span', { class: 'tk-sp-name' }, e.title || 'Setpoint'),
+        h('span', { class: 'tk-sp-state' }, label));
+    });
+    return h('div', { class: 'tk-sps' },
+      h('div', { class: 'tk-sps-head' },
+        h('span', { class: 'tk-stat-label' }, 'Setpoints dominated'),
+        h('span', { class: 'tk-sps-count' }, h('b', {}, String(sp.dominated)), `/${sp.of || entries.length}`)),
+      h('ol', { class: 'tk-sp-list' }, items));
   }
 
   // Someone else's numbers: shown, not editable.
@@ -424,12 +511,12 @@ export function mountTracker(root) {
             ? h('p', { class: 'tk-hint' }, partners.some((p) => p.sees_me) ? 'Waiting for your partners to share their tracker back with you.' : 'Add someone by username. They’ll see your tracker; you see theirs once they add you back.')
             : h('div', { class: 'tk-acc-list' }, visible.map((p) => {
               const person = people.get(p.user_id);
-              const info = as(person, () => ({ s: streakInfo(), sc: score(tk, 'all') }));
+              const info = as(person, () => ({ s: streakInfo(), sc: score(todayKey(), 'all'), sp: spOf(todayKey()) }));
               return h('button', { class: 'tk-acc-row', type: 'button', onclick: () => view(p.user_id) },
                 h('span', { class: ['tk-acc-ring', info.sc >= 1 && 'is-goal', !info.s.todayDone && 'is-idle'], style: { '--p': String(info.sc) } }, h('span', {}, (p.username || '?').slice(0, 1).toUpperCase())),
                 h('div', { class: 'tk-acc-main' },
                   h('span', { class: 'tk-acc-name' }, p.username),
-                  h('span', { class: ['tk-acc-status', !info.s.todayDone && 'is-idle'] }, info.s.todayDone ? `${Math.round(info.sc * 100)}% of goals today` : 'Not logged today')),
+                  h('span', { class: ['tk-acc-status', !info.s.todayDone && 'is-idle'] }, (info.s.todayDone ? `${Math.round(info.sc * 100)}% of goals today` : 'Not logged today') + (info.sp.of ? ` · ${info.sp.dominated}/${info.sp.of} setpoints` : ''))),
                 h('span', { class: ['tk-acc-streak', info.s.current > 0 && 'is-hot'] }, icon('flame', 14), String(info.s.current)));
             })));
   }
@@ -654,7 +741,11 @@ export function mountTracker(root) {
     if (el.contains(document.activeElement) && document.activeElement.matches('input, textarea')) return;
     await loadComments(viewing);
     if (!mine()) { const p = await loadPerson(viewing).catch(() => null); if (p) use(p); }
-    else await loadPartners();
+    else {
+      const me = people.get(meId);
+      if (me) { me._logged = false; await loadSetpoints(me); if (mine()) use(me); }
+      await loadPartners();
+    }
     render();
   }, 45_000);
 

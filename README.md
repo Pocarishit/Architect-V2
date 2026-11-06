@@ -4,6 +4,9 @@ Personal system in black and white.
 
 - **Paths** — your kanban: Morning, Afternoon, Atemporal, Futures, Cache.
 - **Themes** — Dark, Light and Blueprint (navy), from the theme button or account menu.
+- **Parasites** — shared problem board: each member checks off when they can do it; the wall breaks when everyone has (needs `supabase/nov7.sql`).
+- **Countdown** — titled deadlines with a dot-matrix hourglass that drains to empty.
+- **Meter** — Completion Meter: a bar of weekly slices with achievements and an evolution note per week.
 - **Tracker** — log daily effort (hours, money, outreach — your own metrics), with a streak calendar and 14-day trends.
 - **Blueprint** — an infinite planning board (stickies, text, shapes, connectors, pen, frames, images, videos, embeds), with **Archives** for folders, renaming and pinning.
 - Username + password login, everything saved to your own Supabase project.
@@ -55,7 +58,7 @@ Or from the folder: `npx vercel`. Routing uses `#/…` URLs, so no rewrites are 
 - Click a task to edit it; `···` for note, duplicate, move, delete.
 - Drag tasks between paths. Double-click a path name to rename; `···` on a path to move, clear done, or delete it.
 - Click the page title to rename it.
-- `···` on a path → **Time window…** sets when its red **Now** dot shows (times stay hidden), or **None**. Paths without a setting use their name (Morning, Afternoon, Evening, Night).
+- `···` on a path → **Make setpoint…** gives it a daily window (e.g. 7:00–13:00). While it runs, its header shows an HH:MM:SS countdown; later setpoints show their length dimmed. Finish every task before the timer ends to **dominate** it — the Tracker counts it (e.g. 2/4) automatically. The setpoint day starts with your first setpoint.
 - Select tasks: ⌘/Ctrl-click, Shift-click for a range, drag a lasso across empty space, the select-all icon on a path, or ⌘/Ctrl+A (hovered path; again for everything). Then Done / Move / Delete from the bar, or `Delete`. Deletes can be undone.
 - Drag a selection to move it all at once. Drag a path by its header to reorder paths (on phones: long-press a tile, then drag).
 - Download icon (top right) exports every path to one PDF page.

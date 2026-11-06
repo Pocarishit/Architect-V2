@@ -285,3 +285,25 @@
   .tk-head-actions { width: 100%; justify-content: flex-start; }
   .tk-people { order: 3; width: 100%; }
 }
+
+/* ---------- Setpoints dominated ---------- */
+.tk-sps { display: grid; gap: 10px; margin-bottom: 14px; padding: 14px; border-radius: 16px; background: var(--s2); border: 1px solid var(--line); }
+.tk-sps-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.tk-sps-count { font-family: var(--f-dot); font-weight: 800; font-size: 20px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.tk-sps-count b { color: var(--fg); font-weight: 800; font-size: 28px; }
+.tk-sp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.tk-sp { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+.tk-sp-mark {
+  flex: none; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center;
+  border: 1.5px solid var(--fg-4);
+}
+.tk-sp.is-won .tk-sp-mark { background: var(--fg); border-color: var(--fg); color: var(--bg); }
+.tk-sp.is-live .tk-sp-mark { border-color: var(--fg); border-style: dashed; animation: tk-spin 6s linear infinite; }
+.tk-sp.is-lost .tk-sp-mark { border-color: var(--red); }
+.tk-sp-name { flex: 1; min-width: 0; font-family: var(--f-mono); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-sp-state { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .04em; color: var(--fg-3); white-space: nowrap; }
+.tk-sp.is-won .tk-sp-state { color: var(--fg); }
+.tk-sp.is-lost .tk-sp-state { color: var(--red); }
+.tk-sp.is-next, .tk-sp.is-none { opacity: .55; }
+@keyframes tk-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .tk-sp.is-live .tk-sp-mark { animation: none; } }

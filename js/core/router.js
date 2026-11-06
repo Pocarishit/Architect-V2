@@ -5,6 +5,7 @@ export function parseRoute() {
   if (view === 'paths') return { view: 'paths', id: id || null };
   if (view === 'blueprint') return { view: 'blueprint', id: id || null };
   if (view === 'tracker') return { view: 'tracker' };
+  if (view === 'parasites' || view === 'countdown' || view === 'meter') return { view, id: id || null };
   if (view === 'board' && id) return { view: 'board', id };
   return { view: 'paths', redirect: true };
 }

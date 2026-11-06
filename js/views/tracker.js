@@ -232,11 +232,7 @@ export function mountTracker(root) {
         h('button', { class: 'icon-btn sm', type: 'button', 'aria-label': 'Previous month', onclick: () => shiftMonth(-1) }, icon('chevronLeft', 16)),
         h('h2', {}, `${MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`),
         h('button', { class: 'icon-btn sm', type: 'button', 'aria-label': 'Next month', onclick: () => shiftMonth(1) }, icon('chevronRight', 16))),
-      h('div', { class: 'tk-stats' },
-        stat(mine() ? 'Your streak' : 'Streak', plural(s.current, 'day')),
-        stat('Week streak', plural(s.weeks, 'week')),
-        stat('Best', plural(s.best, 'day')),
-        stat('Active days', String(s.total))));
+    );
   }
 
   const stat = (label, value) => h('div', { class: 'tk-stat' }, h('span', { class: 'tk-stat-label' }, label), h('span', { class: 'tk-stat-val' }, value));

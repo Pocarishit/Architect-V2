@@ -432,7 +432,8 @@ a.crumb:hover { color: var(--fg); }
   content: ''; position: absolute; top: 8px; right: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--fg);
 }
 .paths.is-picking .ptask { cursor: pointer; }
-.paths.is-picking .ptask-more { opacity: 0; pointer-events: none; }
+.paths.is-picking .ptask.is-picked .ptask-more { opacity: 1; }
+.ptask.is-picked .ptask-more { position: relative; z-index: 1; }
 .icon-btn.is-on { background: var(--fg); color: var(--bg); opacity: 1 !important; }
 .pcol-head { cursor: grab; }
 .pcol-head .pcol-title { cursor: inherit; }
@@ -455,33 +456,6 @@ body.is-lassoing, body.is-lassoing * { user-select: none !important; cursor: cro
 .ptile-ghost { position: fixed; z-index: 800; pointer-events: none; box-shadow: var(--shadow); transition: none; }
 .ptile-ph { aspect-ratio: 1; border: 1px dashed var(--fg-3); border-radius: 28px; }
 .pdetail-tools { display: flex; align-items: center; gap: 2px; }
-
-.psel-bar {
-  position: fixed; left: 50%; bottom: max(20px, env(safe-area-inset-bottom)); z-index: 900;
-  display: flex; align-items: center; gap: 2px; height: 48px; padding: 0 6px 0 16px;
-  border-radius: var(--pill); background: var(--fg); color: var(--bg);
-  box-shadow: var(--shadow);
-  transform: translate(-50%, 24px); opacity: 0; pointer-events: none;
-  transition: transform .2s var(--ease), opacity .2s var(--ease);
-  max-width: calc(100vw - 24px);
-}
-.psel-bar.is-open { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
-.psel-count { font-family: var(--f-dot); font-weight: 800; font-size: 22px; line-height: 1; font-variant-numeric: tabular-nums; }
-.psel-label { margin: 0 8px 0 8px; font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; opacity: .6; }
-.psel-sep { width: 1px; height: 22px; margin: 0 4px; background: color-mix(in srgb, var(--bg) 22%, transparent); }
-.psel-btn {
-  display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 12px; border-radius: var(--pill);
-  font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
-}
-.psel-btn:hover, .psel-btn.is-open { background: color-mix(in srgb, var(--bg) 12%, transparent); }
-.psel-btn.is-danger { color: var(--red); }
-.psel-btn.is-icon { width: 36px; padding: 0; justify-content: center; }
-@media (max-width: 720px) {
-  .psel-label { display: none; }
-  .psel-btn { padding: 0 10px; }
-  .psel-btn span { display: none; }
-  .psel-btn.is-danger span, .psel-btn:first-of-type span { display: inline; }
-}
 
 /* ---------- Paths PDF sheet ---------- */
 .print-probe { position: fixed; left: -100000px; top: 0; visibility: hidden; pointer-events: none; }
@@ -522,3 +496,4 @@ body.is-lassoing, body.is-lassoing * { user-select: none !important; cursor: cro
 .ptime-fields[hidden] { display: none; }
 .ptime-fields .input { font-family: var(--f-mono); color-scheme: inherit; }
 .ptime-hint { color: var(--fg-3); font-size: 13px; margin: 0; }
+.ptask.is-picked::after { display: none; }

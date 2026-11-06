@@ -59,8 +59,7 @@ export function mountPaths(root, initialOpen = null) {
   mq.addEventListener?.('change', onMq);
 
   const el = h('div', { class: 'view paths' });
-  const selBar = h('div', { class: 'psel-bar', role: 'toolbar', 'aria-label': 'Selected tasks' });
-  root.append(el, selBar);
+  root.append(el);
 
   const fail = (e) => toast(`Not saved — ${friendlyError(e)}`, { tone: 'error', ms: 5000 });
   const tasksOf = (colId) => tasks.filter((t) => t.column_id === colId).sort((a, b) => a.position - b.position);
@@ -286,22 +285,7 @@ export function mountPaths(root, initialOpen = null) {
 
   /* ---------------- Selection ---------------- */
 
-  function renderSelBar() {
-    const n = picked.size;
-    selBar.classList.toggle('is-open', n > 0);
-    if (!n) { selBar.replaceChildren(); return; }
-    const list = pickedTasks();
-    const allDone = list.every((t) => t.done);
-    selBar.replaceChildren(
-      h('span', { class: 'psel-count' }, String(n)),
-      h('span', { class: 'psel-label' }, 'Selected'),
-      h('i', { class: 'psel-sep' }),
-      h('button', { class: 'psel-btn', type: 'button', onclick: () => bulkDone(!allDone) }, icon('check', 15), h('span', {}, allDone ? 'Undo done' : 'Done')),
-      h('button', { class: 'psel-btn', type: 'button', onclick: (e) => bulkMoveMenu(e.currentTarget) }, icon('toPaths', 15), h('span', {}, 'Move')),
-      h('button', { class: 'psel-btn is-danger', type: 'button', onclick: bulkDelete }, icon('trash', 15), h('span', {}, 'Delete')),
-      h('i', { class: 'psel-sep' }),
-      h('button', { class: 'psel-btn is-icon', type: 'button', 'aria-label': 'Clear selection', onclick: clearPick }, icon('close', 15)));
-  }
+  const renderSelBar = () => {};
 
   function clearPick() {
     if (!picked.size) return;
@@ -377,15 +361,10 @@ export function mountPaths(root, initialOpen = null) {
   async function bulkDelete() {
     const list = pickedTasks();
     if (!list.length) return;
-    const copies = list.map((t) => ({ ...t }));
     const ids = new Set(list.map((t) => t.id));
     tasks = tasks.filter((t) => !ids.has(t.id));
     picked = new Set();
     render();
-    toast(`Deleted ${plural(copies.length, 'task')}`, {
-      ms: 6000,
-      action: { label: 'Undo', onClick: () => restore(copies) },
-    });
     try { await api.db.remove('path_tasks', [...ids]); } catch (e) { fail(e); }
   }
 
@@ -419,7 +398,6 @@ export function mountPaths(root, initialOpen = null) {
     tasks = tasks.filter((x) => x.id !== t.id);
     picked.delete(t.id);
     render();
-    toast('Task deleted', { ms: 5000, action: { label: 'Undo', onClick: () => restore([t]) } });
     try { await api.db.remove('path_tasks', t.id); } catch (e) { fail(e); }
   }
 
@@ -491,7 +469,6 @@ export function mountPaths(root, initialOpen = null) {
     tasks = tasks.filter((t) => !ids.includes(t.id));
     ids.forEach((id) => picked.delete(id));
     render();
-    toast(`Cleared ${ids.length} done ${ids.length === 1 ? 'task' : 'tasks'}`, { ms: 6000, action: { label: 'Undo', onClick: () => restore(gone.map((t) => ({ ...t }))) } });
     try { await api.db.remove('path_tasks', ids); } catch (e) { fail(e); }
   }
 
@@ -646,6 +623,7 @@ export function mountPaths(root, initialOpen = null) {
   window.addEventListener('keydown', onKey);
 
   function taskMenu(anchor, task) {
+    if (picked.has(task.id) && picked.size > 1) { selectionMenu(anchor); return; }
     const others = columns.filter((c) => c.id !== task.column_id);
     menu(anchor, [
       { label: 'Edit task', icon: 'edit', onSelect: () => { editing = { id: task.id, field: 'title' }; render(); } },
@@ -661,6 +639,22 @@ export function mountPaths(root, initialOpen = null) {
       })),
       '-',
       { label: 'Delete task', icon: 'trash', danger: true, onSelect: () => deleteTask(task) },
+    ], { align: 'end' });
+  }
+
+  // ··· on any selected task: act on every selected task.
+  function selectionMenu(anchor) {
+    const list = pickedTasks();
+    const allDone = list.every((t) => t.done);
+    menu(anchor, [
+      { header: `${list.length} selected` },
+      { label: allDone ? 'Mark not done' : 'Mark done', icon: 'check', kbd: 'D', onSelect: () => bulkDone(!allDone) },
+      '-',
+      { header: 'Move to' },
+      ...columns.map((c) => ({ label: c.title, icon: 'toPaths', onSelect: () => bulkMove(c.id) })),
+      '-',
+      { label: 'Clear selection', icon: 'close', kbd: 'Esc', onSelect: clearPick },
+      { label: `Delete ${plural(list.length, 'task')}`, icon: 'trash', kbd: 'Del', danger: true, onSelect: bulkDelete },
     ], { align: 'end' });
   }
 
@@ -1086,7 +1080,6 @@ export function mountPaths(root, initialOpen = null) {
       drag?.ghost?.remove();
       colDrag?.ghost?.remove();
       marquee?.box?.remove();
-      selBar.remove();
       el.remove();
     },
   };

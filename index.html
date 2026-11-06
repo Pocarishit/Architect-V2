@@ -18,6 +18,7 @@
     (function () {
       try {
         var t = localStorage.getItem('architect.theme');
+        try { t = JSON.parse(t); } catch (e) {} // saved as JSON ("light"), older builds saved it raw
         if (t === 'light' || t === 'dark' || t === 'blueprint') document.documentElement.dataset.theme = t;
         var c = { light: '#f3f3f3', blueprint: '#0A2550' }[t];
         if (c) document.querySelector('meta[name="theme-color"]').setAttribute('content', c);

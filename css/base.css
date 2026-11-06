@@ -64,6 +64,29 @@
   --scrim: rgba(243, 243, 243, .78);
 }
 
+/* Blueprint: navy paper, blue linework, pale-blue ink. */
+[data-theme="blueprint"] {
+  color-scheme: dark;
+  --bg: #0A2550;
+  --s1: #0D2C5E;
+  --s2: #11346C;
+  --s3: #163E7E;
+  --line: #17418A;
+  --line-2: #1F55B5;
+  --fg: #DDEEFA;
+  --fg-2: #A3C9EF;
+  --fg-3: #4090E0;
+  --fg-4: #2D6CCF;
+  --ink: #DDEEFA;
+  --paper: #0A2550;
+  --canvas: #0A2550;
+  --grid-dot: #1A4C9E;
+  --sel: #DDEEFA;
+  --frame-bg: #0D2C5E;
+  --shadow: 0 18px 48px -12px rgba(2, 10, 28, .7), 0 0 0 1px rgba(221, 238, 250, .03);
+  --scrim: rgba(10, 37, 80, .78);
+}
+
 *, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
@@ -314,3 +337,7 @@ kbd { font-family: var(--f-mono); font-size: 11px; color: var(--fg-3); }
   font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; text-align: center; padding: 8px;
 }
 .el-print-card small { font-size: 9px; text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; max-width: 100%; opacity: .7; }
+
+.theme-dots { display: inline-flex; width: 16px; justify-content: center; }
+.theme-dots i { width: 8px; height: 8px; border-radius: 50%; margin-left: -3px; box-shadow: 0 0 0 1px var(--line-2); }
+.theme-dots i:first-child { margin-left: 0; }

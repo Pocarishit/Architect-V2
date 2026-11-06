@@ -126,7 +126,7 @@ export function menu(anchor, items, opts = {}) {
         onmousedown: (e) => e.preventDefault(),
         onclick: (e) => { e.stopPropagation(); closeFloating(); it.onSelect?.(); },
       },
-        it.icon ? icon(it.icon, 16) : h('span', { class: 'menu-ic-sp' }),
+        it.iconEl || (it.icon ? icon(it.icon, 16) : h('span', { class: 'menu-ic-sp' })),
         h('span', { class: ['menu-label', it.labelClass] }, it.label),
         it.kbd ? h('kbd', {}, kbd(it.kbd)) : null,
         it.checked != null ? h('span', { class: 'menu-check' }, it.checked ? icon('check', 14) : null) : null,

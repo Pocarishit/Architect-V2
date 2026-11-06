@@ -21,6 +21,7 @@ export function friendlyError(e) {
   if (code === 'signup_disabled' || /signups not allowed/i.test(msg)) return 'New accounts are turned off for this project.';
   if (code === 'weak_password' || /password should be/i.test(msg)) return msg;
   if (code === 'over_request_rate_limit' || code === 'over_email_send_rate_limit') return 'Too many attempts. Wait a minute and try again.';
+  if (/tracker_(partners|comments|shares)|share_tracker|unshare_tracker|leave_tracker/i.test(msg)) return 'Partners aren’t set up yet. Run supabase/accountability.sql in the Supabase SQL editor.';
   if (code === 'PGRST202' || code === '42883' || /Could not find the function|blueprint_members|public\.profiles/i.test(msg)) return 'Sharing isn’t set up yet. Run supabase/collab.sql in the Supabase SQL editor.';
   if (code === '42P01' || /relation .* does not exist|Could not find the table/i.test(msg)) return 'Database tables are missing. Run supabase/schema.sql in the Supabase SQL editor.';
   if (/Bucket not found/i.test(msg)) return 'Storage bucket is missing. Run supabase/schema.sql in the Supabase SQL editor.';

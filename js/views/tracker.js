@@ -3,9 +3,9 @@
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { toast, dialog, confirmDialog } from '../core/ui.js';
-import { uid, debounce, plural } from '../core/util.js';
+import { uid, debounce, plural, timeAgo } from '../core/util.js';
 import { api, friendlyError } from '../data/api.js';
-import { loadPrefs, getPref, setPref } from '../data/prefs.js';
+import { loadPrefs, getPref, setPref, prefsOf } from '../data/prefs.js';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WD = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
@@ -30,8 +30,18 @@ function fmtVal(m, v) {
 }
 
 export function mountTracker(root) {
-  let metrics = [];
-  let days = new Map();         // 'YYYY-MM-DD' → { id, day, vals, note }
+  // Whose tracker is on screen: you, or an accountability partner (read-only).
+  const session = api.auth.current();
+  const meId = session?.user?.id;
+  const meName = session?.user?.username || 'you';
+  const people = new Map();     // user id → { id, username, metrics, days, loaded }
+  let viewing = meId;
+  let metrics = [];             // the viewed person's metrics …
+  let days = new Map();         // … and days: 'YYYY-MM-DD' → { id, day, vals, note }
+  let partners = [];            // [{ user_id, username, sees_me, i_see }]
+  let partnersError = null;
+  const comments = new Map();   // owner id → [{ id, user_id, owner_id, day, body, created_at }]
+  let draft = '';
   let loading = true;
   let loadError = null;
   let cursor = new Date();      // month on screen
@@ -42,19 +52,75 @@ export function mountTracker(root) {
   const el = h('div', { class: 'view tracker' });
   root.append(el);
 
+  const mine = () => viewing === meId;
+  const nameOf = (id) => (id === meId ? meName : partners.find((p) => p.user_id === id)?.username || 'someone');
+  const toDays = (rows) => new Map(rows.map((r) => [String(r.day).slice(0, 10), { ...r, day: String(r.day).slice(0, 10), vals: r.vals || {} }]));
+
+  async function loadPerson(id) {
+    const rows = await api.db.select('streak_days', { order: 'day.asc', filters: { user_id: id } });
+    let m;
+    if (id === meId) { await loadPrefs(); m = getPref('trackerMetrics', null); }
+    else m = (await prefsOf(id)).trackerMetrics;
+    const p = { id, username: nameOf(id), metrics: m || DEFAULT_METRICS.map((x) => ({ ...x })), days: toDays(rows), loaded: true };
+    people.set(id, p);
+    return p;
+  }
+
+  function use(p) { metrics = p.metrics; days = p.days; }
+
+  // Run fn as if `p` were on screen (used for partner summaries).
+  function as(p, fn) {
+    const keep = [metrics, days];
+    use(p);
+    try { return fn(); } finally { [metrics, days] = keep; }
+  }
+
+  async function loadComments(owner) {
+    try {
+      const rows = await api.db.select('tracker_comments', { order: 'created_at.asc', filters: { owner_id: owner } });
+      comments.set(owner, rows);
+    } catch { comments.set(owner, comments.get(owner) || []); }
+  }
+
+  async function loadPartners() {
+    if (api.mode === 'local') { partnersError = 'local'; return; }
+    try {
+      partners = (await api.rpc('tracker_partners', {})) || [];
+      partnersError = null;
+    } catch (e) {
+      partners = [];
+      partnersError = friendlyError(e);
+    }
+    const visible = partners.filter((p) => p.i_see);
+    await Promise.all(visible.map((p) => loadPerson(p.user_id).catch(() => null)));
+  }
+
   async function load() {
     try {
-      await loadPrefs();
-      metrics = getPref('trackerMetrics', null) || DEFAULT_METRICS.map((m) => ({ ...m }));
+      const me = await loadPerson(meId);
+      use(me);
       focus = getPref('trackerFocus', 'all') || 'all';
       if (focus !== 'all' && !metrics.some((m) => m.id === focus)) focus = 'all';
-      const rows = await api.db.select('streak_days', { order: 'day.asc' });
-      days = new Map(rows.map((r) => [String(r.day).slice(0, 10), { ...r, day: String(r.day).slice(0, 10), vals: r.vals || {} }]));
+      await Promise.all([loadComments(meId), loadPartners()]);
     } catch (e) {
       loadError = friendlyError(e);
     }
     loading = false;
     render();
+  }
+
+  async function view(id) {
+    if (id === viewing) return;
+    flushAll();
+    viewing = id;
+    const p = people.get(id) || await loadPerson(id).catch(() => null);
+    if (!p) { viewing = meId; toast('Couldn’t open their tracker.', { tone: 'error' }); return; }
+    use(p);
+    if (focus !== 'all' && !metrics.some((m) => m.id === focus)) focus = 'all';
+    draft = '';
+    render();
+    await loadComments(id);
+    if (viewing === id) render();
   }
 
   /* ---------------- Scoring ---------------- */
@@ -111,17 +177,24 @@ export function mountTracker(root) {
     h('button', { class: 'btn', onclick: () => { loading = true; loadError = null; render(); load(); } }, 'Try again'));
 
   function header() {
+    const visible = partners.filter((p) => p.i_see);
     return h('header', { class: 'view-head tk-head' },
-      h('h1', { class: 'paths-title tk-title' }, 'Tracker'),
+      h('h1', { class: 'paths-title tk-title' }, mine() ? 'Tracker' : nameOf(viewing)),
       h('div', { class: 'tk-head-actions' },
-        h('button', { class: 'btn sm', type: 'button', onclick: editMetrics }, icon('edit', 14), h('span', {}, 'Metrics'))));
+        visible.length ? h('div', { class: 'tk-people', role: 'tablist', 'aria-label': 'Whose tracker' },
+          [{ user_id: meId, username: 'You' }, ...visible].map((p) => h('button', {
+            class: ['tk-person', viewing === p.user_id && 'is-on'], type: 'button', role: 'tab', 'aria-selected': String(viewing === p.user_id),
+            onclick: () => view(p.user_id),
+          }, h('span', { class: 'tk-av' }, (p.user_id === meId ? meName : p.username || '?').slice(0, 1).toUpperCase()), h('span', { class: 'tk-person-name' }, p.username)))) : null,
+        h('button', { class: 'btn sm', type: 'button', onclick: managePartners }, icon('users', 14), h('span', {}, 'Partners')),
+        mine() ? h('button', { class: 'btn sm', type: 'button', onclick: editMetrics }, icon('edit', 14), h('span', {}, 'Metrics')) : null));
   }
 
   function main() {
     const s = streakInfo();
     return h('div', { class: 'tk-layout' },
       calCard(s),
-      h('div', { class: 'tk-side' }, dayPanel(s), trends()));
+      h('div', { class: 'tk-side' }, dayPanel(s), mine() ? accountability() : null, trends()));
   }
 
   const calCard = (s) => h('section', { class: 'tk-card tk-cal-card' }, calendarHead(s), focusChips(), calendar(s));
@@ -160,7 +233,7 @@ export function mountTracker(root) {
         h('h2', {}, `${MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`),
         h('button', { class: 'icon-btn sm', type: 'button', 'aria-label': 'Next month', onclick: () => shiftMonth(1) }, icon('chevronRight', 16))),
       h('div', { class: 'tk-stats' },
-        stat('Your streak', plural(s.current, 'day')),
+        stat(mine() ? 'Your streak' : 'Streak', plural(s.current, 'day')),
         stat('Week streak', plural(s.weeks, 'week')),
         stat('Best', plural(s.best, 'day')),
         stat('Active days', String(s.total))));
@@ -171,7 +244,7 @@ export function mountTracker(root) {
   function focusChips() {
     const chip = (id, label) => h('button', {
       class: ['tk-chip', focus === id && 'is-on'], type: 'button', 'aria-pressed': String(focus === id),
-      onclick: () => { focus = id; setPref('trackerFocus', id); render(); },
+      onclick: () => { focus = id; if (mine()) setPref('trackerFocus', id); render(); },
     }, label);
     return h('div', { class: 'tk-chips', role: 'group', 'aria-label': 'Show on calendar' },
       chip('all', 'Overall'), metrics.map((m) => chip(m.id, m.name)));
@@ -217,6 +290,8 @@ export function mountTracker(root) {
         })));
   }
 
+  const talkCount = (k) => (comments.get(viewing) || []).filter((c) => String(c.day).slice(0, 10) === k).length;
+
   function dayCell(date, k, { inMonth, future, today }) {
     const on = active(k);
     const sc = on ? score(k) : 0;
@@ -231,7 +306,8 @@ export function mountTracker(root) {
     },
       h('span', { class: 'tk-day-ring' }),
       h('span', { class: 'tk-day-num' }, String(date.getDate())),
-      on && improved(k) ? h('i', { class: 'tk-day-up', title: 'Better than the day before' }) : null);
+      on && improved(k) ? h('i', { class: 'tk-day-up', title: 'Better than the day before' }) : null,
+      talkCount(k) ? h('i', { class: 'tk-day-talk', title: plural(talkCount(k), 'comment') }) : null);
   }
 
   function dayPanel(s) {
@@ -248,13 +324,167 @@ export function mountTracker(root) {
           h('span', { class: 'tk-stat-label' }, d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })),
           h('h2', { class: 'tk-log-title' }, label)),
         scoreBadge(k)),
-      isToday && !s.todayDone && s.current > 0
+      mine() && isToday && !s.todayDone && s.current > 0
         ? h('p', { class: 'tk-warn' }, h('i'), `Log something today to keep your ${plural(s.current, 'day')} streak.`)
         : null,
-      h('div', { class: 'tk-fields' }, metrics.map((m) => field(m, k, yk))),
-      h('label', { class: 'tk-note' },
-        h('span', { class: 'tk-stat-label' }, 'Note — what worked, what to fix'),
-        h('textarea', { rows: 2, class: 'input', 'data-metric': '__note', placeholder: 'One line for tomorrow’s you', value: entry?.note || '', oninput: (e) => setNote(k, e.target.value) })));
+      !mine() && isToday && !s.todayDone
+        ? h('p', { class: 'tk-warn' }, h('i'), `${nameOf(viewing)} hasn’t logged today yet${s.current ? ` — ${plural(s.current, 'day')} streak on the line` : ''}.`)
+        : null,
+      h('div', { class: 'tk-fields' }, metrics.map((m) => (mine() ? field(m, k, yk) : readField(m, k, yk)))),
+      mine()
+        ? h('label', { class: 'tk-note' },
+          h('span', { class: 'tk-stat-label' }, 'Note — what worked, what to fix'),
+          h('textarea', { rows: 2, class: 'input', 'data-metric': '__note', placeholder: 'One line for tomorrow’s you', value: entry?.note || '', oninput: (e) => setNote(k, e.target.value) }))
+        : entry?.note?.trim()
+          ? h('div', { class: 'tk-note' }, h('span', { class: 'tk-stat-label' }, 'Their note'), h('p', { class: 'tk-note-text' }, entry.note))
+          : null,
+      thread(k));
+  }
+
+  // Someone else's numbers: shown, not editable.
+  function readField(m, k, yk) {
+    const cur = val(k, m.id);
+    const y = val(yk, m.id);
+    const diff = cur - y;
+    return h('div', { class: 'tk-field is-read' },
+      h('div', { class: 'tk-field-top' },
+        h('span', { class: 'tk-field-name' }, m.name),
+        h('span', { class: ['tk-delta', diff > 0 && 'is-up', diff < 0 && 'is-down'] }, y || cur ? (diff === 0 ? 'Same as yesterday' : `${diff > 0 ? '▲' : '▼'} ${fmtVal(m, Math.abs(diff))} vs yesterday`) : '')),
+      h('div', { class: 'tk-read-val' }, cur ? fmtVal(m, cur) : '—'),
+      m.goal > 0 ? h('div', { class: 'tk-goal' }, h('div', { class: 'tk-goal-bar', style: { '--p': String(Math.min(1, cur / m.goal)) } }), h('span', {}, `Goal ${fmtVal(m, m.goal)}`)) : null);
+  }
+
+  /* ---------------- Comments ---------------- */
+
+  function thread(k) {
+    const list = (comments.get(viewing) || []).filter((c) => String(c.day).slice(0, 10) === k);
+    const canPost = mine() || partners.some((p) => p.user_id === viewing && p.i_see);
+    const input = h('textarea', {
+      class: 'input tk-talk-input', rows: 1, maxlength: 1000, value: draft, 'data-metric': '__talk',
+      placeholder: mine() ? 'Reply to your partners…' : `Say something to ${nameOf(viewing)}…`, 'aria-label': 'Comment',
+      oninput: (e) => { draft = e.target.value; e.target.style.height = 'auto'; e.target.style.height = `${e.target.scrollHeight}px`; },
+      onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); post(k); } },
+    });
+    return h('div', { class: 'tk-talk' },
+      h('div', { class: 'tk-talk-head' }, h('span', { class: 'tk-stat-label' }, 'Comments'), list.length ? h('span', { class: 'tk-talk-count' }, String(list.length)) : null),
+      list.length
+        ? h('ol', { class: 'tk-talk-list' }, list.map((c) => {
+          const self = c.user_id === meId;
+          const canDelete = self || viewing === meId;
+          return h('li', { class: ['tk-msg', self && 'is-me'] },
+            h('span', { class: 'tk-av' }, nameOf(c.user_id).slice(0, 1).toUpperCase()),
+            h('div', { class: 'tk-msg-body' },
+              h('div', { class: 'tk-msg-meta' }, h('b', {}, self ? 'You' : nameOf(c.user_id)), h('span', {}, timeAgo(c.created_at))),
+              h('p', {}, c.body)),
+            canDelete ? h('button', { class: 'icon-btn xs tk-msg-del', type: 'button', 'aria-label': 'Delete comment', onclick: () => removeComment(c) }, icon('close', 13)) : null);
+        }))
+        : h('p', { class: 'tk-talk-empty' }, mine() ? 'Partners’ comments on this day show up here.' : 'No comments yet. Keep them honest.'),
+      canPost ? h('div', { class: 'tk-talk-compose' }, input,
+        h('button', { class: 'icon-btn tk-talk-send', type: 'button', 'aria-label': 'Send comment', onclick: () => post(k) }, icon('arrow', 16))) : null);
+  }
+
+  async function post(k) {
+    const body = draft.trim();
+    if (!body) return;
+    const owner = viewing;
+    const row = { id: uid(), owner_id: owner, day: k, body };
+    const list = comments.get(owner) || [];
+    const local = { ...row, user_id: meId, created_at: new Date().toISOString() };
+    comments.set(owner, [...list, local]);
+    draft = '';
+    render();
+    el.querySelector('[data-metric="__talk"]')?.focus();
+    try { await api.db.insert('tracker_comments', row); }
+    catch (e) {
+      comments.set(owner, (comments.get(owner) || []).filter((c) => c.id !== row.id));
+      draft = body;
+      render();
+      toast(`Comment not sent — ${friendlyError(e)}`, { tone: 'error', ms: 5000 });
+    }
+  }
+
+  async function removeComment(c) {
+    const owner = c.owner_id;
+    comments.set(owner, (comments.get(owner) || []).filter((x) => x.id !== c.id));
+    render();
+    try { await api.db.remove('tracker_comments', c.id); } catch (e) { toast(friendlyError(e), { tone: 'error' }); loadComments(owner).then(render); }
+  }
+
+  /* ---------------- Accountability ---------------- */
+
+  // Your partners at a glance: today's progress and their streak.
+  function accountability() {
+    const visible = partners.filter((p) => p.i_see && people.get(p.user_id));
+    const tk = todayKey();
+    return h('section', { class: 'tk-card tk-acc' },
+      h('header', { class: 'tk-trends-head' },
+        h('h2', { class: 'tk-section-title' }, 'Accountability'),
+        h('button', { class: 'btn sm', type: 'button', onclick: managePartners }, icon('plus', 14), h('span', {}, 'Add'))),
+      partnersError === 'local'
+        ? h('p', { class: 'tk-hint' }, 'Partners need Supabase sync — add your keys to config.js.')
+        : partnersError
+          ? h('p', { class: 'tk-hint' }, partnersError.includes('function') || partnersError.includes('Sharing') ? 'Run supabase/accountability.sql in the Supabase SQL editor to turn on partners.' : partnersError)
+          : !visible.length
+            ? h('p', { class: 'tk-hint' }, partners.some((p) => p.sees_me) ? 'Waiting for your partners to share their tracker back with you.' : 'Add someone by username. They’ll see your tracker; you see theirs once they add you back.')
+            : h('div', { class: 'tk-acc-list' }, visible.map((p) => {
+              const person = people.get(p.user_id);
+              const info = as(person, () => ({ s: streakInfo(), sc: score(tk, 'all') }));
+              return h('button', { class: 'tk-acc-row', type: 'button', onclick: () => view(p.user_id) },
+                h('span', { class: ['tk-acc-ring', info.sc >= 1 && 'is-goal', !info.s.todayDone && 'is-idle'], style: { '--p': String(info.sc) } }, h('span', {}, (p.username || '?').slice(0, 1).toUpperCase())),
+                h('div', { class: 'tk-acc-main' },
+                  h('span', { class: 'tk-acc-name' }, p.username),
+                  h('span', { class: ['tk-acc-status', !info.s.todayDone && 'is-idle'] }, info.s.todayDone ? `${Math.round(info.sc * 100)}% of goals today` : 'Not logged today')),
+                h('span', { class: ['tk-acc-streak', info.s.current > 0 && 'is-hot'] }, icon('flame', 14), String(info.s.current)));
+            })));
+  }
+
+  async function managePartners() {
+    if (api.mode === 'local') { toast('Partners need Supabase sync.', { ms: 3000 }); return; }
+    const input = h('input', { class: 'input', placeholder: 'Their username', autocapitalize: 'none', spellcheck: false, maxlength: 32, 'aria-label': 'Username' });
+    const err = h('p', { class: 'login-error', hidden: true });
+    const list = h('div', { class: 'tk-plist' });
+    const paint = () => list.replaceChildren(...(partners.length ? partners.map((p) => h('div', { class: 'tk-prow' },
+      h('span', { class: 'tk-av' }, (p.username || '?').slice(0, 1).toUpperCase()),
+      h('div', { class: 'tk-prow-main' },
+        h('span', { class: 'tk-acc-name' }, p.username || 'Unknown'),
+        h('span', { class: 'tk-acc-status' }, p.sees_me && p.i_see ? 'Mutual' : p.sees_me ? 'Sees yours · hasn’t shared back' : 'Shares with you · you haven’t shared back')),
+      !p.sees_me ? h('button', { class: 'btn sm', type: 'button', onclick: () => add(p.username) }, 'Share back') : null,
+      h('button', { class: 'icon-btn sm', type: 'button', 'aria-label': `Remove ${p.username}`, title: 'Stop sharing both ways', onclick: () => drop(p) }, icon('close', 15))))
+      : [h('p', { class: 'tk-hint' }, 'No partners yet.')]));
+    const add = async (name) => {
+      name = (name || input.value).trim().replace(/^@/, '');
+      if (!name) return;
+      err.hidden = true;
+      try {
+        await api.rpc('share_tracker', { uname: name });
+        input.value = '';
+        await loadPartners();
+        paint();
+        render();
+        toast(`${name} can now see your tracker`);
+      } catch (e) { err.hidden = false; err.textContent = friendlyError(e); }
+    };
+    const drop = async (p) => {
+      try {
+        await Promise.all([api.rpc('unshare_tracker', { other: p.user_id }), api.rpc('leave_tracker', { other: p.user_id })]);
+        people.delete(p.user_id);
+        if (viewing === p.user_id) { viewing = meId; use(people.get(meId)); }
+        await loadPartners();
+        paint();
+        render();
+      } catch (e) { err.hidden = false; err.textContent = friendlyError(e); }
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+    paint();
+    await dialog({
+      title: 'Accountability partners',
+      width: 480,
+      body: h('div', { class: 'stack' },
+        h('p', { class: 'tk-hint' }, 'Adding someone shares your tracker with them — read-only, plus comments. You see theirs once they add you.'),
+        h('div', { class: 'tk-padd' }, input, h('button', { class: 'btn btn-primary', type: 'button', onclick: () => add() }, 'Add')),
+        err, list),
+      actions: [{ label: 'Done', primary: true, value: true }],
+    });
   }
 
   const fieldRefs = new Map();
@@ -306,7 +536,7 @@ export function mountTracker(root) {
         const avg = last7.reduce((a, b) => a + b, 0) / 7;
         const best = Math.max(0, ...[...days.keys()].map((k) => val(k, m.id)));
         const total = [...days.keys()].filter((k) => k.startsWith(keyOf(cursor).slice(0, 7))).reduce((a, k) => a + val(k, m.id), 0);
-        return h('button', { class: ['tk-trend', focus === m.id && 'is-on'], type: 'button', onclick: () => { focus = focus === m.id ? 'all' : m.id; setPref('trackerFocus', focus); render(); } },
+        return h('button', { class: ['tk-trend', focus === m.id && 'is-on'], type: 'button', onclick: () => { focus = focus === m.id ? 'all' : m.id; if (mine()) setPref('trackerFocus', focus); render(); } },
           h('div', { class: 'tk-trend-top' },
             h('span', { class: 'tk-field-name' }, m.name),
             h('span', { class: 'tk-trend-total' }, fmtVal(m, total)), h('span', { class: 'tk-stat-label' }, MONTHS[cursor.getMonth()].slice(0, 3))),
@@ -367,7 +597,7 @@ export function mountTracker(root) {
   }
 
   async function persist(k) {
-    const e = days.get(k);
+    const e = people.get(meId)?.days.get(k); // always your own data, even if you've switched to a partner
     if (!e) return;
     const body = { vals: { ...e.vals }, note: e.note || '' };
     if (e._new) {
@@ -422,8 +652,19 @@ export function mountTracker(root) {
   render();
   load();
 
+  // Keep partners' comments and numbers fresh while the tracker is open.
+  const poll = setInterval(async () => {
+    if (document.hidden || loading || loadError) return;
+    if (el.contains(document.activeElement) && document.activeElement.matches('input, textarea')) return;
+    await loadComments(viewing);
+    if (!mine()) { const p = await loadPerson(viewing).catch(() => null); if (p) use(p); }
+    else await loadPartners();
+    render();
+  }, 45_000);
+
   return {
     destroy() {
+      clearInterval(poll);
       document.removeEventListener('pointerdown', onDown, true);
       document.removeEventListener('pointerup', onUp, true);
       softRefresh.cancel();

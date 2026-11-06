@@ -18,7 +18,9 @@
     (function () {
       try {
         var t = localStorage.getItem('architect.theme');
-        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+        if (t === 'light' || t === 'dark' || t === 'blueprint') document.documentElement.dataset.theme = t;
+        var c = { light: '#f3f3f3', blueprint: '#0A2550' }[t];
+        if (c) document.querySelector('meta[name="theme-color"]').setAttribute('content', c);
       } catch (e) {}
     })();
   </script>

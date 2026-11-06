@@ -4,6 +4,7 @@ import { api } from './api.js';
 import { store } from '../core/util.js';
 
 const LOCAL = 'architect.prefs';
+const localKey = () => `${LOCAL}.${api.auth.current()?.user?.id || 'anon'}`;
 let data = null;
 let row = null;
 let remote = true;
@@ -13,9 +14,11 @@ let saving = Promise.resolve();
 export function loadPrefs() {
   if (data) return Promise.resolve(data);
   loading ||= (async () => {
-    const local = store.get(LOCAL, {});
+    const local = store.get(localKey(), store.get(LOCAL, {}));
     try {
-      const rows = await api.db.select('architect_prefs');
+      // Filter to your own row: accountability partners can read each other's settings.
+      const me = api.auth.current()?.user?.id;
+      const rows = await api.db.select('architect_prefs', me ? { filters: { user_id: me } } : {});
       row = rows[0] || null;
     } catch {
       remote = false;
@@ -32,7 +35,7 @@ export const getPref = (k, fallback = null) => (data && k in data ? data[k] : fa
 export async function setPref(k, v) {
   await loadPrefs();
   data = { ...data, [k]: v };
-  store.set(LOCAL, data);
+  store.set(localKey(), data);
   if (!remote) return;
   const snapshot = data;
   saving = saving.then(async () => {
@@ -48,3 +51,11 @@ export async function setPref(k, v) {
 
 // Forget the cache on sign-out / account switch.
 export function resetPrefs() { data = null; row = null; remote = true; }
+
+// Someone else's tracker settings (accountability partners).
+export async function prefsOf(userId) {
+  try {
+    const rows = await api.db.select('architect_prefs', { filters: { user_id: userId } });
+    return rows[0]?.data || {};
+  } catch { return {}; }
+}

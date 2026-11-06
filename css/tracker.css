@@ -201,3 +201,87 @@
   .tk-stat-val { font-size: 20px; }
   .tk-medit-row { grid-template-columns: minmax(0, 1fr) 64px 64px 28px; gap: 6px; }
 }
+
+/* ---------- People switch ---------- */
+.tk-head-actions { flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+.tk-people { display: flex; gap: 4px; padding: 3px; border-radius: var(--pill); border: 1px solid var(--line); background: var(--s1); max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.tk-person { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px 0 3px; border-radius: var(--pill); font-family: var(--f-mono); font-size: 11px; letter-spacing: .04em; color: var(--fg-2); white-space: nowrap; }
+.tk-person:hover { color: var(--fg); }
+.tk-person.is-on { background: var(--fg); color: var(--bg); }
+.tk-person.is-on .tk-av { background: var(--bg); color: var(--fg); }
+.tk-person-name { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+.tk-av {
+  flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--s3); color: var(--fg); font-family: var(--f-mono); font-size: 11px; font-weight: 700;
+}
+
+/* Days with comments: a small square under the number. */
+.tk-day-talk { position: absolute; right: 2px; bottom: 2px; z-index: 2; width: 7px; height: 7px; border-radius: 2px; background: var(--fg-3); box-shadow: 0 0 0 2px var(--s1); }
+.tk-day.is-goal .tk-day-talk { background: var(--fg-3); }
+
+/* Read-only numbers (partner view) */
+.tk-field.is-read { gap: 6px; }
+.tk-read-val { font-family: var(--f-dot); font-weight: 800; font-size: 30px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tk-note-text { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--s2); border: 1px solid var(--line); color: var(--fg-2); white-space: pre-wrap; font-size: 14px; }
+
+/* ---------- Comments ---------- */
+.tk-talk { display: grid; gap: 10px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.tk-talk-head { display: flex; align-items: center; gap: 8px; }
+.tk-talk-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; display: grid; place-items: center; background: var(--s3); font-family: var(--f-dot); font-weight: 800; font-size: 12px; }
+.tk-talk-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.tk-msg { position: relative; display: flex; gap: 10px; align-items: flex-start; }
+.tk-msg-body { flex: 1; min-width: 0; padding: 9px 12px; border-radius: 4px 14px 14px 14px; background: var(--s2); border: 1px solid var(--line); }
+.tk-msg.is-me .tk-msg-body { border-color: var(--line-2); }
+.tk-msg-meta { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; font-family: var(--f-mono); font-size: 10.5px; color: var(--fg-3); }
+.tk-msg-meta b { font-weight: 700; color: var(--fg); letter-spacing: .02em; }
+.tk-msg-body p { margin: 0; font-size: 14px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tk-msg-del { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity .12s; }
+.tk-msg:hover .tk-msg-del, .tk-msg-del:focus-visible { opacity: 1; }
+@media (hover: none) { .tk-msg-del { opacity: .7; } }
+.tk-talk-empty { margin: 0; font-size: 13px; color: var(--fg-3); }
+.tk-talk-compose { display: flex; align-items: flex-end; gap: 8px; }
+.tk-talk-input { flex: 1; min-height: 42px; max-height: 140px; height: 42px; padding: 10px 14px; resize: none; line-height: 1.4; font-family: var(--f-sans); border-radius: 21px; }
+.tk-talk-send { flex: none; width: 42px; height: 42px; border-radius: 50%; background: var(--fg); color: var(--bg); }
+.tk-talk-send:hover { background: var(--fg-2); color: var(--bg); }
+
+/* ---------- Accountability card ---------- */
+.tk-acc { display: grid; gap: 12px; }
+.tk-acc .tk-trends-head { align-items: center; margin: 0; }
+.tk-acc-list { display: grid; gap: 8px; }
+.tk-acc-row {
+  display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 10px; border-radius: 16px; text-align: left;
+  background: var(--s2); border: 1px solid var(--line); transition: border-color .12s;
+}
+.tk-acc-row:hover { border-color: var(--fg-3); }
+.tk-acc-ring {
+  position: relative; flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+  font-family: var(--f-mono); font-size: 13px; font-weight: 700;
+}
+.tk-acc-ring::before {
+  content: ''; position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(var(--fg) calc(var(--p, 0) * 360deg), var(--line-2) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+}
+.tk-acc-ring.is-goal { background: var(--fg); color: var(--bg); }
+.tk-acc-ring.is-goal::before { display: none; }
+.tk-acc-ring.is-idle::before { background: none; box-shadow: inset 0 0 0 1px var(--line-2); -webkit-mask: none; mask: none; border: 1px dashed var(--fg-4); }
+.tk-acc-main { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.tk-acc-name { font-family: var(--f-mono); font-size: 12px; letter-spacing: .04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-acc-status { font-size: 12.5px; color: var(--fg-3); }
+.tk-acc-status.is-idle { color: var(--red); }
+.tk-acc-streak { display: inline-flex; align-items: center; gap: 4px; font-family: var(--f-dot); font-weight: 800; font-size: 18px; color: var(--fg-3); }
+.tk-acc-streak.is-hot { color: var(--red); }
+
+/* Partners dialog */
+.tk-padd { display: flex; gap: 8px; }
+.tk-padd .input { flex: 1; }
+.tk-plist { display: grid; gap: 6px; max-height: 46vh; overflow: auto; }
+.tk-prow { display: flex; align-items: center; gap: 10px; padding: 8px 6px 8px 8px; border-radius: 12px; background: var(--s2); border: 1px solid var(--line); }
+.tk-prow-main { flex: 1; min-width: 0; display: grid; gap: 1px; }
+
+@media (max-width: 720px) {
+  .tk-head { gap: 12px; }
+  .tk-head-actions { width: 100%; justify-content: flex-start; }
+  .tk-people { order: 3; width: 100%; }
+}

@@ -513,3 +513,12 @@ body.is-lassoing, body.is-lassoing * { user-select: none !important; cursor: cro
 }
 @media (max-width: 350px) { .wordmark { display: none; } }
 .ptask-ghost.is-picked::after { display: none; }
+
+/* ---------- Path time window dialog ---------- */
+.ptime-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: var(--pill); background: var(--s2); border: 1px solid var(--line); }
+.ptime-opt { height: 34px; border-radius: var(--pill); font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-2); }
+.ptime-opt.is-on { background: var(--fg); color: var(--bg); }
+.ptime-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ptime-fields[hidden] { display: none; }
+.ptime-fields .input { font-family: var(--f-mono); color-scheme: inherit; }
+.ptime-hint { color: var(--fg-3); font-size: 13px; margin: 0; }

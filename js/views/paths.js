@@ -1,6 +1,6 @@
 import { h, delegate, isTypingTarget } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { menu, toast, promptDialog, confirmDialog } from '../core/ui.js';
+import { menu, toast, promptDialog, confirmDialog, dialog } from '../core/ui.js';
 import { uid, posBetween, fmtDate, plural } from '../core/util.js';
 import { go } from '../core/router.js';
 import { api, friendlyError } from '../data/api.js';
@@ -10,15 +10,26 @@ import { printToPdf, pdfHint } from '../core/print.js';
 export const DEFAULT_PATHS = ['Morning', 'Afternoon', 'Atemporal', 'Futures', 'Cache'];
 const DEFAULT_TITLE = 'Paths';
 
-// "Now" marker for time-of-day paths.
-function isNow(title) {
-  const t = title.trim().toLowerCase();
-  const hr = new Date().getHours();
-  if (t === 'morning') return hr >= 4 && hr < 12;
-  if (t === 'afternoon') return hr >= 12 && hr < 18;
-  if (t === 'evening') return hr >= 18 && hr < 22;
-  if (t === 'night' || t === 'nighttime' || t === 'tonight') return hr >= 22 || hr < 4;
-  return false;
+// "Now" marker. Each path can have its own hidden time window (or none);
+// paths without a setting fall back to their name (Morning, Afternoon, Evening, Night).
+const NAME_WINDOWS = {
+  morning: ['04:00', '12:00'], afternoon: ['12:00', '18:00'], evening: ['18:00', '22:00'],
+  night: ['22:00', '04:00'], nighttime: ['22:00', '04:00'], tonight: ['22:00', '04:00'],
+};
+const mins = (hhmm) => { const [a, b] = String(hhmm || '').split(':').map(Number); return (a || 0) * 60 + (b || 0); };
+function windowOf(col) {
+  const set = (getPref('pathTimes', {}) || {})[col.id];
+  if (set) return set.none ? null : [set.start, set.end];
+  return NAME_WINDOWS[col.title.trim().toLowerCase()] || null;
+}
+function isNow(col) {
+  const w = windowOf(col);
+  if (!w) return false;
+  const d = new Date();
+  const t = d.getHours() * 60 + d.getMinutes();
+  const a = mins(w[0]), b = mins(w[1]);
+  if (a === b) return true;            // all day
+  return a < b ? t >= a && t < b : t >= a || t < b; // windows may run past midnight
 }
 
 let seeding = null;
@@ -147,7 +158,7 @@ export function mountPaths(root, initialOpen = null) {
         const list = tasksOf(col.id);
         const done = list.filter((t) => t.done).length;
         const left = list.length - done;
-        const now = isNow(col.title);
+        const now = isNow(col);
         return h('button', { class: ['ptile', now && 'is-now'], type: 'button', 'data-act': 'open-col', 'data-col': col.id, 'aria-label': `${col.title}, ${left} to do` },
           h('div', { class: 'ptile-top' },
             h('span', { class: 'ptile-count' }, String(left)),
@@ -173,7 +184,7 @@ export function mountPaths(root, initialOpen = null) {
         ? h('input', { class: 'pcol-rename pdetail-rename', value: col.title, maxlength: 40, 'data-rename': col.id, 'aria-label': 'Path name' })
         : h('h1', { class: 'dot-title pdetail-title' }, col.title),
       h('div', { class: 'paths-meta' },
-        isNow(col.title) ? h('span', { class: 'now-tag' }, h('i'), 'Now') : null,
+        isNow(col) ? h('span', { class: 'now-tag' }, h('i'), 'Now') : null,
         h('span', { class: 'label' }, list.length ? `${list.length - done} to do` : 'Empty'),
         h('span', { class: 'meter-count' }, `${done}/${list.length}`)));
   }
@@ -200,7 +211,7 @@ export function mountPaths(root, initialOpen = null) {
   function columnView(col) {
     const list = tasksOf(col.id);
     const done = list.filter((t) => t.done).length;
-    const now = isNow(col.title);
+    const now = isNow(col);
     const renaming = renamingCol === col.id;
     const allPicked = list.length && list.every((t) => picked.has(t.id));
     return h('section', { class: ['pcol', now && 'is-now'], 'data-col': col.id, 'aria-label': col.title },
@@ -500,6 +511,37 @@ export function mountPaths(root, initialOpen = null) {
     } catch (e) { fail(e); }
   }
 
+  /* ---------------- Time windows ---------------- */
+
+  async function editTime(col) {
+    const cur = windowOf(col);
+    let mode = cur ? 'window' : 'none';
+    const start = h('input', { class: 'input', type: 'time', value: cur?.[0] || '07:00', 'aria-label': 'Starts' });
+    const end = h('input', { class: 'input', type: 'time', value: cur?.[1] || '13:00', 'aria-label': 'Ends' });
+    const fields = h('div', { class: 'ptime-fields' },
+      h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Starts'), start),
+      h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Ends'), end));
+    const seg = h('div', { class: 'ptime-seg', role: 'radiogroup', 'aria-label': 'Time window' });
+    const paint = () => {
+      seg.replaceChildren(...[['window', 'Time window'], ['none', 'None']].map(([id, label]) =>
+        h('button', { type: 'button', role: 'radio', 'aria-checked': String(mode === id), class: ['ptime-opt', mode === id && 'is-on'], onclick: () => { mode = id; paint(); } }, label)));
+      fields.hidden = mode !== 'window';
+    };
+    paint();
+    const ok = await dialog({
+      title: `${col.title} — time`,
+      body: h('div', { class: 'stack' },
+        seg, fields,
+        h('p', { class: 'dlg-text ptime-hint' }, 'Only the red Now dot shows while this window is running. The times stay hidden. A window can run past midnight.')),
+      actions: [{ label: 'Cancel', value: false }, { label: 'Save', primary: true, value: true }],
+    });
+    if (!ok) return;
+    const all = { ...(getPref('pathTimes', {}) || {}) };
+    all[col.id] = mode === 'none' ? { none: true } : { start: start.value || '00:00', end: end.value || '00:00' };
+    try { await setPref('pathTimes', all); } catch (e) { fail(e); }
+    render();
+  }
+
   /* ---------------- PDF export ---------------- */
 
   async function exportPdf() {
@@ -628,6 +670,7 @@ export function mountPaths(root, initialOpen = null) {
     const n = tasksOf(col.id).length;
     menu(anchor, [
       { label: 'Rename', icon: 'edit', onSelect: () => { renamingCol = col.id; render(); } },
+      { label: 'Time window…', icon: 'clock', onSelect: () => editTime(col) },
       { label: 'Select all', icon: 'selectAll', kbd: '⌘A', disabled: !n, onSelect: () => selectColumn(col) },
       { label: 'Move left', icon: 'chevronLeft', disabled: i === 0, onSelect: () => shiftColumn(col, -1) },
       { label: 'Move right', icon: 'chevronRight', disabled: i === columns.length - 1, onSelect: () => shiftColumn(col, 1) },

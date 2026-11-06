@@ -4,20 +4,36 @@ import { menu, dialog, toast } from '../core/ui.js';
 import { fmtClock, store } from '../core/util.js';
 import { api, configured, friendlyError } from '../data/api.js';
 
+export const THEMES = [
+  { id: 'dark', name: 'Dark', meta: '#000000', dots: ['#000000', '#454545', '#ffffff'] },
+  { id: 'light', name: 'Light', meta: '#f3f3f3', dots: ['#ffffff', '#b8b8b8', '#000000'] },
+  { id: 'blueprint', name: 'Blueprint', meta: '#0A2550', dots: ['#0A2550', '#2060D0', '#DDEEFA'] },
+];
 export function setTheme(t) {
-  document.documentElement.dataset.theme = t;
-  store.set('architect.theme', t);
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t === 'light' ? '#f3f3f3' : '#000000');
+  const th = THEMES.find((x) => x.id === t) || THEMES[0];
+  document.documentElement.dataset.theme = th.id;
+  store.set('architect.theme', th.id);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', th.meta);
 }
 export const currentTheme = () => document.documentElement.dataset.theme || 'dark';
-export function toggleTheme() { setTheme(currentTheme() === 'dark' ? 'light' : 'dark'); }
+export function toggleTheme() {
+  const i = THEMES.findIndex((x) => x.id === currentTheme());
+  setTheme(THEMES[(i + 1) % THEMES.length].id);
+}
+function themeItems() {
+  return THEMES.map((t) => ({
+    label: t.name, checked: currentTheme() === t.id, onSelect: () => setTheme(t.id),
+    iconEl: h('span', { class: 'theme-dots', 'aria-hidden': 'true' }, t.dots.map((c) => h('i', { style: { background: c } }))),
+  }));
+}
 
 export function mountShell(root, { session }) {
   const navPaths = h('a', { href: '#/paths' }, 'Paths');
   const navBlue = h('a', { href: '#/blueprint' }, 'Blueprint');
   const navTrack = h('a', { href: '#/tracker' }, 'Tracker');
   const clock = h('time', { class: 'clock', 'aria-label': 'Current time' }, fmtClock());
-  const themeBtn = h('button', { class: 'icon-btn', 'aria-label': 'Switch light or dark', 'data-tip': 'Theme', onclick: toggleTheme }, icon('theme', 18));
+  const themeBtn = h('button', { class: 'icon-btn', 'aria-label': 'Choose theme', 'data-tip': 'Theme' }, icon('theme', 18));
+  themeBtn.addEventListener('click', () => menu(themeBtn, [{ header: 'Theme' }, ...themeItems()], { align: 'end' }));
   const userBtn = h('button', { class: 'user-btn', 'aria-label': 'Account' },
     h('span', { class: 'user-dot' }, (session.user.username || '?').slice(0, 1).toUpperCase()),
     h('span', { class: 'user-name' }, session.user.username));
@@ -26,7 +42,9 @@ export function mountShell(root, { session }) {
     menu(userBtn, [
       { header: configured ? 'Synced with Supabase' : 'Local mode' },
       { label: 'Change password', icon: 'key', onSelect: changePassword },
-      { label: currentTheme() === 'dark' ? 'Light theme' : 'Dark theme', icon: 'theme', onSelect: toggleTheme },
+      '-',
+      { header: 'Theme' },
+      ...themeItems(),
       '-',
       { label: 'Sign out', icon: 'logout', onSelect: () => api.auth.signOut() },
     ], { align: 'end' });

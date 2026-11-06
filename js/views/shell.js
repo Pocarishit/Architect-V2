@@ -33,10 +33,8 @@ export function mountShell(root, { session }) {
   const SECTIONS = [
     { id: 'paths', label: 'Paths', icon: 'toPaths' },
     { id: 'blueprint', label: 'Blueprint', icon: 'frame', also: ['board'] },
-    { id: 'tracker', label: 'Tracker', icon: 'calendar' },
+    { id: 'tracker', label: 'Tracker', icon: 'calendar', also: ['countdown', 'meter'] },
     { id: 'parasites', label: 'Parasites', icon: 'bug' },
-    { id: 'countdown', label: 'Countdown', icon: 'hourglass' },
-    { id: 'meter', label: 'Meter', icon: 'chart' },
   ];
   const links = SECTIONS.map((sec) => h('a', { href: `#/${sec.id}` }, sec.label));
   // Phones: one pill with the current section; tap for the rest.

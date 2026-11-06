@@ -1,3 +1,4 @@
+import { h } from './core/dom.js';
 import { api } from './data/api.js';
 import { parseRoute } from './core/router.js';
 import { closeFloating } from './core/ui.js';
@@ -61,6 +62,12 @@ function route() {
   shell.setActive(r.view);
   document.body.classList.toggle('is-board', r.view === 'board');
   window.scrollTo(0, 0);
+  // Tracker, Countdown and Meter live under one tab, switched by a small strip on top.
+  const GROUP = [['tracker', 'Tracker'], ['countdown', 'Countdown'], ['meter', 'Meter']];
+  if (GROUP.some(([id]) => id === r.view)) {
+    shell.outlet.append(h('nav', { class: 'subtabs', 'aria-label': 'Tracker sections' },
+      GROUP.map(([id, label]) => h('a', { href: `#/${id}`, class: ['subtab', id === r.view && 'is-on'], 'aria-current': id === r.view ? 'page' : null }, label))));
+  }
   if (r.view === 'paths') view = mountPaths(shell.outlet, r.id);
   else if (r.view === 'tracker') view = mountTracker(shell.outlet);
   else if (r.view === 'parasites') view = mountParasites(shell.outlet);

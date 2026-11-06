@@ -228,3 +228,4 @@
 }
 @media (hover: none) { .cd-nav { opacity: .3; } }
 .mt-people { padding-top: 0; }
+.mt-empty .mt-dots { grid-template-columns: repeat(6, 4px); gap: 3px; } .mt-empty .mt-dots i { width: 4px; height: 4px; }

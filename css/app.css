@@ -536,3 +536,19 @@ body.is-lassoing, body.is-lassoing * { user-select: none !important; cursor: cro
 
 /* Only the running setpoint's timer is Nothing red; waiting/ended ones stay grey. */
 .pcol-timer.is-live, .ptile-timer.is-live, .pdetail-timer.is-live, .ptile.is-now .ptile-timer.is-live { color: var(--red); }
+
+/* ---------- Tracker / Countdown / Meter switch ---------- */
+.subtabs {
+  align-self: flex-start; display: inline-flex; gap: 4px; padding: 3px; margin: 24px 24px 0;
+  border-radius: var(--pill); border: 1px solid var(--line); background: var(--s1);
+}
+.subtab {
+  display: inline-flex; align-items: center; height: 30px; padding: 0 14px; border-radius: var(--pill);
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--fg-2); text-decoration: none; transition: color .12s, background .12s;
+}
+.subtab:hover { color: var(--fg); }
+.subtab.is-on { background: var(--fg); color: var(--bg); }
+
+.subtabs + .view { padding-top: 22px; }
+@media (max-width: 720px) { .subtabs { margin: 16px 16px 0; } .subtabs + .view { padding-top: 18px; } }

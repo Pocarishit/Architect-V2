@@ -533,3 +533,9 @@ body.is-lassoing, body.is-lassoing * { user-select: none !important; cursor: cro
   .nav { display: none; }
   .nav-pick { display: inline-flex; }
 }
+
+/* Setpoint timers in Nothing red: full while running, faded when waiting or ended. */
+.pcol-timer, .ptile-timer, .pdetail-timer, .ptile.is-now .ptile-timer { color: var(--red); }
+.pcol-timer.is-next, .pcol-timer.is-done,
+.ptile-timer.is-next, .ptile-timer.is-done,
+.pdetail-timer.is-next, .pdetail-timer.is-done { opacity: .45; }

@@ -143,3 +143,76 @@ $$;
 
 grant execute on function public.parasite_check(uuid, boolean), public.parasite_add(uuid, text),
   public.parasite_remove(uuid, uuid), public.parasite_people() to authenticated;
+
+-- ---------- Shared countdowns + completion meters ----------
+-- kind = 'countdown' | 'meter'. The creator and everyone in `members` can see and edit it.
+create table if not exists public.shared_items (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null default auth.uid() references auth.users (id) on delete cascade, -- creator
+  kind        text not null check (kind in ('countdown', 'meter')),
+  data        jsonb not null default '{}'::jsonb,
+  members     uuid[] not null default '{}',
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists shared_items_members_idx on public.shared_items using gin (members);
+alter table public.shared_items enable row level security;
+
+drop policy if exists "shared items: members read" on public.shared_items;
+create policy "shared items: members read" on public.shared_items
+  for select to authenticated using (user_id = auth.uid() or auth.uid() = any (members));
+drop policy if exists "shared items: create" on public.shared_items;
+create policy "shared items: create" on public.shared_items
+  for insert to authenticated with check (user_id = auth.uid());
+drop policy if exists "shared items: members edit" on public.shared_items;
+create policy "shared items: members edit" on public.shared_items
+  for update to authenticated using (user_id = auth.uid() or auth.uid() = any (members))
+  with check (user_id = auth.uid() or auth.uid() = any (members));
+drop policy if exists "shared items: creator deletes" on public.shared_items;
+create policy "shared items: creator deletes" on public.shared_items
+  for delete to authenticated using (user_id = auth.uid());
+grant select, insert, update, delete on table public.shared_items to authenticated;
+
+drop trigger if exists shared_items_touch on public.shared_items;
+create trigger shared_items_touch before update on public.shared_items
+  for each row execute function public.architect_touch();
+
+create or replace function public.shared_add(item uuid, uname text)
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  rec public.shared_items;
+  target uuid;
+begin
+  select * into rec from public.shared_items where id = item;
+  if rec.id is null or not (rec.user_id = auth.uid() or auth.uid() = any (rec.members)) then
+    raise exception 'Not shared with you.' using errcode = '42501';
+  end if;
+  select id into target from public.profiles where username = lower(trim(uname));
+  if target is null then raise exception 'No account called “%”.', uname using errcode = 'P0002'; end if;
+  if target = rec.user_id or target = any (rec.members) then return row_to_json(rec); end if;
+  update public.shared_items set members = array_append(members, target) where id = item returning * into rec;
+  return row_to_json(rec);
+end $$;
+
+create or replace function public.shared_remove(item uuid, who uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare rec public.shared_items;
+begin
+  select * into rec from public.shared_items where id = item;
+  if rec.id is null or not (who = auth.uid() or rec.user_id = auth.uid()) then
+    raise exception 'Not allowed.' using errcode = '42501';
+  end if;
+  update public.shared_items set members = array_remove(members, who) where id = item;
+end $$;
+
+create or replace function public.shared_people()
+returns table (user_id uuid, username text)
+language sql stable security definer set search_path = public as $$
+  select distinct pr.id, pr.username
+  from public.shared_items s
+  cross join lateral unnest(array_append(s.members, s.user_id)) m
+  join public.profiles pr on pr.id = m
+  where s.user_id = auth.uid() or auth.uid() = any (s.members);
+$$;
+
+grant execute on function public.shared_add(uuid, text), public.shared_remove(uuid, uuid), public.shared_people() to authenticated;

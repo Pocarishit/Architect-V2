@@ -5,8 +5,8 @@ Personal system in black and white.
 - **Paths** — your kanban: Morning, Afternoon, Atemporal, Futures, Cache.
 - **Themes** — Dark, Light and Blueprint (navy), from the theme button or account menu.
 - **Parasites** — shared problem board: each member checks off when they can do it; the wall breaks when everyone has (needs `supabase/nov7.sql`).
-- **Countdown** — titled deadlines with a dot-matrix hourglass that drains to empty.
-- **Meter** — Completion Meter: a bar of weekly slices with achievements and an evolution note per week.
+- **Countdown** — one big dot-matrix hourglass per deadline; quiet side arrows (or ←/→, or swipe) switch between them. Share with people by username.
+- **Meter** — Completion Meter: a bar of weekly slices with achievements and an evolution note per week. Share with people by username.
 - **Tracker** — log daily effort (hours, money, outreach — your own metrics), with a streak calendar and 14-day trends.
 - **Blueprint** — an infinite planning board (stickies, text, shapes, connectors, pen, frames, images, videos, embeds), with **Archives** for folders, renaming and pinning.
 - Username + password login, everything saved to your own Supabase project.

@@ -307,3 +307,5 @@
 .tk-sp.is-next, .tk-sp.is-none { opacity: .55; }
 @keyframes tk-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .tk-sp.is-live .tk-sp-mark { animation: none; } }
+.tk-bar i.slot { background: var(--line-2); }
+.tk-bar i.none { background: transparent; }

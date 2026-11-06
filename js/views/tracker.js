@@ -64,7 +64,7 @@ export function mountTracker(root) {
     let m;
     if (id === meId) { await loadPrefs(); m = getPref('trackerMetrics', null); }
     else m = (await prefsOf(id)).trackerMetrics;
-    const p = { id, username: nameOf(id), metrics: m || DEFAULT_METRICS.map((x) => ({ ...x })), days: toDays(rows), loaded: true };
+    const p = { id, username: nameOf(id), metrics: [], days: toDays(rows), loaded: true }; // setpoints are the only measure
     await loadSetpoints(p);
     people.set(id, p);
     return p;
@@ -140,7 +140,7 @@ export function mountTracker(root) {
       const me = await loadPerson(meId);
       use(me);
       picked = todayKey();
-      focus = getPref('trackerFocus', 'all') || 'all';
+      focus = 'all';
       if (focus !== 'all' && !metrics.some((m) => m.id === focus)) focus = 'all';
       await Promise.all([loadComments(meId), loadPartners()]);
     } catch (e) {
@@ -174,7 +174,7 @@ export function mountTracker(root) {
     return summarize(rows, tracked && spCols ? spCols.length : 0);
   }
   const hasSetpoints = () => !!(spCols?.length || spRows.size);
-  const active = (k) => metrics.some((m) => val(k, m.id) > 0) || !!days.get(k)?.note?.trim() || spOf(k).dominated > 0;
+  const active = (k) => spOf(k).dominated > 0; // a day counts once you dominate a setpoint
   // 0…1: how close the day came to its goals (for one metric, or the average across goals).
   function score(k, which = focus) {
     if (which === 'setpoints') { const sp = spOf(k); return sp.of ? sp.dominated / sp.of : 0; }
@@ -239,7 +239,7 @@ export function mountTracker(root) {
             onclick: () => view(p.user_id),
           }, h('span', { class: 'tk-av' }, (p.user_id === meId ? meName : p.username || '?').slice(0, 1).toUpperCase()), h('span', { class: 'tk-person-name' }, p.username)))) : null,
         h('button', { class: 'btn sm', type: 'button', onclick: managePartners }, icon('users', 14), h('span', {}, 'Partners')),
-        mine() ? h('button', { class: 'btn sm', type: 'button', onclick: editMetrics }, icon('edit', 14), h('span', {}, 'Metrics')) : null));
+      ));
   }
 
   function main() {
@@ -249,7 +249,7 @@ export function mountTracker(root) {
       h('div', { class: 'tk-side' }, dayPanel(s), mine() ? accountability() : null, trends()));
   }
 
-  const calCard = (s) => h('section', { class: 'tk-card tk-cal-card' }, calendarHead(s), focusChips(), calendar(s));
+  const calCard = (s) => h('section', { class: 'tk-card tk-cal-card' }, calendarHead(s), calendar(s));
 
   function scoreBadge(k) {
     const sc = score(k, 'all');
@@ -373,13 +373,12 @@ export function mountTracker(root) {
           h('h2', { class: 'tk-log-title' }, label)),
         scoreBadge(k)),
       mine() && isToday && !s.todayDone && s.current > 0
-        ? h('p', { class: 'tk-warn' }, h('i'), `Log something today to keep your ${plural(s.current, 'day')} streak.`)
+        ? h('p', { class: 'tk-warn' }, h('i'), `Dominate a setpoint today to keep your ${plural(s.current, 'day')} streak.`)
         : null,
       !mine() && isToday && !s.todayDone
-        ? h('p', { class: 'tk-warn' }, h('i'), `${nameOf(viewing)} hasn’t logged today yet${s.current ? ` — ${plural(s.current, 'day')} streak on the line` : ''}.`)
+        ? h('p', { class: 'tk-warn' }, h('i'), `${nameOf(viewing)} hasn’t dominated a setpoint today${s.current ? ` — ${plural(s.current, 'day')} streak on the line` : ''}.`)
         : null,
       setpointsView(k),
-      h('div', { class: 'tk-fields' }, metrics.map((m) => (mine() ? field(m, k, yk) : readField(m, k, yk)))),
       mine()
         ? h('label', { class: 'tk-note' },
           h('span', { class: 'tk-stat-label' }, 'Note — what worked, what to fix'),
@@ -516,7 +515,7 @@ export function mountTracker(root) {
                 h('span', { class: ['tk-acc-ring', info.sc >= 1 && 'is-goal', !info.s.todayDone && 'is-idle'], style: { '--p': String(info.sc) } }, h('span', {}, (p.username || '?').slice(0, 1).toUpperCase())),
                 h('div', { class: 'tk-acc-main' },
                   h('span', { class: 'tk-acc-name' }, p.username),
-                  h('span', { class: ['tk-acc-status', !info.s.todayDone && 'is-idle'] }, (info.s.todayDone ? `${Math.round(info.sc * 100)}% of goals today` : 'Not logged today') + (info.sp.of ? ` · ${info.sp.dominated}/${info.sp.of} setpoints` : ''))),
+                  h('span', { class: ['tk-acc-status', !info.sp.dominated && 'is-idle'] }, info.sp.of ? `${info.sp.dominated}/${info.sp.of} setpoints today` : 'No setpoints yet')),
                 h('span', { class: ['tk-acc-streak', info.s.current > 0 && 'is-hot'] }, icon('flame', 14), String(info.s.current)));
             })));
   }
@@ -607,32 +606,38 @@ export function mountTracker(root) {
   }
 
   // Last 14 days per metric as dot-matrix columns, with the 7-day average and personal best.
+  // Setpoints dominated per day, last 14 days.
   function trends() {
-    const t = new Date();
+    if (!hasSetpoints()) return h('section', { class: 'tk-card tk-trends' },
+      h('h2', { class: 'tk-section-title' }, 'Setpoints'),
+      h('p', { class: 'tk-hint' }, mine() ? 'Turn paths into setpoints (··· → Make setpoint…) and the tracker counts the ones you dominate.' : 'No setpoints yet.'));
+    const t = fromKey(todayKey());
     const range = Array.from({ length: 14 }, (_, i) => keyOf(addDays(t, i - 13)));
+    const sp = range.map(spOf);
+    const max = Math.max(1, ...sp.map((x) => x.of));
+    const last7 = sp.slice(-7);
+    const won7 = last7.reduce((a, x) => a + x.dominated, 0);
+    const of7 = last7.reduce((a, x) => a + x.of, 0);
+    const best = Math.max(0, ...[...spRows.keys()].map((k) => spOf(k).dominated));
+    const month = [...spRows.keys()].filter((k) => k.startsWith(keyOf(cursor).slice(0, 7))).reduce((a, k) => a + spOf(k).dominated, 0);
     return h('section', { class: 'tk-card tk-trends' },
-      h('header', { class: 'tk-trends-head' }, h('h2', { class: 'tk-section-title' }, 'Last 14 days'), h('span', { class: 'tk-stat-label' }, 'Better than yesterday')),
-      metrics.map((m) => {
-        const vals = range.map((k) => val(k, m.id));
-        const max = Math.max(m.goal || 0, ...vals, 1);
-        const last7 = vals.slice(-7);
-        const avg = last7.reduce((a, b) => a + b, 0) / 7;
-        const best = Math.max(0, ...[...days.keys()].map((k) => val(k, m.id)));
-        const total = [...days.keys()].filter((k) => k.startsWith(keyOf(cursor).slice(0, 7))).reduce((a, k) => a + val(k, m.id), 0);
-        return h('button', { class: ['tk-trend', focus === m.id && 'is-on'], type: 'button', onclick: () => { focus = focus === m.id ? 'all' : m.id; if (mine()) setPref('trackerFocus', focus); render(); } },
-          h('div', { class: 'tk-trend-top' },
-            h('span', { class: 'tk-field-name' }, m.name),
-            h('span', { class: 'tk-trend-total' }, fmtVal(m, total)), h('span', { class: 'tk-stat-label' }, MONTHS[cursor.getMonth()].slice(0, 3))),
-          h('div', { class: 'tk-bars', 'aria-hidden': 'true' },
-            vals.map((v, i) => {
-              const lit = Math.round((v / max) * 8);
-              return h('div', { class: ['tk-bar', range[i] === todayKey() && 'is-today'] },
-                Array.from({ length: 8 }, (_, j) => h('i', { class: 7 - j < lit ? 'on' : null })));
-            })),
-          h('div', { class: 'tk-trend-foot' },
-            h('span', {}, `7-day avg ${fmtVal(m, avg)}`),
-            h('span', {}, `Best ${fmtVal(m, best)}`)));
-      }));
+      h('header', { class: 'tk-trends-head' }, h('h2', { class: 'tk-section-title' }, 'Last 14 days'), h('span', { class: 'tk-stat-label' }, 'Setpoints dominated')),
+      h('div', { class: 'tk-trend' },
+        h('div', { class: 'tk-trend-top' },
+          h('span', { class: 'tk-field-name' }, 'Dominated'),
+          h('span', { class: 'tk-trend-total' }, String(month)), h('span', { class: 'tk-stat-label' }, MONTHS[cursor.getMonth()].slice(0, 3))),
+        h('div', { class: 'tk-bars', 'aria-hidden': 'true' },
+          sp.map((x, i) => {
+            const rows = Math.max(4, max);
+            return h('div', { class: ['tk-bar', range[i] === todayKey() && 'is-today'], style: { gridTemplateRows: `repeat(${rows}, 1fr)` } },
+              Array.from({ length: rows }, (_, j) => {
+                const level = rows - j; // 1 at the bottom
+                return h('i', { class: level <= x.dominated ? 'on' : level <= x.of ? 'slot' : 'none' });
+              }));
+          })),
+        h('div', { class: 'tk-trend-foot' },
+          h('span', {}, `7 days ${won7}/${of7 || 0}`),
+          h('span', {}, `Best day ${best}`))));
   }
 
   function shiftMonth(dir) {

@@ -4,8 +4,9 @@ import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { toast, dialog, confirmDialog, menu } from '../core/ui.js';
 import { uid, debounce } from '../core/util.js';
-import { friendlyError } from '../data/api.js';
 import { loadPrefs, getPref, setPref } from '../data/prefs.js';
+import { api } from '../data/api.js';
+import { listShared, createShared, addMember, removeShared, leaveShared, membersOf, nameOf, initial, meId, local, friendlyError } from '../data/shared.js';
 
 const DAY = 86_400_000;
 const pad = (n) => String(n).padStart(2, '0');
@@ -20,17 +21,24 @@ export function mountMeter(root) {
   let current = null;   // meter id
   let week = null;      // open slice index
   let loading = true;
+  let loadError = null;
   const el = h('div', { class: 'view mtr' });
   root.append(el);
 
   const fail = (e) => toast(friendlyError(e), { tone: 'error' });
-  const save = () => setPref('meters', meters).catch(fail);
+  // Each meter is a shared item; its row rides along (hidden) so saves know where to go.
+  const wrap = (row) => { const m = { ...row.data, id: row.id }; Object.defineProperty(m, '_row', { value: row, enumerable: false, writable: true }); return m; };
+  const saveMeter = (m) => { if (!m?._row) return; const { id, ...data } = m; m._row.data = data; return api.db.update('shared_items', m._row.id, { data }).catch(fail); };
+  const save = () => saveMeter(meter());
   const saveSoon = debounce(save, 600);
   const meter = () => meters.find((m) => m.id === current) || meters[0] || null;
 
   async function load() {
     await loadPrefs();
-    meters = getPref('meters', []) || [];
+    try {
+      meters = (await listShared('meter', 'meters')).map(wrap);
+      loadError = null;
+    } catch (e) { loadError = friendlyError(e); }
     current = getPref('meterOpen', null);
     if (!meters.some((m) => m.id === current)) current = meters[0]?.id || null;
     loading = false;
@@ -64,6 +72,8 @@ export function mountMeter(root) {
         h('h1', { class: 'paths-title mt-title' }, 'Completion Meter'),
         h('button', { class: 'btn btn-primary sm', type: 'button', onclick: () => edit(null) }, icon('plus', 14), h('span', {}, 'New meter'))),
       loading ? h('div', { class: 'empty' }, h('span', { class: 'dots-loader' }, h('i'), h('i'), h('i')))
+        : loadError ? h('div', { class: 'empty' }, h('p', { class: 'empty-text' }, loadError),
+          h('p', { class: 'empty-text px-hint' }, 'Meters are shared now — run supabase/nov7.sql again in the Supabase SQL editor.'))
         : !m ? empty()
           : h('div', { class: 'mt-body' },
             meters.length > 1 ? h('div', { class: 'tk-chips' }, meters.map((x) => h('button', {
@@ -92,13 +102,50 @@ export function mountMeter(root) {
           h('h2', { class: 'mt-name' }, m.title || 'Untitled')),
         h('button', { class: 'icon-btn sm', type: 'button', 'aria-label': 'Meter options', onclick: (e) => menu(e.currentTarget, [
           { label: 'Edit', icon: 'edit', onSelect: () => edit(m) },
-          { label: 'Delete meter', icon: 'trash', danger: true, onSelect: () => remove(m) },
+          { label: 'Share with…', icon: 'users', onSelect: () => share(m) },
+          '-',
+          m._row?.user_id === meId() || !m._row
+            ? { label: 'Delete meter', icon: 'trash', danger: true, onSelect: () => remove(m) }
+            : { label: 'Leave meter', icon: 'logout', danger: true, onSelect: () => leave(m) },
         ], { align: 'end' }) }, icon('more', 16))),
       h('div', { class: 'mt-read' },
         readout('Completion', `${Math.round(tot.frac * 100)}`, '%', `${tot.done}/${tot.all} achievements`),
         readout('Time', `${Math.round(t.frac * 100)}`, '%', t.before ? 'Not started' : t.after ? 'Finished' : `Week ${t.weekIdx + 1} of ${m.weeks}`),
         tot.all ? readout('Pace', `${diff > 0 ? '+' : ''}${diff}`, '%', diff >= 0 ? 'Ahead of time' : 'Behind time', diff < 0 ? 'is-behind' : 'is-ahead') : null),
-      bar(m, t));
+      bar(m, t),
+      people(m));
+  }
+
+  function people(m) {
+    const ids = m._row ? membersOf(m._row) : [meId()];
+    return h('div', { class: 'cd-people mt-people' },
+      h('div', { class: 'cd-avatars' }, ids.map((id) => h('span', { class: 'tk-av', title: nameOf(id) }, initial(id)))),
+      h('span', { class: 'cd-people-label' }, ids.length > 1 ? `${ids.length} building this` : 'Only you'),
+      h('button', { class: 'btn sm cd-share', type: 'button', onclick: () => share(m) }, icon('users', 14), h('span', {}, 'Share')));
+  }
+
+  async function share(m) {
+    if (local()) { toast('Sharing needs Supabase sync.'); return; }
+    const input = h('input', { class: 'input', placeholder: 'Their username', autocapitalize: 'none', spellcheck: false, 'aria-label': 'Username' });
+    const ok = await dialog({
+      title: 'Share meter',
+      body: h('div', { class: 'stack' },
+        h('p', { class: 'px-hint' }, 'They see every week, tick achievements and write in “How we evolved” with you.'),
+        h('div', { class: 'cd-avatars is-list' }, membersOf(m._row).map((id) => h('span', { class: 'cd-member' }, h('span', { class: 'tk-av' }, initial(id)), nameOf(id)))),
+        input),
+      actions: [{ label: 'Cancel', value: false }, { label: 'Add', primary: true, value: true }],
+    });
+    if (!ok || !input.value.trim()) return;
+    try { await addMember(m._row, input.value); render(); toast(`Shared with ${input.value.trim().replace(/^@/, '')}`); } catch (e) { fail(e); }
+  }
+
+  async function leave(m) {
+    if (!(await confirmDialog(`Leave “${m.title}”?`, 'You won’t see it anymore.', { ok: 'Leave' }))) return;
+    meters = meters.filter((x) => x.id !== m.id);
+    current = meters[0]?.id || null;
+    week = meters[0] ? timeInfo(meters[0]).weekIdx : null;
+    render();
+    try { await leaveShared(m._row); } catch (e) { fail(e); }
   }
 
   const readout = (label, big, unit, sub, cls) => h('div', { class: ['mt-readout', cls] },
@@ -196,15 +243,18 @@ export function mountMeter(root) {
     if (m) {
       Object.assign(m, body);
       if (week != null && week >= n) week = n - 1;
+      render();
+      save();
     } else {
-      const made = { id: uid(), ...body, slices: {} };
-      meters.push(made);
-      current = made.id;
-      setPref('meterOpen', made.id);
-      week = timeInfo(made).weekIdx;
+      try {
+        const made = wrap(await createShared('meter', { ...body, slices: {} }));
+        meters.push(made);
+        current = made.id;
+        setPref('meterOpen', made.id);
+        week = timeInfo(made).weekIdx;
+        render();
+      } catch (e) { fail(e); }
     }
-    render();
-    save();
   }
 
   async function remove(m) {
@@ -213,7 +263,7 @@ export function mountMeter(root) {
     current = meters[0]?.id || null;
     week = meters[0] ? timeInfo(meters[0]).weekIdx : null;
     render();
-    save();
+    try { await removeShared(m._row); } catch (e) { fail(e); }
   }
 
   render();
@@ -225,5 +275,10 @@ export function mountMeter(root) {
     const n = el.querySelector('.mt-now');
     if (n) n.style.left = `${timeInfo(m).frac * 100}%`;
   }, 60_000);
-  return { destroy() { clearInterval(tick); saveSoon.flush?.(); el.remove(); } };
+  const poll = setInterval(async () => {
+    if (document.hidden || loading || loadError || document.querySelector('.dlg')) return;
+    if (el.contains(document.activeElement) && document.activeElement.matches('input, textarea')) return;
+    try { meters = (await listShared('meter')).map(wrap); render(); } catch {}
+  }, 30_000);
+  return { destroy() { clearInterval(tick); clearInterval(poll); saveSoon.flush?.(); el.remove(); } };
 }

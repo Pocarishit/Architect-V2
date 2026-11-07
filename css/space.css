@@ -82,7 +82,7 @@ body.is-space .shell-head { display: none; }
 /* Ticket board inside a widget */
 .parasites.is-embedded .px-head { margin-bottom: 14px; align-items: center; }
 .parasites.is-embedded .px-sub { margin: 0; font-size: 13px; }
-.parasites.is-embedded .px-board { grid-template-columns: repeat(4, minmax(210px, 1fr)); }
+.parasites.is-embedded .px-board { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
 .parasites.is-embedded .px-ticket-grid { grid-template-columns: minmax(250px, 340px) minmax(0, 1fr); }
 .parasites.is-embedded .px-ticket-info .px-card { position: static; }
 .parasites.is-embedded .px-chat { height: 470px; min-height: 0; }
@@ -272,3 +272,12 @@ body.is-space .shell-head { display: none; }
 .space-host[data-mode="personal"] .space-flash span::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 12px; border-radius: 50%; background: var(--red); vertical-align: 6px; }
 .space-flash.out { opacity: 0; transform: translate(-50%, -54%); }
 @keyframes flash-in { from { opacity: 0; transform: translate(-50%, -46%); } }
+
+/* Ticket board columns that come out onto the canvas */
+.parasites.is-embedded .px-col-head { cursor: grab; }
+.px-col-out { margin-left: 2px; opacity: .5; }
+.px-col:hover .px-col-out { opacity: 1; }
+.parasites.is-single .px-board { grid-template-columns: minmax(0, 1fr); overflow: visible; }
+.parasites.is-single .px-col { min-height: 0; }
+.px-col-ghost { position: fixed; z-index: 950; pointer-events: none; overflow: hidden; box-shadow: var(--shadow); opacity: .95; }
+.px-col-ghost.is-detaching { outline: 2px dashed var(--red); outline-offset: 4px; }

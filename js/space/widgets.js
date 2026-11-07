@@ -17,6 +17,7 @@ export const WIDGETS = {
   column: { label: 'Path column', icon: 'toPaths', w: 330, h: 520 },
   tracker: { label: 'Tracker & Weekly', icon: 'calendar', w: 460, h: 690 },
   tickets: { label: 'Ticket board', icon: 'ticket', w: 980, h: 640 },
+  ticketcol: { label: 'Ticket column', icon: 'ticket', w: 300, h: 520 },
   blueprints: { label: 'Blueprints', icon: 'frame', w: 380, h: 460 },
   portal: { label: 'Blueprint', icon: 'frame', w: 340, h: 260 },
   custom: { label: 'Custom widget', icon: 'code', w: 420, h: 320 },
@@ -94,6 +95,8 @@ const KINDS = {
     w.setTitle('TICKET BOARD');
     const ctl = mountParasites(body, null, {
       embedded: true,
+      exclude: el.detached || [],
+      onDetach: (status, at) => w.host.detachTicketCol(el.id, status, at),
       onUnread: (n) => w.setBadge(n),
       onReveal: () => w.host.reveal(el.id),
       isPrimary: () => {
@@ -102,6 +105,14 @@ const KINDS = {
       },
     });
     w.tools.append(h('button', { class: 'wg-btn', type: 'button', title: 'Open full page', 'aria-label': 'Open full page', onclick: () => go('parasites') }, icon('external', 14)));
+    return { update: (n) => ctl.setExclude(n.detached || []), destroy: () => ctl.destroy() };
+  },
+
+  ticketcol(body, el, w) {
+    const names = { open: 'OPEN', working: 'WORKING ON IT', testing: 'TESTING', solved: 'SOLVED' };
+    w.setTitle(names[el.status] || 'TICKETS');
+    const ctl = mountParasites(body, null, { embedded: true, only: el.status, isPrimary: () => false, onSnap: () => w.host.snapTicketCol(el.id) });
+    w.tools.append(h('button', { class: 'wg-btn', type: 'button', title: 'Snap back into Ticket board', 'aria-label': 'Snap back into Ticket board', onclick: () => w.host.snapTicketCol(el.id) }, icon('collapse', 14)));
     return { destroy: () => ctl.destroy() };
   },
 

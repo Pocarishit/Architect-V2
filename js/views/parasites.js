@@ -41,8 +41,24 @@ function dueText(p, now = Date.now()) {
 
 // opts.embedded: lives inside a canvas widget — tickets open in place instead of changing the page.
 // opts.onUnread(n): how many messages from others you haven't seen yet (red badge on the widget).
+//   exclude: status columns shown elsewhere on the canvas · only: show just this status column
+//   onDetach(status, at): pull a column out onto the canvas · onSnap(): put a detached column back
 export function mountParasites(root, initialId = null, opts = {}) {
   const embedded = !!opts.embedded;
+  let exclude = new Set(opts.exclude || []);
+  const instance = Math.random().toString(36).slice(2);
+  // Writes from one Ticket widget refresh the others (e.g. a detached column).
+  const db = embedded ? new Proxy(api.db, {
+    get(t, k) {
+      const fn = t[k];
+      if (typeof fn !== 'function' || !['insert', 'update', 'remove'].includes(k)) return fn?.bind?.(t) ?? fn;
+      return async (...args) => {
+        const out = await fn.apply(t, args);
+        window.dispatchEvent(new CustomEvent('architect:tickets-changed', { detail: { from: instance } }));
+        return out;
+      };
+    },
+  }) : api.db;
   const session = api.auth.current();
   const meId = session?.user?.id;
   const names = new Map([[meId, session?.user?.username || 'you']]);
@@ -63,7 +79,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
   let outcome = 'failed';
   const local = api.mode === 'local';
 
-  const el = h('div', { class: ['view parasites', embedded && 'is-embedded'] });
+  const el = h('div', { class: ['view parasites', embedded && 'is-embedded', opts.only && 'is-single'] });
   // Last message you've seen in each ticket → red dots for anything newer from someone else.
   const SEEN = `architect.px.seen.${meId}`;
   let seen = store.get(SEEN, {});
@@ -125,7 +141,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
     const atBottom = !keep || keep.scrollHeight - keep.scrollTop - keep.clientHeight < 40;
     const typing = document.activeElement?.hasAttribute?.('data-draft');
     if (ticket) el.replaceChildren(ticketView(ticket));
-    else el.replaceChildren(header(), loading ? loader() : loadError ? errorView() : overview());
+    else el.replaceChildren(...[header(), loading ? loader() : loadError ? errorView() : overview()].filter(Boolean));
     const chat = el.querySelector('.px-chat-list');
     if (chat && atBottom) chat.scrollTop = chat.scrollHeight;
     if (typing) el.querySelector('[data-draft]')?.focus();
@@ -173,6 +189,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
     h('button', { class: 'btn', onclick: () => { loading = true; render(); load(); } }, 'Try again'));
 
   function header() {
+    if (opts.only) return null;
     return h('header', { class: 'view-head px-head' },
       embedded ? h('div', { class: 'px-head-main' }) : h('div', { class: 'px-head-main' },
         h('h1', { class: 'paths-title px-title' }, 'Ticket board'),
@@ -187,6 +204,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
   }
 
   function overview() {
+    if (opts.only) return h('div', { class: 'px-body' }, board(list));
     if (!list.length) {
       return h('div', { class: 'px-empty' },
         h('div', { class: 'px-empty-wall', 'aria-hidden': 'true' }, Array.from({ length: 28 }, (_, i) => h('i', { class: i % 7 === 3 ? 'off' : null }))),
@@ -204,7 +222,9 @@ export function mountParasites(root, initialId = null, opts = {}) {
 
   /* Board: one column per status; drag a ticket to move it. */
   function board(items) {
-    return h('div', { class: 'px-board' }, STATUSES.map((st) => {
+    const cols = STATUSES.filter((st) => (opts.only ? st.id === opts.only : !exclude.has(st.id)));
+    if (!cols.length) return h('p', { class: 'wg-empty' }, 'Every column is out on the canvas.');
+    return h('div', { class: 'px-board' }, cols.map((st) => {
       const col = items.filter((p) => statusOf(p) === st.id);
       return h('section', {
         class: ['px-col', `is-${st.id}`], 'data-status': st.id,
@@ -217,9 +237,11 @@ export function mountParasites(root, initialId = null, opts = {}) {
           if (p && statusOf(p) !== st.id) setStatus(p, st.id);
         },
       },
-        h('header', { class: 'px-col-head' },
+        h('header', { class: 'px-col-head', title: embedded ? (opts.only ? 'Drag onto the Ticket board to snap back' : 'Drag out of the widget to put it on the canvas') : null },
           h('span', { class: 'px-col-title' }, h('i', { class: 'px-status-dot' }), st.label),
-          h('span', { class: 'px-col-n' }, String(col.length))),
+          h('span', { class: 'px-col-n' }, String(col.length)),
+          embedded && !opts.only && opts.onDetach ? h('button', { class: 'icon-btn xs px-col-out', type: 'button', title: 'Detach to canvas', 'aria-label': `Detach ${st.label} to canvas`, onclick: () => opts.onDetach(st.id, null) }, icon('external', 13)) : null,
+          embedded && opts.only && opts.onSnap ? h('button', { class: 'icon-btn xs px-col-out', type: 'button', title: 'Snap back', 'aria-label': 'Snap back into Ticket board', onclick: () => opts.onSnap() }, icon('collapse', 13)) : null),
         h('div', { class: 'px-col-list' },
           col.length ? col.map(ticketCard) : h('p', { class: 'px-col-empty' }, st.id === 'solved' ? 'Nothing solved yet' : 'Drop tickets here')));
     }));
@@ -287,6 +309,8 @@ export function mountParasites(root, initialId = null, opts = {}) {
   /* ---------------- A ticket ---------------- */
 
   function openTicket(id) {
+    // A detached column hands the ticket to the main Ticket board.
+    if (embedded && opts.only) { const p = list.find((x) => x.id === id); if (p) window.dispatchEvent(new CustomEvent('architect:open-ticket', { detail: { no: noOf(p) } })); return; }
     linked = { no: null, rows: [] };
     if (embedded) { openId = id; draft = ''; mode = 'msg'; editingId = null; render(); return; }
     go(`parasites/${id}`);
@@ -509,7 +533,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
     m.body = body;
     m.edited_at = new Date().toISOString();
     render();
-    try { await api.db.update('parasite_messages', m.id, { body, edited_at: m.edited_at }); }
+    try { await db.update('parasite_messages', m.id, { body, edited_at: m.edited_at }); }
     catch (e) { Object.assign(m, prev); render(); fail(e); }
   }
 
@@ -552,7 +576,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
     const full = { id: uid(), parasite_id: p.id, kind: 'msg', ...row };
     messages = [...messages, { ...full, user_id: meId, created_at: new Date().toISOString() }];
     render();
-    try { await api.db.insert('parasite_messages', full); }
+    try { await db.insert('parasite_messages', full); }
     catch (e) { messages = messages.filter((m) => m.id !== full.id); render(); throw e; }
   }
   const logEvent = (p, text) => post(p, { kind: 'event', body: text, files: [] }).catch(() => {});
@@ -593,7 +617,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
   async function unsend(m) {
     messages = messages.filter((x) => x.id !== m.id);
     render();
-    try { await api.db.remove('parasite_messages', m.id); } catch (e) { fail(e); load(); }
+    try { await db.remove('parasite_messages', m.id); } catch (e) { fail(e); load(); }
   }
 
   async function setStatus(p, status, { quiet = false } = {}) {
@@ -602,7 +626,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
     p.status = status;
     render();
     try {
-      await api.db.update('parasites', p.id, { status });
+      await db.update('parasites', p.id, { status });
       if (!quiet) logEvent(p, `moved this to ${statusLabel(status)}`);
     } catch (e) { p.status = prev; render(); fail(e); }
   }
@@ -611,7 +635,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
     const prev = p.labels || [];
     p.labels = labels;
     render();
-    try { await api.db.update('parasites', p.id, { labels }); } catch (e) { p.labels = prev; render(); fail(e); }
+    try { await db.update('parasites', p.id, { labels }); } catch (e) { p.labels = prev; render(); fail(e); }
   }
   function addLabel(p, text) {
     const l = String(text || '').trim().replace(/\s+/g, ' ').toLowerCase();
@@ -626,7 +650,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
     if (val) p.checks[meId] = true; else delete p.checks[meId];
     render();
     try {
-      if (local) await api.db.update('parasites', p.id, { checks: p.checks, broken_at: everyoneThrough(p) ? new Date().toISOString() : null });
+      if (local) await db.update('parasites', p.id, { checks: p.checks, broken_at: everyoneThrough(p) ? new Date().toISOString() : null });
       else Object.assign(p, await api.rpc('parasite_check', { p: p.id, val }));
       logEvent(p, val ? 'can do it now' : 'took back “can do it”');
       // Everyone can do it → solved. Someone takes it back → back to testing.
@@ -665,11 +689,11 @@ export function mountParasites(root, initialId = null, opts = {}) {
       if (p) {
         Object.assign(p, body);
         render();
-        await api.db.update('parasites', p.id, body);
+        await db.update('parasites', p.id, body);
       } else {
         const row = { id: uid(), ...body, status: 'open', members: [], checks: {} };
         if (local) row.no = list.reduce((m, x) => Math.max(m, noOf(x)), 0) + 1;
-        const made = await api.db.insert('parasites', row);
+        const made = await db.insert('parasites', row);
         const item = { ...row, user_id: meId, created_at: new Date().toISOString(), ...(made || {}) };
         list = [item, ...list];
         openTicket(item.id);
@@ -705,7 +729,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
     if (!(await confirmDialog(`Delete ${numberOf(p)}?`, 'The ticket, its thread and attempts disappear for everyone on it.', { ok: 'Delete' }))) return;
     list = list.filter((x) => x.id !== p.id);
     if (openId === p.id) closeTicket(); else render();
-    try { await api.db.remove('parasites', p.id); } catch (e) { fail(e); load(); }
+    try { await db.remove('parasites', p.id); } catch (e) { fail(e); load(); }
   }
 
   async function leave(p) {
@@ -742,11 +766,69 @@ export function mountParasites(root, initialId = null, opts = {}) {
     load();
   }, 30_000);
 
+  /* ---------------- Embedded: drag a status column out of / back into the widget ---------------- */
+  if (embedded && (opts.onDetach || opts.onSnap)) {
+    el.addEventListener('pointerdown', (e) => {
+      const head = e.target.closest('.px-col-head');
+      if (!head || e.button !== 0 || e.target.closest('button')) return;
+      const colEl = head.closest('.px-col');
+      const status = colEl.dataset.status;
+      const d = { x0: e.clientX, y0: e.clientY, started: false, out: false };
+      const move = (ev) => {
+        if (!d.started) {
+          if (Math.hypot(ev.clientX - d.x0, ev.clientY - d.y0) < 6) return;
+          const r = colEl.getBoundingClientRect();
+          d.started = true;
+          d.dx = ev.clientX - r.left; d.dy = ev.clientY - r.top;
+          d.ghost = colEl.cloneNode(true);
+          d.ghost.classList.add('px-col-ghost');
+          Object.assign(d.ghost.style, { width: `${colEl.offsetWidth}px`, maxHeight: '420px', left: '0px', top: '0px' });
+          document.body.append(d.ghost);
+          document.body.classList.add('is-dragging');
+          colEl.style.opacity = '.35';
+        }
+        d.lx = ev.clientX; d.ly = ev.clientY;
+        d.ghost.style.transform = `translate(${ev.clientX - d.dx}px, ${ev.clientY - d.dy}px) rotate(-1deg)`;
+        const r = el.getBoundingClientRect();
+        d.out = ev.clientX < r.left - 20 || ev.clientX > r.right + 20 || ev.clientY < r.top - 20 || ev.clientY > r.bottom + 20;
+        d.ghost.classList.toggle('is-detaching', d.out && !opts.only);
+      };
+      const up = () => {
+        window.removeEventListener('pointermove', move);
+        if (!d.started) return;
+        d.ghost.remove();
+        document.body.classList.remove('is-dragging');
+        colEl.style.opacity = '';
+        if (!d.out) return;
+        if (opts.only) {
+          const home = document.elementsFromPoint(d.lx, d.ly).find((n) => n.matches?.('.el-widget[data-wkind="tickets"]'));
+          if (home) opts.onSnap?.();
+        } else opts.onDetach?.(status, { clientX: d.lx, clientY: d.ly });
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up, { once: true });
+    });
+  }
+  let reloadT = 0;
+  const onChanged = (e) => {
+    if (e.detail?.from === instance) return;
+    clearTimeout(reloadT);
+    reloadT = setTimeout(() => { if (!document.querySelector('.dlg') && !selecting() && !editingId) load(); }, 300);
+  };
+  if (embedded) window.addEventListener('architect:tickets-changed', onChanged);
+
   return {
+    setExclude(ids) {
+      const next = new Set(ids || []);
+      if ([...next].join() === [...exclude].join()) return;
+      exclude = next;
+      render();
+    },
     open(id) { openTicket(id); },
     update(r) { openId = r.id || null; linked = { no: null, rows: [] }; draft = ''; mode = 'msg'; editingId = null; pending = []; render(); window.scrollTo(0, 0); },
     destroy() {
-      clearInterval(poll); clearInterval(chatPoll);
+      clearInterval(poll); clearInterval(chatPoll); clearTimeout(reloadT);
+      window.removeEventListener('architect:tickets-changed', onChanged);
       window.removeEventListener('architect:open-ticket', onOpenTicket);
       window.removeEventListener('architect:new-ticket', onNewTicket);
       window.removeEventListener('architect:tickets-seen', onSeen);

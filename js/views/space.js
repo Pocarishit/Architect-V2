@@ -64,7 +64,7 @@ export function mountSpace(root) {
     page.dataset.mode = m;
     board = mountBoard(page, id, {
       space: true,
-      mountWidget: createWidgetHost({ editor, spaceId: id, me, snapBack, detach, openMenuFor, reveal, addPortal, register }),
+      mountWidget: createWidgetHost({ editor, spaceId: id, me, snapBack, detach, detachTicketCol, snapTicketCol, openMenuFor, reveal, addPortal, register }),
       extendMenu,
       onReady,
     });
@@ -174,12 +174,14 @@ export function mountSpace(root) {
     const ed = editor();
     if (!ed) return;
     const sel = ed.selected();
-    if (sel.length !== 1 || sel[0].type !== 'widget' || sel[0].kind !== 'column' || sel[0].owner !== me.id) return;
+    if (sel.length !== 1 || sel[0].type !== 'widget') return;
     const col = sel[0];
-    const home = ed.els.find((e) => e.type === 'widget' && e.kind === 'path' && e.owner === col.owner);
-    if (!home) return;
-    const cx = col.x + col.w / 2, cy = col.y + 40;
-    if (cx > home.x && cx < home.x + home.w && cy > home.y && cy < home.y + home.h) snapBack(col.id);
+    const inside = (home) => { const cx = col.x + col.w / 2, cy = col.y + 40; return home && cx > home.x && cx < home.x + home.w && cy > home.y && cy < home.y + home.h; };
+    if (col.kind === 'column' && col.owner === me.id) {
+      if (inside(ed.els.find((e) => e.type === 'widget' && e.kind === 'path' && e.owner === col.owner))) snapBack(col.id);
+    } else if (col.kind === 'ticketcol') {
+      if (inside(ed.byId.get(col.home) || ed.els.find((e) => e.type === 'widget' && e.kind === 'tickets'))) snapTicketCol(col.id);
+    }
   }
 
   /* ---------------- widget actions ---------------- */
@@ -192,6 +194,28 @@ export function mountSpace(root) {
     col.x = p.x - col.w / 2; col.y = p.y - 20;
     ed.setEls([...ed.els.map((e) => (e.id === pathId ? { ...e, detached: [...new Set([...(e.detached || []), colId])] } : e)), col]);
     ed.select([col.id]);
+  }
+
+  // Ticket board columns (Open / Working on it / Testing / Solved) come out the same way.
+  function detachTicketCol(boardWidgetId, status, at) {
+    const ed = editor();
+    const home = ed?.byId.get(boardWidgetId);
+    if (!home) return;
+    const p = at ? ed.toWorld(at.clientX, at.clientY) : { x: home.x + home.w + 60 + 150, y: home.y + 260 };
+    const col = widgetEl('ticketcol', { status, home: boardWidgetId });
+    col.x = p.x - col.w / 2; col.y = p.y - 20;
+    ed.setEls([...ed.els.map((e) => (e.id === boardWidgetId ? { ...e, detached: [...new Set([...(e.detached || []), status])] } : e)), col]);
+    ed.select([col.id]);
+  }
+
+  function snapTicketCol(colWidgetId) {
+    const ed = editor();
+    const col = ed?.byId.get(colWidgetId);
+    if (!col) return;
+    ed.setEls(ed.els
+      .filter((e) => e.id !== colWidgetId)
+      .map((e) => (e.type === 'widget' && e.kind === 'tickets' && (e.id === col.home || (e.detached || []).includes(col.status)) ? { ...e, detached: (e.detached || []).filter((x) => x !== col.status) } : e)));
+    toast('Snapped back into the Ticket board.', { ms: 1800 });
   }
 
   function snapBack(colWidgetId) {
@@ -269,6 +293,7 @@ export function mountSpace(root) {
       const key = (getPref('objectKeys', {}) || {})[el.id];
       extra.push({ label: key ? `Shortcut: ${key}` : 'Assign shortcut…', icon: 'keyboard', onSelect: () => assignObjectKey(el) });
       if (el.type === 'widget' && el.kind === 'path' && el.owner === me.id && pathCtl.get(el.id)) extra.push({ label: 'New path…', icon: 'plus', onSelect: () => pathCtl.get(el.id)?.addColumn() });
+      if (el.type === 'widget' && el.kind === 'ticketcol') extra.push({ label: 'Snap back into Ticket board', icon: 'collapse', onSelect: () => snapTicketCol(el.id) });
       if (el.type === 'widget' && el.kind === 'column' && el.owner === me.id) extra.push({ label: 'Snap back into Path', icon: 'collapse', onSelect: () => snapBack(el.id) });
       if (el.type === 'widget' && el.kind === 'portal') extra.push({ label: 'Open blueprint', icon: 'external', onSelect: () => (location.hash = `#/board/${el.boardId}`) });
       if (el.type === 'widget' && el.kind === 'custom') extra.push({ label: 'Edit widget…', icon: 'code', onSelect: () => editCustom({ current: () => editor().byId.get(el.id) || el, patch: (x) => editor().updateEls([el.id], x) }) });

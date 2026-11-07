@@ -105,11 +105,14 @@ export class Editor {
     L(this.vp, 'pointercancel', (e) => this.onUp(e, true));
     L(this.vp, 'lostpointercapture', (e) => { if (this.g && this.g.pointerId === e.pointerId) this.onUp(e, true); });
     L(this.vp, 'dblclick', (e) => this.onDblClick(e));
-    L(this.vp, 'dragstart', (e) => e.preventDefault());
+    // Widgets (Ticket board, Paths…) drag their own things; the canvas leaves them alone.
+    const inWidget = (e) => (e.target instanceof Element && e.target.closest('.wg-body'));
+    L(this.vp, 'dragstart', (e) => { if (!inWidget(e)) e.preventDefault(); });
     L(this.vp, 'contextmenu', (e) => this.onContextMenu(e));
     L(this.vp, 'wheel', (e) => this.onWheel(e), { passive: false });
-    L(this.vp, 'dragover', (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+    L(this.vp, 'dragover', (e) => { if (inWidget(e)) return; if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
     L(this.vp, 'drop', (e) => {
+      if (inWidget(e)) return;
       const files = [...(e.dataTransfer?.files || [])];
       if (!files.length) {
         const url = e.dataTransfer?.getData('text/uri-list') || e.dataTransfer?.getData('text/plain');

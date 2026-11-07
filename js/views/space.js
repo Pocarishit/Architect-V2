@@ -29,6 +29,8 @@ export function mountSpace(root) {
   const offs = [];
   let boardOffs = [];   // listeners tied to the canvas on screen
   const editor = () => t?.editor || null;
+  const pathCtl = new Map(); // Path widget id → its controls (New path…)
+  const register = (id, ctl) => { if (ctl) pathCtl.set(id, ctl); else pathCtl.delete(id); };
   // Two worlds: the shared Space (everyone you're with) and your personal one. Tab flips between them.
   let mode = 'shared';
   const ids = { shared: null, personal: null };
@@ -62,7 +64,7 @@ export function mountSpace(root) {
     page.dataset.mode = m;
     board = mountBoard(page, id, {
       space: true,
-      mountWidget: createWidgetHost({ editor, spaceId: id, me, snapBack, detach, openMenuFor, reveal, addPortal }),
+      mountWidget: createWidgetHost({ editor, spaceId: id, me, snapBack, detach, openMenuFor, reveal, addPortal, register }),
       extendMenu,
       onReady,
     });
@@ -266,6 +268,7 @@ export function mountSpace(root) {
       const el = sel[0];
       const key = (getPref('objectKeys', {}) || {})[el.id];
       extra.push({ label: key ? `Shortcut: ${key}` : 'Assign shortcut…', icon: 'keyboard', onSelect: () => assignObjectKey(el) });
+      if (el.type === 'widget' && el.kind === 'path' && el.owner === me.id && pathCtl.get(el.id)) extra.push({ label: 'New path…', icon: 'plus', onSelect: () => pathCtl.get(el.id)?.addColumn() });
       if (el.type === 'widget' && el.kind === 'column' && el.owner === me.id) extra.push({ label: 'Snap back into Path', icon: 'collapse', onSelect: () => snapBack(el.id) });
       if (el.type === 'widget' && el.kind === 'portal') extra.push({ label: 'Open blueprint', icon: 'external', onSelect: () => (location.hash = `#/board/${el.boardId}`) });
       if (el.type === 'widget' && el.kind === 'custom') extra.push({ label: 'Edit widget…', icon: 'code', onSelect: () => editCustom({ current: () => editor().byId.get(el.id) || el, patch: (x) => editor().updateEls([el.id], x) }) });
@@ -318,13 +321,12 @@ export function mountSpace(root) {
   async function widgetPicker(at) {
     const choose = (kind) => { closeFloating(); addWidget(kind, at); };
     const opts = ['path', 'tracker', 'tickets', 'blueprints', 'custom'];
-    const notes = { path: 'Your setpoint kanban', tracker: 'Calendar of tried days + 8 weekly squares', tickets: 'Problems, chat and attempts', blueprints: 'Open, create and pin blueprints', custom: 'Your own HTML / JS, sandboxed' };
     dialog({
       title: 'Add a widget',
       width: 460,
       body: h('div', { class: 'wpick' }, opts.map((k) => h('button', { type: 'button', class: 'wpick-row', onclick: () => choose(k) },
         h('span', { class: 'wpick-ic' }, icon(WIDGETS[k].icon, 18)),
-        h('span', { class: 'wpick-text' }, h('b', {}, WIDGETS[k].label), h('span', {}, notes[k]))))),
+        h('span', { class: 'wpick-text' }, h('b', {}, WIDGETS[k].label))))),
       actions: [{ label: 'Cancel', value: null }],
     });
   }

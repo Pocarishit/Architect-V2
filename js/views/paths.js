@@ -220,11 +220,12 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     const cols = shown();
     if (embedded && !cols.length) {
       return h('div', { class: 'pboard is-empty' }, h('p', { class: 'empty-text' }, readOnly ? 'No paths to show.' : opts.only ? 'This path was deleted.' : 'Every path is out on the canvas.'),
-        readOnly || opts.only ? null : h('button', { class: 'pcol-new', 'data-act': 'new-col' }, icon('plus', 18), h('span', {}, 'New path')));
+        null);
     }
     return h('div', { class: 'pboard' },
       cols.map(columnView),
-      readOnly || opts.only ? null : h('button', { class: 'pcol-new', 'data-act': 'new-col' }, icon('plus', 18), h('span', {}, 'New path')));
+      // New paths come from a path's ··· menu — no button at the end of the board.
+      null);
   }
 
   function columnView(col) {
@@ -702,6 +703,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     const n = tasksOf(col.id).length;
     menu(anchor, [
       { label: 'Rename', icon: 'edit', onSelect: () => { renamingCol = col.id; render(); } },
+      { label: 'New path…', icon: 'plus', onSelect: addColumn },
       { label: winOf(col) ? 'Setpoint timer…' : 'Make setpoint…', icon: 'clock', onSelect: () => editTime(col) },
       { label: 'Select all', icon: 'selectAll', kbd: '⌘A', disabled: !n, onSelect: () => selectColumn(col) },
       { label: 'Move left', icon: 'chevronLeft', disabled: i === 0, onSelect: () => shiftColumn(col, -1) },
@@ -1140,6 +1142,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   load();
 
   return {
+    addColumn,
     setExclude(ids) {
       const next = new Set(ids || []);
       if ([...next].join() === [...exclude].join()) return;

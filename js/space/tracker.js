@@ -147,7 +147,6 @@ export function mountTrackerWidget(root, el0, w) {
       else if (keyOf(d) !== today) break; // today can still be earned
       if (streak > 400) break;
     }
-    const name = people.find((p) => p.user_id === who)?.username || 'you';
     return h('div', { class: 'tw-cal' },
       h('div', { class: 'tw-month' },
         h('button', { class: 'icon-btn sm', type: 'button', 'aria-label': 'Previous month', onclick: () => { month = new Date(month.getFullYear(), month.getMonth() - 1, 1); render(); loadAttempts(); } }, icon('chevronLeft', 16)),
@@ -159,8 +158,7 @@ export function mountTrackerWidget(root, el0, w) {
       h('div', { class: 'tw-stats' },
         h('div', {}, h('b', {}, String(triedDays)), h('span', {}, 'Tried days')),
         h('div', {}, h('b', {}, String(streak)), h('span', {}, 'Streak')),
-        h('div', {}, h('b', {}, String(total)), h('span', {}, 'Attempts'))),
-      h('p', { class: 'tw-note' }, who === me?.id ? `A day counts once you log ${NEED} attempts with a result on the Ticket board.` : `${name}’s days — ${NEED}+ logged attempts each.`));
+        h('div', {}, h('b', {}, String(total)), h('span', {}, 'Attempts'))));
   }
 
   function dayPopup(anchor, d, list) {
@@ -252,7 +250,7 @@ export function mountTrackerWidget(root, el0, w) {
           onclick: () => window.dispatchEvent(new CustomEvent('architect:new-ticket', { detail: { title: x.text, detail: `Week ${n} achievement toward ${p.goal}.` } })),
         }, icon('ticket', 14)),
         h('button', { type: 'button', class: 'icon-btn xs', 'aria-label': 'Remove', onclick: () => setList(list.filter((y) => y.id !== x.id)) }, icon('close', 13)))))
-        : h('p', { class: 'tw-note' }, 'What has to be true by the end of this week? Add it, then turn the hard parts into tickets.'),
+        : null,
       h('div', { class: 'tw-add' }, input));
   }
 

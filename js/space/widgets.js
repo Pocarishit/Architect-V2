@@ -73,7 +73,8 @@ const KINDS = {
     });
     w.tools.append(h('button', { class: 'wg-btn', type: 'button', title: 'Open full page', 'aria-label': 'Open full page', onclick: () => go('paths') }, icon('external', 14)));
     if (el.owner !== w.me?.id) w.tools.replaceChildren();
-    return { update: (n) => ctl.setExclude(n.detached || []), destroy: () => ctl.destroy() };
+    else w.host.register?.(el.id, { addColumn: ctl.addColumn });
+    return { update: (n) => ctl.setExclude(n.detached || []), destroy: () => { w.host.register?.(el.id, null); ctl.destroy(); } };
   },
 
   column(body, el, w) {
@@ -134,7 +135,7 @@ const KINDS = {
           h('span', { class: 'bs-thumb' }, previewSvg(b.preview) || icon('frame', 16)),
           h('span', { class: 'bs-name' }, b.name || 'Untitled')),
         h('button', { class: 'icon-btn xs', type: 'button', title: 'Put a portal on the canvas', 'aria-label': `Put ${b.name} on the canvas`, onclick: () => w.host.addPortal(b, el.id) }, icon('pin', 14))))
-        : [h('p', { class: 'wg-empty' }, q ? 'No matches.' : 'No blueprints yet. Select things on the canvas and choose “Convert to Blueprint”, or start a new one.')]));
+        : [h('p', { class: 'wg-empty' }, q ? 'No matches.' : 'No blueprints yet.')]));
     }
     async function create() {
       try {

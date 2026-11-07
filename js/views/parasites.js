@@ -174,7 +174,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
 
   function header() {
     return h('header', { class: 'view-head px-head' },
-      embedded ? h('div', { class: 'px-head-main' }, h('p', { class: 'px-sub' }, 'Problems reverse-engineered from the week’s achievements. Every logged attempt counts on the Tracker.')) : h('div', { class: 'px-head-main' },
+      embedded ? h('div', { class: 'px-head-main' }) : h('div', { class: 'px-head-main' },
         h('h1', { class: 'paths-title px-title' }, 'Ticket board'),
         h('p', { class: 'px-sub' }, 'Open a ticket for anything you’re stuck behind. Work it like a bug — talk it through, log every attempt, move it along until everyone can do it.')),
       h('div', { class: 'px-head-actions' },
@@ -190,7 +190,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
     if (!list.length) {
       return h('div', { class: 'px-empty' },
         h('div', { class: 'px-empty-wall', 'aria-hidden': 'true' }, Array.from({ length: 28 }, (_, i) => h('i', { class: i % 7 === 3 ? 'off' : null }))),
-        h('p', {}, 'Open a ticket for a problem you’re stuck behind, add who you’re breaking it with, and set a deadline.'),
+        embedded ? null : h('p', {}, 'Open a ticket for a problem you’re stuck behind, add who you’re breaking it with, and set a deadline.'),
         h('button', { class: 'btn sm', type: 'button', onclick: () => edit(null) }, icon('plus', 14), h('span', {}, 'New ticket')));
     }
     const labels = allLabels();

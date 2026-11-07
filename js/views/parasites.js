@@ -46,6 +46,9 @@ function dueText(p, now = Date.now()) {
 export function mountParasites(root, initialId = null, opts = {}) {
   const embedded = !!opts.embedded;
   let exclude = new Set(opts.exclude || []);
+  // Solo: one ticket on its own on the canvas — a card that expands into the full ticket.
+  const solo = opts.ticketOnly || null;
+  let expanded = !!opts.expanded;
   const instance = Math.random().toString(36).slice(2);
   // Writes from one Ticket widget refresh the others (e.g. a detached column).
   const db = embedded ? new Proxy(api.db, {
@@ -136,6 +139,17 @@ export function mountParasites(root, initialId = null, opts = {}) {
 
   function render() {
     dirty = false;
+    if (solo) {
+      const p = list.find((x) => x.id === solo);
+      openId = expanded && p ? solo : null;
+      if (!p || !expanded) {
+        el.classList.toggle('is-solo-card', !!p);
+        el.replaceChildren(p ? h('div', { class: 'px-solo' }, ticketCard(p)) : loading ? loader() : h('p', { class: 'wg-empty' }, 'This ticket was deleted or isn’t shared with you.'));
+        reportUnread();
+        return;
+      }
+      el.classList.remove('is-solo-card');
+    }
     const ticket = openId && list.find((p) => p.id === openId);
     const keep = el.querySelector('.px-chat-list');
     const atBottom = !keep || keep.scrollHeight - keep.scrollTop - keep.clientHeight < 40;
@@ -228,7 +242,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
       const col = items.filter((p) => statusOf(p) === st.id);
       return h('section', {
         class: ['px-col', `is-${st.id}`], 'data-status': st.id,
-        ondragover: (e) => { e.preventDefault(); e.currentTarget.classList.add('is-over'); },
+        ondragover: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; e.currentTarget.classList.add('is-over'); },
         ondragleave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('is-over'); },
         ondrop: (e) => {
           e.preventDefault();
@@ -255,9 +269,20 @@ export function mountParasites(root, initialId = null, opts = {}) {
     const talk = talkOf(p).filter((m) => m.kind !== 'event');
     const unread = unreadOf(p);
     return h('article', {
-      class: ['px-tcard', statusOf(p) === 'solved' && 'is-solved', unread && 'has-unread'], draggable: 'true', tabindex: '0',
-      ondragstart: (e) => { e.dataTransfer.setData('text/ticket', p.id); e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('is-dragging'); },
-      ondragend: (e) => e.currentTarget.classList.remove('is-dragging'),
+      class: ['px-tcard', statusOf(p) === 'solved' && 'is-solved', unread && 'has-unread', !solo && opts.isPopped?.(p.id) && 'is-popped'], draggable: 'true', tabindex: '0',
+      ondragstart: (e) => { e.dataTransfer.setData('text/ticket', p.id); e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('is-dragging'); trackDrag(); },
+      ondragend: (e) => {
+        e.currentTarget.classList.remove('is-dragging');
+        const at = endDrag(e);
+        if (!embedded) return;
+        const dropped = e.dataTransfer.dropEffect !== 'none';
+        // A card on the canvas dropped back onto a board column goes home.
+        if (solo) { if (dropped) opts.onSnap?.(); return; }
+        // Dropped outside the board: the ticket lands on the canvas as its own card.
+        const r = el.getBoundingClientRect();
+        const outside = at.clientX < r.left || at.clientX > r.right || at.clientY < r.top || at.clientY > r.bottom;
+        if (!dropped && outside) opts.onPop?.(p.id, at);
+      },
       onclick: () => openTicket(p.id),
       onkeydown: (e) => { if (e.key === 'Enter') openTicket(p.id); },
     },
@@ -308,7 +333,17 @@ export function mountParasites(root, initialId = null, opts = {}) {
 
   /* ---------------- A ticket ---------------- */
 
+  // Where a dragged card ends up (dragend has no coordinates in some browsers).
+  let dragAt = null;
+  const onDragOver = (e) => { dragAt = { clientX: e.clientX, clientY: e.clientY }; };
+  function trackDrag() { dragAt = null; document.addEventListener('dragover', onDragOver, true); }
+  function endDrag(e) {
+    document.removeEventListener('dragover', onDragOver, true);
+    return e.clientX || e.clientY ? { clientX: e.clientX, clientY: e.clientY } : (dragAt || { clientX: 0, clientY: 0 });
+  }
+
   function openTicket(id) {
+    if (solo) { if (!expanded) opts.onExpand?.(); return; }
     // A detached column hands the ticket to the main Ticket board.
     if (embedded && opts.only) { const p = list.find((x) => x.id === id); if (p) window.dispatchEvent(new CustomEvent('architect:open-ticket', { detail: { no: noOf(p) } })); return; }
     linked = { no: null, rows: [] };
@@ -316,6 +351,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
     go(`parasites/${id}`);
   }
   function closeTicket() {
+    if (solo) { opts.onCollapse?.(); return; }
     if (embedded) { openId = null; editingId = null; render(); return; }
     go('parasites');
   }
@@ -337,7 +373,7 @@ export function mountParasites(root, initialId = null, opts = {}) {
   function ticketView(p) {
     return h('div', { class: 'px-ticket' },
       h('div', { class: 'px-ticket-bar' },
-        h('button', { class: 'pback', type: 'button', onclick: closeTicket }, icon('back', 16), 'Ticket board'),
+        h('button', { class: 'pback', type: 'button', onclick: closeTicket }, icon(solo ? 'collapse' : 'back', 16), solo ? 'Collapse' : 'Ticket board'),
         h('span', { class: 'px-ticket-no' }, numberOf(p))),
       h('div', { class: 'px-ticket-grid' },
         h('div', { class: 'px-ticket-info' }, infoCard(p)),
@@ -816,6 +852,8 @@ export function mountParasites(root, initialId = null, opts = {}) {
     reloadT = setTimeout(() => { if (!document.querySelector('.dlg') && !selecting() && !editingId) load(); }, 300);
   };
   if (embedded) window.addEventListener('architect:tickets-changed', onChanged);
+  const onPopped = () => { if (!solo && !openId) softRender(); };
+  if (embedded) window.addEventListener('architect:tickets-popped', onPopped);
 
   return {
     setExclude(ids) {
@@ -825,10 +863,13 @@ export function mountParasites(root, initialId = null, opts = {}) {
       render();
     },
     open(id) { openTicket(id); },
+    setExpanded(v) { if (expanded === !!v) return; expanded = !!v; draft = ''; mode = 'msg'; editingId = null; render(); },
     update(r) { openId = r.id || null; linked = { no: null, rows: [] }; draft = ''; mode = 'msg'; editingId = null; pending = []; render(); window.scrollTo(0, 0); },
     destroy() {
       clearInterval(poll); clearInterval(chatPoll); clearTimeout(reloadT);
       window.removeEventListener('architect:tickets-changed', onChanged);
+      window.removeEventListener('architect:tickets-popped', onPopped);
+      document.removeEventListener('dragover', onDragOver, true);
       window.removeEventListener('architect:open-ticket', onOpenTicket);
       window.removeEventListener('architect:new-ticket', onNewTicket);
       window.removeEventListener('architect:tickets-seen', onSeen);

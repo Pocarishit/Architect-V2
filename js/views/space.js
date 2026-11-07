@@ -64,7 +64,7 @@ export function mountSpace(root) {
     page.dataset.mode = m;
     board = mountBoard(page, id, {
       space: true,
-      mountWidget: createWidgetHost({ editor, spaceId: id, me, snapBack, detach, detachTicketCol, snapTicketCol, openMenuFor, reveal, addPortal, register }),
+      mountWidget: createWidgetHost({ editor, spaceId: id, me, snapBack, detach, detachTicketCol, snapTicketCol, popTicket, snapTicket, expandTicket, poppedTickets, openMenuFor, reveal, addPortal, register }),
       extendMenu,
       onReady,
     });
@@ -163,6 +163,9 @@ export function mountSpace(root) {
       setTimeout(() => toast(touch ? 'Long-press the canvas for the menu.' : 'Right-click or press / for the menu.', { ms: 5000 }), 800);
       setPref('spaceHinted', true).catch(() => {});
     }
+    // Ticket cards come and go (dragged out, deleted, undone): keep the board's faded copies in step.
+    let lastPop = [...poppedTickets()].sort().join();
+    boardOffs.push(ed.on('change', () => { const sig = [...poppedTickets()].sort().join(); if (sig !== lastPop) { lastPop = sig; ticketsMoved(); } }));
     // Pull a detached column back home when you drop it on its Path.
     const vp = ed.vp;
     const onUp = () => setTimeout(checkSnap, 0);
@@ -217,6 +220,56 @@ export function mountSpace(root) {
       .map((e) => (e.type === 'widget' && e.kind === 'tickets' && (e.id === col.home || (e.detached || []).includes(col.status)) ? { ...e, detached: (e.detached || []).filter((x) => x !== col.status) } : e)));
     toast('Snapped back into the Ticket board.', { ms: 1800 });
   }
+
+  // Single tickets pulled out onto the canvas.
+  const CARD = { w: 270, h: 168 }, OPEN = { w: 960, h: 600 };
+  const poppedTickets = () => new Set((editor()?.els || []).filter((e) => e.type === 'widget' && e.kind === 'ticket').map((e) => e.ticketId));
+  const ticketsMoved = () => window.dispatchEvent(new CustomEvent('architect:tickets-popped'));
+
+  function popTicket(ticketId, at) {
+    const ed = editor();
+    if (!ed) return;
+    const p = at ? ed.toWorld(at.clientX, at.clientY) : ed.viewCenter();
+    const existing = ed.els.find((e) => e.type === 'widget' && e.kind === 'ticket' && e.ticketId === ticketId);
+    if (existing) {
+      ed.updateEls([existing.id], { x: p.x - existing.w / 2, y: p.y - 22 });
+      ed.select([existing.id]);
+      return;
+    }
+    const el = widgetEl('ticket', { ticketId, open: false });
+    el.x = p.x - el.w / 2; el.y = p.y - 22;
+    ed.addEls([el]);
+    ticketsMoved();
+  }
+
+  function snapTicket(id) {
+    const ed = editor();
+    if (!ed?.byId.get(id)) return;
+    ed.removeEls([id]);
+    ticketsMoved();
+  }
+
+  // Expanding keeps the card's top-left corner where it is and grows the ticket out from it.
+  function expandTicket(id, open) {
+    const ed = editor();
+    const el = ed?.byId.get(id);
+    if (!el || !!el.open === !!open) return;
+    const size = open ? OPEN : CARD;
+    ed.updateEls([id], { open: !!open, w: size.w, h: size.h, cardW: open ? el.w : undefined, cardH: open ? el.h : undefined, ...(open ? {} : { w: el.cardW || CARD.w, h: el.cardH || CARD.h }) });
+    if (open) {
+      const next = ed.byId.get(id);
+      const r = ed.rect();
+      const tl = ed.toScreen({ x: next.x, y: next.y }), br = ed.toScreen({ x: next.x + next.w, y: next.y + next.h });
+      if (tl.x < r.left || tl.y < r.top || br.x > r.right || br.y > r.bottom || ed.cam.z < 0.6) {
+        camBefore.set(id, { ...ed.cam });
+        ed.fitRect(next, { maxZ: 1, pad: 40 });
+      }
+    } else if (camBefore.has(id)) {
+      ed.setCamera(camBefore.get(id), { animate: true }); // back to where you were before it opened
+      camBefore.delete(id);
+    }
+  }
+  const camBefore = new Map();
 
   function snapBack(colWidgetId) {
     const ed = editor();
@@ -293,6 +346,10 @@ export function mountSpace(root) {
       const key = (getPref('objectKeys', {}) || {})[el.id];
       extra.push({ label: key ? `Shortcut: ${key}` : 'Assign shortcut…', icon: 'keyboard', onSelect: () => assignObjectKey(el) });
       if (el.type === 'widget' && el.kind === 'path' && el.owner === me.id && pathCtl.get(el.id)) extra.push({ label: 'New path…', icon: 'plus', onSelect: () => pathCtl.get(el.id)?.addColumn() });
+      if (el.type === 'widget' && el.kind === 'ticket') {
+        extra.push({ label: el.open ? 'Collapse to card' : 'Open ticket', icon: el.open ? 'collapse' : 'external', onSelect: () => expandTicket(el.id, !el.open) });
+        extra.push({ label: 'Put back on the Ticket board', icon: 'ticket', onSelect: () => snapTicket(el.id) });
+      }
       if (el.type === 'widget' && el.kind === 'ticketcol') extra.push({ label: 'Snap back into Ticket board', icon: 'collapse', onSelect: () => snapTicketCol(el.id) });
       if (el.type === 'widget' && el.kind === 'column' && el.owner === me.id) extra.push({ label: 'Snap back into Path', icon: 'collapse', onSelect: () => snapBack(el.id) });
       if (el.type === 'widget' && el.kind === 'portal') extra.push({ label: 'Open blueprint', icon: 'external', onSelect: () => (location.hash = `#/board/${el.boardId}`) });

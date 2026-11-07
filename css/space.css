@@ -281,3 +281,11 @@ body.is-space .shell-head { display: none; }
 .parasites.is-single .px-col { min-height: 0; }
 .px-col-ghost { position: fixed; z-index: 950; pointer-events: none; overflow: hidden; box-shadow: var(--shadow); opacity: .95; }
 .px-col-ghost.is-detaching { outline: 2px dashed var(--red); outline-offset: 4px; }
+
+/* A single ticket on the canvas */
+.el-widget[data-wkind="ticket"] .wg-head { height: 34px; }
+.el-widget[data-wkind="ticket"] .wg-title { font-size: 13px; color: var(--fg-3); }
+.parasites.is-solo-card { padding: 8px; }
+.px-solo .px-tcard { margin: 0; }
+.px-solo .px-tcard:hover { border-color: var(--fg-3); }
+.px-tcard.is-popped { opacity: .45; border-style: dashed; }

@@ -18,6 +18,7 @@ export const WIDGETS = {
   tracker: { label: 'Tracker & Weekly', icon: 'calendar', w: 460, h: 690 },
   tickets: { label: 'Ticket board', icon: 'ticket', w: 980, h: 640 },
   ticketcol: { label: 'Ticket column', icon: 'ticket', w: 300, h: 520 },
+  ticket: { label: 'Ticket', icon: 'ticket', w: 270, h: 168 },
   blueprints: { label: 'Blueprints', icon: 'frame', w: 380, h: 460 },
   portal: { label: 'Blueprint', icon: 'frame', w: 340, h: 260 },
   custom: { label: 'Custom widget', icon: 'code', w: 420, h: 320 },
@@ -97,6 +98,8 @@ const KINDS = {
       embedded: true,
       exclude: el.detached || [],
       onDetach: (status, at) => w.host.detachTicketCol(el.id, status, at),
+      onPop: (id, at) => w.host.popTicket(id, at),
+      isPopped: (id) => w.host.poppedTickets().has(id),
       onUnread: (n) => w.setBadge(n),
       onReveal: () => w.host.reveal(el.id),
       isPrimary: () => {
@@ -111,9 +114,32 @@ const KINDS = {
   ticketcol(body, el, w) {
     const names = { open: 'OPEN', working: 'WORKING ON IT', testing: 'TESTING', solved: 'SOLVED' };
     w.setTitle(names[el.status] || 'TICKETS');
-    const ctl = mountParasites(body, null, { embedded: true, only: el.status, isPrimary: () => false, onSnap: () => w.host.snapTicketCol(el.id) });
+    const ctl = mountParasites(body, null, {
+      embedded: true, only: el.status, isPrimary: () => false, onSnap: () => w.host.snapTicketCol(el.id),
+      onPop: (id, at) => w.host.popTicket(id, at), isPopped: (id) => w.host.poppedTickets().has(id),
+    });
     w.tools.append(h('button', { class: 'wg-btn', type: 'button', title: 'Snap back into Ticket board', 'aria-label': 'Snap back into Ticket board', onclick: () => w.host.snapTicketCol(el.id) }, icon('collapse', 14)));
     return { destroy: () => ctl.destroy() };
+  },
+
+  // One ticket on the canvas: a card; click it to open the full ticket right there.
+  ticket(body, el, w) {
+    w.setTitle('TICKET');
+    const ctl = mountParasites(body, null, {
+      embedded: true, ticketOnly: el.ticketId, expanded: !!el.open, isPrimary: () => false,
+      onExpand: () => w.host.expandTicket(el.id, true),
+      onCollapse: () => w.host.expandTicket(el.id, false),
+      onSnap: () => w.host.snapTicket(el.id),
+      onUnread: (n) => w.setBadge(n),
+    });
+    const toggle = h('button', { class: 'wg-btn', type: 'button', onclick: () => w.host.expandTicket(el.id, !w.current().open) });
+    const paintToggle = (open) => { toggle.replaceChildren(icon(open ? 'collapse' : 'external', 14)); toggle.title = open ? 'Collapse to card' : 'Open ticket'; toggle.setAttribute('aria-label', toggle.title); };
+    paintToggle(el.open);
+    w.tools.append(toggle);
+    return {
+      update: (n) => { ctl.setExpanded(!!n.open); paintToggle(n.open); },
+      destroy: () => ctl.destroy(),
+    };
   },
 
   blueprints(body, el, w) {

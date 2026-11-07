@@ -27,26 +27,76 @@ export function mountSpace(root) {
   let destroyed = false;
   let lastPointer = null;
   const offs = [];
+  let boardOffs = [];   // listeners tied to the canvas on screen
   const editor = () => t?.editor || null;
+  // Two worlds: the shared Space (everyone you're with) and your personal one. Tab flips between them.
+  let mode = 'shared';
+  const ids = { shared: null, personal: null };
+  let switching = false;
 
   /* ---------------- find (or make) your Space ---------------- */
   (async () => {
     try {
       await loadPrefs();
-      spaceId = await resolveSpace();
+      await openMode(getPref('spaceMode', 'shared') === 'personal' ? 'personal' : 'shared', { first: true });
     } catch (e) {
       if (!destroyed) problem(e);
-      return;
     }
+  })();
+
+  async function idFor(m) {
+    if (!ids[m]) ids[m] = m === 'shared' ? await resolveSpace() : await resolvePersonal();
+    return ids[m];
+  }
+
+  async function openMode(m, { first = false } = {}) {
+    const id = await idFor(m);
     if (destroyed) return;
+    closeFloating();
+    board?.destroy();
+    boardOffs.forEach((f) => { try { f(); } catch {} });
+    boardOffs = [];
+    board = null; t = null;
+    mode = m; spaceId = id;
     page.replaceChildren();
-    board = mountBoard(page, spaceId, {
+    page.dataset.mode = m;
+    board = mountBoard(page, id, {
       space: true,
-      mountWidget: createWidgetHost({ editor, spaceId, me, snapBack, detach, openMenuFor, reveal, addPortal }),
+      mountWidget: createWidgetHost({ editor, spaceId: id, me, snapBack, detach, openMenuFor, reveal, addPortal }),
       extendMenu,
       onReady,
     });
-  })();
+    if (!first) flash(m === 'personal' ? 'Personal space' : 'Shared space');
+    if (getPref('spaceMode', 'shared') !== m) setPref('spaceMode', m).catch(() => {});
+  }
+
+  async function toggleSpace() {
+    if (switching) return;
+    switching = true;
+    try { await openMode(mode === 'shared' ? 'personal' : 'shared'); }
+    catch (e) { toast(e?.message || friendlyError(e), { tone: 'error', ms: 5000 }); }
+    finally { switching = false; }
+  }
+
+  function flash(text) {
+    page.querySelector('.space-flash')?.remove();
+    const tag = h('div', { class: 'space-flash', role: 'status' }, h('span', {}, text), h('small', {}, 'Tab to switch'));
+    page.append(tag);
+    setTimeout(() => tag.classList.add('out'), 1100);
+    setTimeout(() => tag.remove(), 1600);
+  }
+
+  // Yours alone: no members, never in the API's shared Space.
+  async function resolvePersonal() {
+    const rows = await api.db.select('blueprints', { columns: 'id,user_id,kind,created_at', filters: { kind: 'personal', user_id: me.id }, order: 'created_at.asc' });
+    if (rows[0]) return rows[0].id;
+    const id = uid();
+    await api.db.insert('blueprints', {
+      id, name: 'Personal Space', kind: 'personal', folder_id: null, pinned: false, preview: [],
+      data: { v: 1, elements: [widgetEl('path', { x: -730, y: -420, owner: me.id, ownerName: me.username, detached: [] }), widgetEl('blueprints', { x: 790, y: -420 })] },
+    });
+    return id;
+  }
 
   async function resolveSpace() {
     let rows;
@@ -115,7 +165,7 @@ export function mountSpace(root) {
     const vp = ed.vp;
     const onUp = () => setTimeout(checkSnap, 0);
     vp.addEventListener('pointerup', onUp);
-    offs.push(() => vp.removeEventListener('pointerup', onUp));
+    boardOffs.push(() => vp.removeEventListener('pointerup', onUp));
   }
 
   function checkSnap() {
@@ -207,7 +257,7 @@ export function mountSpace(root) {
       return [items[0], '-', ...spaceItems(world)]; // Paste here, then the Space menu
     }
     const extra = [];
-    const mineOrPublic = sel.every((e) => !e.privateTo || e.privateTo === me.id);
+    const mineOrPublic = mode === 'shared' && sel.every((e) => !e.privateTo || e.privateTo === me.id);
     if (mineOrPublic) {
       const allPrivate = sel.every((e) => e.privateTo === me.id);
       extra.push({ label: allPrivate ? 'Show to others' : 'Hide from others', icon: allPrivate ? 'eye' : 'eyeOff', onSelect: () => setPrivate(sel, !allPrivate) });
@@ -250,9 +300,10 @@ export function mountSpace(root) {
       { label: 'Camera points…', icon: 'target', onSelect: () => cameraDialog() },
       { label: 'Zoom to fit', icon: 'fit', kbd: '⇧1', onSelect: () => ed.zoomToFit() },
       '-',
-      { header: 'Space' },
-      { label: 'Invite…', icon: 'share', onSelect: () => openSettings({ tab: 'members', spaceId }) },
-      { label: 'Settings & API…', icon: 'settings', onSelect: () => openSettings({ spaceId }) },
+      { header: mode === 'personal' ? 'Personal space' : 'Shared space' },
+      { label: mode === 'personal' ? 'Switch to shared space' : 'Switch to personal space', icon: 'home', kbd: 'Tab', onSelect: toggleSpace },
+      { label: 'Invite…', icon: 'share', onSelect: async () => openSettings({ tab: 'members', spaceId: await idFor('shared') }) },
+      { label: 'Settings & API…', icon: 'settings', onSelect: async () => openSettings({ spaceId: await idFor('shared') }) },
       { label: 'Show toolbar', icon: 'layers', checked: chrome, onSelect: () => { t.page.classList.toggle('show-chrome', !chrome); setPref('spaceChrome', !chrome).catch(() => {}); } },
       { label: 'Keyboard shortcuts', icon: 'keyboard', kbd: '?', onSelect: () => t.showShortcuts() },
       '-',
@@ -386,6 +437,7 @@ export function mountSpace(root) {
     const ed = editor();
     if (!ed || isTypingTarget(e.target) || document.querySelector('.dlg') || ed.editingId) return;
     if (e.target instanceof Element && e.target.closest('.wg-body')) return;
+    if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); toggleSpace(); return; }
     const combo = comboOf(e);
     const p = points().find((x) => x.key && x.key === combo);
     if (p) { e.preventDefault(); e.stopPropagation(); goTo(p); return; }
@@ -439,6 +491,7 @@ export function mountSpace(root) {
     destroy() {
       destroyed = true;
       offs.forEach((f) => { try { f(); } catch {} });
+      boardOffs.forEach((f) => { try { f(); } catch {} });
       board?.destroy();
       page.remove();
       document.body.classList.remove('is-space');

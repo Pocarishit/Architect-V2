@@ -120,7 +120,7 @@ const KINDS = {
       try {
         const rows = await api.db.select('blueprints', { columns: 'id,name,kind,preview,updated_at', order: 'updated_at.desc' })
           .catch(() => api.db.select('blueprints', { columns: 'id,name,preview,updated_at', order: 'updated_at.desc' }));
-        boards = rows.filter((b) => b.kind !== 'space');
+        boards = rows.filter((b) => b.kind !== 'space' && b.kind !== 'personal');
         state = 'ok';
       } catch (e) { state = friendlyError(e); }
       paint();

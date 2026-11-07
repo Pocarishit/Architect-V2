@@ -37,7 +37,7 @@ export function mountArchive(root, folderId) {
           .catch(() => api.db.select('blueprints', { columns: BOARD_COLS, order: 'updated_at.desc' })),
       ]);
       folders = f;
-      boards = b.filter((x) => x.kind !== 'space');
+      boards = b.filter((x) => x.kind !== 'space' && x.kind !== 'personal');
       loadError = null;
       if (api.mode !== 'local') await loadSharing();
       cache = { folders, boards, owners, sharedOut };

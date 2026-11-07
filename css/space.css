@@ -258,3 +258,17 @@ body.is-space .shell-head { display: none; }
   .tw-squares { grid-template-columns: repeat(4, 1fr); gap: 6px; }
   .parasites.is-embedded .px-ticket-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Shared ↔ personal switch (Tab) */
+.space-flash {
+  position: fixed; left: 50%; top: 40%; z-index: 60; transform: translate(-50%, -50%);
+  display: grid; justify-items: center; gap: 6px; padding: 18px 28px; border-radius: 22px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent); border: 1px solid var(--line-2);
+  backdrop-filter: blur(10px); pointer-events: none; animation: flash-in .22s var(--ease);
+  transition: opacity .45s, transform .45s;
+}
+.space-flash span { font-family: var(--f-dot); font-weight: 800; font-size: 34px; letter-spacing: .03em; text-transform: uppercase; }
+.space-flash small { font-family: var(--f-mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--fg-3); }
+.space-host[data-mode="personal"] .space-flash span::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 12px; border-radius: 50%; background: var(--red); vertical-align: 6px; }
+.space-flash.out { opacity: 0; transform: translate(-50%, -54%); }
+@keyframes flash-in { from { opacity: 0; transform: translate(-50%, -46%); } }

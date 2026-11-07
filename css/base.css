@@ -231,6 +231,13 @@ kbd { font-family: var(--f-mono); font-size: 11px; color: var(--fg-3); }
   min-width: 210px;
   padding: 6px;
   display: grid;
+  /* Long menus scroll instead of running off the screen. */
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
 }
 .menu-item {
   display: flex;

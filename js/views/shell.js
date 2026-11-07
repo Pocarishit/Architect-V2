@@ -22,7 +22,7 @@ export function toggleTheme() {
   const i = THEMES.findIndex((x) => x.id === currentTheme());
   setTheme(THEMES[(i + 1) % THEMES.length].id);
 }
-function themeItems() {
+export function themeItems() {
   return THEMES.map((t) => ({
     label: t.name, checked: currentTheme() === t.id, onSelect: () => setTheme(t.id),
     iconEl: h('span', { class: 'theme-dots', 'aria-hidden': 'true' }, t.dots.map((c) => h('i', { style: { background: c } }))),
@@ -30,19 +30,20 @@ function themeItems() {
 }
 
 export function mountShell(root, { session }) {
+  // The Space (#/) is home; these full pages stay reachable from it.
   const SECTIONS = [
+    { id: 'space', label: 'Space', icon: 'home', href: '#/' },
     { id: 'paths', label: 'Paths', icon: 'toPaths' },
-    { id: 'blueprint', label: 'Blueprint', icon: 'frame', also: ['board'] },
-    { id: 'tracker', label: 'Metrics', icon: 'calendar', also: ['countdown', 'meter'] },
-    { id: 'parasites', label: 'Parasites', icon: 'bug' },
+    { id: 'parasites', label: 'Tickets', icon: 'ticket' },
+    { id: 'blueprint', label: 'Archives', icon: 'frame', also: ['board'] },
   ];
-  const links = SECTIONS.map((sec) => h('a', { href: `#/${sec.id}` }, sec.label));
+  const links = SECTIONS.map((sec) => h('a', { href: sec.href || `#/${sec.id}` }, sec.label));
   // Phones: one pill with the current section; tap for the rest.
-  const navCur = h('span', {}, 'Paths');
+  const navCur = h('span', {}, 'Space');
   const navPick = h('button', { class: 'nav-pick', type: 'button', 'aria-label': 'Sections' }, navCur, icon('chevronDown', 14));
-  let current = 'paths';
+  let current = 'space';
   navPick.addEventListener('click', () => menu(navPick, SECTIONS.map((sec) => ({
-    label: sec.label, icon: sec.icon, checked: current === sec.id || sec.also?.includes(current), onSelect: () => { location.hash = `#/${sec.id}`; },
+    label: sec.label, icon: sec.icon, checked: current === sec.id || sec.also?.includes(current), onSelect: () => { location.hash = sec.href || `#/${sec.id}`; },
   }))));
   const clock = h('time', { class: 'clock', 'aria-label': 'Current time' }, fmtClock());
   const themeBtn = h('button', { class: 'icon-btn', 'aria-label': 'Choose theme', 'data-tip': 'Theme' }, icon('theme', 18));
@@ -72,7 +73,7 @@ export function mountShell(root, { session }) {
   const outlet = h('div', { class: 'outlet' });
   const el = h('div', { class: 'shell' },
     h('header', { class: 'shell-head' },
-      h('a', { class: 'wordmark', href: '#/paths', 'aria-label': 'Architect home' }, 'Architect'),
+      h('a', { class: 'wordmark', href: '#/', 'aria-label': 'Architect Space' }, 'Architect'),
       h('nav', { class: 'nav', 'aria-label': 'Sections' }, links),
       navPick,
       h('div', { class: 'head-right' },
@@ -98,7 +99,7 @@ export function mountShell(root, { session }) {
   };
 }
 
-async function changePassword() {
+export async function changePassword() {
   const a = h('input', { class: 'input', type: 'password', autocomplete: 'new-password', autofocus: true, placeholder: 'At least 6 characters' });
   const b = h('input', { class: 'input', type: 'password', autocomplete: 'new-password' });
   const err = h('p', { class: 'login-error', hidden: true });

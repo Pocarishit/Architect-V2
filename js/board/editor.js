@@ -5,8 +5,7 @@ import { uid, clamp, store, prefersReducedMotion } from '../core/util.js';
 import { createNode, updateNode, fitText } from './render.js';
 import {
   TEXTUAL, CONNECTABLE, rectOf, unionRects, intersects, contains, pointIn,
-  rectFromPoints, lineGeom, distToSeg, penPath, simplify, center,
-} from './geometry.js';
+  rectFromPoints, lineGeom, distToSeg, penPath, simplify, center, nearestSide, DIR_SIDE } from './geometry.js';
 import { css } from './palette.js';
 import { sanitize, hasRichMarkup } from './richtext.js';
 
@@ -19,24 +18,29 @@ const DEFAULTS = {
   text: { w: 280, h: 34, text: '', color: 'auto', fontSize: 22, align: 'left' },
   shape: { w: 180, h: 120, kind: 'rect', fill: 'none', stroke: 'auto', strokeWidth: 2, text: '', fontSize: 16, align: 'center' },
   frame: { w: 800, h: 500, title: 'Frame', fill: 'none' },
+  border: { w: 480, h: 320, shape: 'box', stroke: 'auto', strokeWidth: 2, dash: 'solid', radius: 18 },
   line: { stroke: 'auto', strokeWidth: 2, route: 'straight', startCap: 'none', endCap: 'arrow', dash: 'solid' },
 };
 
 // Style properties remembered per type, so the next element looks like the last one you styled.
 const STYLE_KEYS = {
-  sticky: ['fill', 'font', 'align', 'bold', 'italic', 'color', 'fontSize'],
-  text: ['color', 'font', 'fontSize', 'align', 'bold', 'italic', 'fill'],
-  shape: ['fill', 'stroke', 'strokeWidth', 'dash', 'color', 'font', 'fontSize', 'align', 'bold', 'italic'],
+  // Font size is deliberately NOT carried over: after shrinking a group it made every new note microscopic.
+  sticky: ['fill', 'font', 'align', 'bold', 'italic', 'color'],
+  text: ['color', 'font', 'align', 'bold', 'italic', 'fill'],
+  shape: ['fill', 'stroke', 'strokeWidth', 'dash', 'color', 'font', 'align', 'bold', 'italic'],
   line: ['stroke', 'strokeWidth', 'route', 'startCap', 'endCap', 'dash'],
+  border: ['stroke', 'strokeWidth', 'dash'],
   frame: ['fill'],
 };
 
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
 export class Editor {
-  constructor(host, { elements = [], camera = null, mediaUrl = () => null } = {}) {
+  constructor(host, { elements = [], camera = null, mediaUrl = () => null, me = null, mountWidget = null } = {}) {
     this.host = host;
     this.mediaUrl = mediaUrl;
+    this.me = me;                    // objects marked private to someone else are skipped entirely
+    this.mountWidget = mountWidget;  // builds live modules (Paths, Tracker, Tickets…) inside 'widget' objects
     this.els = (elements || []).filter((e) => e && e.id && e.type)
       // Repair text boxes saved too narrow (older versions): let them hug their words again.
       .map((e) => (e.type === 'text' && !e.autoW && e.w < 60 ? { ...e, autoW: true } : e));
@@ -45,6 +49,7 @@ export class Editor {
     this.tool = 'select';
     this.opts = { shape: 'rect', line: 'arrow', pen: 'pen', penColor: 'auto', penWidth: 3, hlColor: '#F0B429', sticky: '#FFFFFF', ...store.get('architect.board.opts', {}) };
     this.lastStyle = store.get('architect.board.style', {});
+    for (const t of Object.values(this.lastStyle)) if (t && typeof t === 'object') delete t.fontSize; // drop sizes saved by older versions
     this.prefs = { grid: true, snap: false, wheelZoom: false, ...store.get('architect.board.prefs', {}) };
     this.undoStack = [];
     this.redoStack = [];
@@ -124,6 +129,7 @@ export class Editor {
   }
 
   destroy() {
+    for (const n of this.nodes.values()) { try { n._ctl?.destroy?.(); } catch {} }
     this.finishEditing();
     this._unbind?.forEach((f) => f());
     this._ro?.disconnect();
@@ -235,7 +241,11 @@ export class Editor {
   }
 
   /* ================= rendering ================= */
-  ctx() { return { byId: this.byId, editingId: this.editingId, activeId: this.activeId, mediaUrl: this.mediaUrl }; }
+  ctx() { return { byId: this.byId, editingId: this.editingId, activeId: this.activeId, mediaUrl: this.mediaUrl, mountWidget: this.mountWidget, me: this.me }; }
+
+  // Hidden to others, visible to self: someone else's private object doesn't exist on your screen.
+  isHidden(el) { return !!el?.privateTo && el.privateTo !== this.me; }
+  visibleEls() { return this.els.filter((e) => !this.isHidden(e)); }
 
   sync() {
     const ctx = this.ctx();
@@ -243,16 +253,17 @@ export class Editor {
     const updatedText = [];
     let fi = 0, ei = 0;
     for (const el of this.els) {
+      if (this.isHidden(el)) continue;
       seen.add(el.id);
       let node = this.nodes.get(el.id);
-      if (node && node._type !== el.type) { node.remove(); node = null; } // turned into another type
+      if (node && node._type !== el.type) { node._ctl?.destroy?.(); node.remove(); node = null; } // turned into another type
       if (!node) { node = createNode(el); this.nodes.set(el.id, node); }
       const layer = el.type === 'frame' ? this.frameLayer : this.elLayer;
       const idx = el.type === 'frame' ? fi++ : ei++;
       if (layer.children[idx] !== node) layer.insertBefore(node, layer.children[idx] || null);
       if (node._el !== el || node._force || el.type === 'line') {
         const prev = node._el;
-        if (prev && !node._force && el.type !== 'line' && el.type !== 'pen' && movedOnly(prev, el)) {
+        if (prev && !node._force && el.type !== 'line' && el.type !== 'pen' && el.type !== 'border' && movedOnly(prev, el)) {
           // Dragging: only the position changed, so skip re-rendering text, media and auto-fit.
           node.style.left = `${el.x}px`;
           node.style.top = `${el.y}px`;
@@ -264,8 +275,9 @@ export class Editor {
         node._force = false;
       }
       node.classList.toggle('is-selected', this.sel.has(el.id));
+      node.classList.toggle('is-private', !!el.privateTo);
     }
-    for (const [id, node] of this.nodes) if (!seen.has(id)) { node.remove(); this.nodes.delete(id); }
+    for (const [id, node] of this.nodes) if (!seen.has(id)) { node._ctl?.destroy?.(); node.remove(); this.nodes.delete(id); }
     if (updatedText.length) this.measureTexts(updatedText);
     this.renderOverlay();
   }
@@ -603,7 +615,7 @@ export class Editor {
     this.syncSelection();
   }
 
-  selectAll() { this.select(this.els.map((e) => e.id)); }
+  selectAll() { this.select(this.visibleEls().map((e) => e.id)); }
 
   syncSelection() {
     for (const [id, node] of this.nodes) node.classList.toggle('is-selected', this.sel.has(id));
@@ -673,7 +685,7 @@ export class Editor {
   bindTarget(p, excludeId) {
     for (let i = this.els.length - 1; i >= 0; i--) {
       const e = this.els[i];
-      if (e.id === excludeId || e.type === 'text' || !CONNECTABLE.has(e.type)) continue;
+      if (e.id === excludeId || e.type === 'text' || !CONNECTABLE.has(e.type) || this.isHidden(e)) continue;
       if (pointIn(e, p, 0)) return e;
     }
     return null;
@@ -683,7 +695,7 @@ export class Editor {
     const pad = 6 / this.cam.z;
     for (let i = this.els.length - 1; i >= 0; i--) {
       const e = this.els[i];
-      if (e.id === excludeId || !CONNECTABLE.has(e.type)) continue;
+      if (e.id === excludeId || !CONNECTABLE.has(e.type) || this.isHidden(e)) continue;
       if (pointIn(e, p, pad)) return e;
     }
     return null;
@@ -692,6 +704,8 @@ export class Editor {
   /* ================= pointer gestures ================= */
   onDown(e) {
     if (!(e.target instanceof Element)) return;
+    this.inWidget = !!e.target.closest('.wg-body');
+    if (this.inWidget && this.sel.size) this.clearSel();
     if (e.target.closest('[data-noptr]')) return;
     if (e.target.closest('[contenteditable="true"]')) return;
     if (e.target.closest('.is-live .el-media')) return;
@@ -722,6 +736,7 @@ export class Editor {
     switch (this.tool) {
       case 'select': this.downSelect(start, handle, el); break;
       case 'sticky': case 'text': case 'shape': case 'frame': this.beginCreate(start, this.tool); break;
+      case 'border': if (this.opts.border === 'curve') this.beginPen(start, { border: true }); else this.beginCreate(start, 'border'); break;
       case 'line': this.beginLine(start); break;
       case 'pen': this.beginPen(start); break;
       case 'eraser': this.beginErase(start); break;
@@ -883,14 +898,16 @@ export class Editor {
         g.marquee = rectFromPoints(start.p, p);
         const hits = [];
         for (const el of this.els) {
+          if (this.isHidden(el)) continue;
           const r = rectOf(el, this.byId);
-          if (el.type === 'frame' ? contains(g.marquee, r) : intersects(g.marquee, r)) hits.push(el.id);
+          if (el.type === 'frame' || el.type === 'border' || el.type === 'widget' ? contains(g.marquee, r) : intersects(g.marquee, r)) hits.push(el.id);
         }
+        this.emit('marquee', g.marquee);
         this.sel = new Set([...base, ...this.expandGroups(hits)]);
         for (const [id, node] of this.nodes) node.classList.toggle('is-selected', this.sel.has(id));
         this.renderOverlay();
       },
-      onUp: () => { this.emit('selection'); },
+      onUp: () => { this.emit('marquee', null); this.emit('selection'); },
     };
     this.startGesture(g);
   }
@@ -1017,7 +1034,7 @@ export class Editor {
         const t = this.bindTarget(p, line.id);
         const bindId = t && t.id !== other?.id ? t.id : null;
         this.bindHover = bindId;
-        const end = bindId ? { id: bindId, x: p.x, y: p.y } : { x: p.x, y: p.y };
+        const end = bindId ? { id: bindId, x: p.x, y: p.y, side: nearestSide(this.byId.get(bindId), p) } : { x: p.x, y: p.y };
         this.setEls(this.els.map((el) => (el.id === line.id ? { ...el, [which]: end } : el)), { commit: false });
       },
       onUp: () => { this.bindHover = null; this.commitFrom(before); this.emit('selection'); },
@@ -1087,7 +1104,7 @@ export class Editor {
         const t = this.bindTarget(p, line.id);
         const bindId = t && t.id !== line.a.id ? t.id : null;
         this.bindHover = bindId;
-        const b = bindId ? { id: bindId, x: p.x, y: p.y } : { x: p.x, y: p.y };
+        const b = bindId ? { id: bindId, x: p.x, y: p.y, side: nearestSide(this.byId.get(bindId), p) } : { x: p.x, y: p.y };
         this.setEls(this.els.map((el) => (el.id === line.id ? { ...el, b } : el)), { commit: false });
       },
       onUp: () => {
@@ -1105,10 +1122,10 @@ export class Editor {
     this.startGesture(g);
   }
 
-  beginPen(start) {
-    const kind = this.opts.pen === 'highlighter' ? 'highlighter' : 'pen';
-    const color = kind === 'highlighter' ? this.opts.hlColor : this.opts.penColor;
-    const width = kind === 'highlighter' ? 18 : this.opts.penWidth;
+  beginPen(start, { border = false } = {}) {
+    const kind = border ? 'pen' : this.opts.pen === 'highlighter' ? 'highlighter' : 'pen';
+    const color = border ? (this.lastStyle.border?.stroke || 'auto') : kind === 'highlighter' ? this.opts.hlColor : this.opts.penColor;
+    const width = border ? (this.lastStyle.border?.strokeWidth || 2) : kind === 'highlighter' ? 18 : this.opts.penWidth;
     const opacity = kind === 'highlighter' ? 0.38 : 1;
     const pts = [[start.p.x, start.p.y]];
     const path = s('path', { d: penPath(pts), fill: 'none', stroke: css(color), 'stroke-width': width, opacity, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
@@ -1129,11 +1146,15 @@ export class Editor {
         let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
         for (const [x, y] of simp) { x1 = Math.min(x1, x); y1 = Math.min(y1, y); x2 = Math.max(x2, x); y2 = Math.max(y2, y); }
         const r2 = (v) => Math.round(v * 100) / 100;
-        const el = {
-          id: uid(), type: 'pen', x: r2(x1), y: r2(y1), w: r2(Math.max(x2 - x1, 1)), h: r2(Math.max(y2 - y1, 1)),
-          points: simp.map(([x, y]) => [r2(x - x1), r2(y - y1)]), stroke: color, strokeWidth: width, opacity, kind,
-        };
+        const el = border
+          // A hand-drawn border: the stroke is smoothed and closed into a loop.
+          ? { id: uid(), type: 'border', shape: 'curve', x: r2(x1), y: r2(y1), w: r2(Math.max(x2 - x1, 1)), h: r2(Math.max(y2 - y1, 1)),
+            points: simplify(pts, 3 / this.cam.z).map(([x, y]) => [r2(x - x1), r2(y - y1)]), stroke: color, strokeWidth: width, dash: this.lastStyle.border?.dash || 'solid' }
+          : { id: uid(), type: 'pen', x: r2(x1), y: r2(y1), w: r2(Math.max(x2 - x1, 1)), h: r2(Math.max(y2 - y1, 1)),
+            points: simp.map(([x, y]) => [r2(x - x1), r2(y - y1)]), stroke: color, strokeWidth: width, opacity, kind };
+        if (border && (el.w < 12 || el.h < 12)) return;
         this.setEls([...this.els, el]);
+        if (border) { this.select([el.id]); this.setTool('select'); }
       },
     };
     this.startGesture(g);
@@ -1194,6 +1215,7 @@ export class Editor {
 
   onWheel(e) {
     if (e.target instanceof Element && e.target.closest('.is-live .el-media')) return;
+    if (e.target instanceof Element && !e.ctrlKey && !e.metaKey && scrollsInside(e.target, e.deltaY, e.deltaX)) return;
     e.preventDefault();
     cancelAnimationFrame(this._anim);
     // Trackpads fire many wheel events per frame: add them up and apply once per frame.
@@ -1379,7 +1401,7 @@ export class Editor {
     const { id, target, node, fresh } = ed;
     // innerText keeps line breaks typed into contentEditable; frame titles use textContent
     // because innerText would bake in the CSS uppercase transform.
-    const raw = (node.classList.contains('el-frame') ? target.textContent : target.innerText).replace(/ /g, ' ');
+    const raw = (node.classList.contains('el-frame') ? target.textContent : target.innerText).replace(/ /g, ' ').replace(/\u200B/g, '');
     const text = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
     target.contentEditable = 'false';
     node.classList.remove('is-editing');
@@ -1394,7 +1416,7 @@ export class Editor {
     }
     const key = el.type === 'frame' ? 'title' : 'text';
     const value = el.type === 'frame' ? (text.trim() || 'Frame') : text;
-    const cleaned = el.type === 'frame' ? '' : sanitize(target.innerHTML);
+    const cleaned = el.type === 'frame' ? '' : sanitize(target.innerHTML.replace(/\u200B/g, ''));
     const html = hasRichMarkup(cleaned) ? cleaned : undefined;
     if (value !== (el[key] || '') || html !== el.html) this.updateEls([id], { [key]: value, html }, { commit: !fresh });
     else { node._force = true; this.sync(); }
@@ -1444,10 +1466,48 @@ export class Editor {
 
   toggleTextProp(prop) {
     const cmd = { bold: 'bold', italic: 'italic', underline: 'underline', strike: 'strikeThrough' }[prop];
-    if (this.isEditingText()) { this.execText(cmd); return; }
+    if (this.isEditingText()) { if (cmd === 'strikeThrough') this.execText(cmd); else this.toggleInline(cmd); return; }
     const texty = this.selected().filter((e) => TEXTUAL.has(e.type) && !e.locked);
     if (!texty.length) return;
     this.applyStyle(texty.map((e) => e.id), { [prop]: !texty.every((e) => e[prop]) });
+  }
+
+  // Bold / italic / underline while typing, the way word processors do it — and the same in every browser:
+  //  • words highlighted → toggle them;
+  //  • caret inside a word → toggle that whole word (no need to select it to un-bold it);
+  //  • caret at the end of a word or in a space → switch the style on/off for what you type next.
+  toggleInline(cmd) {
+    const sel = window.getSelection();
+    if (!sel?.rangeCount || !this._edit) return;
+    const r = sel.getRangeAt(0);
+    if (!this._edit.target.contains(r.startContainer)) return;
+    if (!r.collapsed) { document.execCommand(cmd, false, null); this.emit('textselection'); return; }
+    const word = wordAround(r);
+    if (word) {
+      sel.removeAllRanges(); sel.addRange(word);
+      document.execCommand(cmd, false, null);
+      const after = sel.getRangeAt(0).cloneRange();
+      after.collapse(false);
+      sel.removeAllRanges(); sel.addRange(after);
+      this.emit('textselection');
+      return;
+    }
+    const on = (() => { try { return document.queryCommandState(cmd); } catch { return false; } })();
+    const style = {
+      bold: `font-weight: ${on ? 400 : 700}`,
+      italic: `font-style: ${on ? 'normal' : 'italic'}`,
+      underline: `text-decoration: ${on ? 'none' : 'underline'}`,
+    }[cmd];
+    // An empty run holding an invisible character keeps the caret, so the next letters take its style.
+    const span = document.createElement('span');
+    span.setAttribute('style', style);
+    span.textContent = '\u200B';
+    r.insertNode(span);
+    const caret = document.createRange();
+    caret.setStart(span.firstChild, 1);
+    caret.collapse(true);
+    sel.removeAllRanges(); sel.addRange(caret);
+    this.emit('textselection');
   }
 
   // Shortcuts while typing inside a note, text box or shape. Returns true when handled.
@@ -1455,9 +1515,9 @@ export class Editor {
     const raw = (cmd) => { document.execCommand(cmd, false, null); this.emit('textselection'); };
     const k = e.key.toLowerCase();
     if (!e.shiftKey && !e.altKey) {
-      if (k === 'b') { raw('bold'); return true; }
-      if (k === 'i') { raw('italic'); return true; }
-      if (k === 'u') { raw('underline'); return true; }
+      if (k === 'b') { this.toggleInline('bold'); return true; }
+      if (k === 'i') { this.toggleInline('italic'); return true; }
+      if (k === 'u') { this.toggleInline('underline'); return true; }
       if (k === '\\') { raw('removeFormat'); return true; }
     }
     if (e.shiftKey && !e.altKey) {
@@ -1674,7 +1734,7 @@ export class Editor {
   }
 
   onCopy(e, cut) {
-    if (!this.vp.isConnected || isTypingTarget(e.target) || isTypingTarget(document.activeElement) || this.editingId) return;
+    if (!this.vp.isConnected || isTypingTarget(e.target) || isTypingTarget(document.activeElement) || this.editingId || this.inWidget) return;
     if (window.getSelection()?.toString()) return; // let normal text selection copy work
     const text = this.serializeSelection();
     if (!text) return;
@@ -1685,7 +1745,7 @@ export class Editor {
   }
 
   onPaste(e) {
-    if (!this.vp.isConnected || isTypingTarget(e.target) || this.editingId || this.presenting) return;
+    if (!this.vp.isConnected || isTypingTarget(e.target) || this.editingId || this.presenting || this.inWidget) return;
     if (document.querySelector('.dlg-overlay')) return;
     const dt = e.clipboardData;
     if (!dt) return;
@@ -1820,11 +1880,11 @@ export class Editor {
     this.emit('selection');
   }
 
-  connectorFrom(src, b) {
+  connectorFrom(src, b, side = null) {
     return {
       id: uid(), type: 'line', ...DEFAULTS.line, ...(this.lastStyle.line || {}),
       route: this.lastStyle.line?.route || 'curve',
-      a: { id: src.id, x: src.x + src.w / 2, y: src.y + src.h / 2 }, b,
+      a: { id: src.id, x: src.x + src.w / 2, y: src.y + src.h / 2, ...(side ? { side } : {}) }, b,
     };
   }
 
@@ -1840,13 +1900,13 @@ export class Editor {
       onMove: (p, e) => {
         if (!line) {
           if (Math.hypot(e.clientX - start.cx, e.clientY - start.cy) < 5) return;
-          line = this.connectorFrom(src, { x: p.x, y: p.y });
+          line = this.connectorFrom(src, { x: p.x, y: p.y }, DIR_SIDE[dir] || null);
           this.setEls([...this.els, line], { commit: false });
         }
         const t = this.elementAt(p, line.id);
         const bindId = t && t.id !== src.id ? t.id : null;
         if (bindId !== this.bindHover) this.bindHover = bindId;
-        const b = bindId ? { id: bindId, x: p.x, y: p.y } : { x: p.x, y: p.y };
+        const b = bindId ? { id: bindId, x: p.x, y: p.y, side: nearestSide(this.byId.get(bindId), p) } : { x: p.x, y: p.y };
         this.setEls(this.els.map((el) => (el.id === line.id ? { ...el, b } : el)), { commit: false });
       },
       onUp: () => {
@@ -1888,6 +1948,7 @@ export class Editor {
   onKeyDown(e) {
     if (!this.vp.isConnected) return;
     if (isTypingTarget(e.target) || document.querySelector('.dlg-overlay')) return;
+    if (this.inWidget || (e.target instanceof Element && e.target.closest('.el-widget'))) return; // a widget is in use
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
 
@@ -1979,6 +2040,7 @@ export class Editor {
       this.setTool(tools[k]);
       return;
     }
+    if (k === 'b' && !mod) { this.setOpt('border', e.shiftKey ? 'curve' : 'box'); this.setTool('border'); return; }
     if (k === 'r') { this.setOpt('shape', 'rect'); this.setTool('shape'); return; }
     if (k === 'o') { this.setOpt('shape', 'ellipse'); this.setTool('shape'); return; }
     if (k === 'a') { this.setOpt('line', 'arrow'); this.setTool('line'); return; }
@@ -2016,7 +2078,7 @@ function resized(el, nr, sx, sy, mapPt, single, corner) {
   if (el.type === 'line') {
     return { ...el, a: el.a.id ? el.a : mapPt(el.a), b: el.b.id ? el.b : mapPt(el.b) };
   }
-  if (el.type === 'pen') {
+  if (el.type === 'pen' || (el.type === 'border' && el.shape === 'curve')) {
     const kx = nr.w / (el.w || 1), ky = nr.h / (el.h || 1);
     return { ...el, ...nr, points: (el.points || []).map(([x, y]) => [Math.round(x * kx * 100) / 100, Math.round(y * ky * 100) / 100]) };
   }
@@ -2031,4 +2093,37 @@ function resized(el, nr, sx, sy, mapPt, single, corner) {
   const out = { ...el, ...nr };
   if (!single && el.fontSize && (el.type === 'shape' || el.type === 'sticky')) out.fontSize = scaleFont(el.fontSize, Math.min(sx, sy));
   return out;
+}
+
+// The word the caret is inside (letters on both sides), or null at a word's edge / in a space.
+function wordAround(range) {
+  const node = range.startContainer;
+  if (node.nodeType !== 3) return null;
+  const text = node.textContent;
+  const at = range.startOffset;
+  const isW = (c) => !!c && /[\p{L}\p{N}_'’-]/u.test(c);
+  if (!isW(text[at - 1]) || !isW(text[at])) return null;
+  let a = at, b = at;
+  while (a > 0 && isW(text[a - 1])) a--;
+  while (b < text.length && isW(text[b])) b++;
+  const w = document.createRange();
+  w.setStart(node, a);
+  w.setEnd(node, b);
+  return w;
+}
+
+// True when the wheel should scroll something inside a widget instead of moving the canvas.
+function scrollsInside(target, dy, dx) {
+  let n = target.closest('.wg-body');
+  if (!n) return false;
+  for (let el = target; el && el !== n.parentElement; el = el.parentElement) {
+    const cs = getComputedStyle(el);
+    if (/(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 1) {
+      if ((dy < 0 && el.scrollTop > 0) || (dy > 0 && el.scrollTop + el.clientHeight < el.scrollHeight - 1)) return true;
+    }
+    if (/(auto|scroll)/.test(cs.overflowX) && el.scrollWidth > el.clientWidth + 1 && dx) {
+      if ((dx < 0 && el.scrollLeft > 0) || (dx > 0 && el.scrollLeft + el.clientWidth < el.scrollWidth - 1)) return true;
+    }
+  }
+  return false;
 }

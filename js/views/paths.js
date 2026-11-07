@@ -4,7 +4,7 @@ import { menu, toast, promptDialog, confirmDialog, dialog } from '../core/ui.js'
 import { uid, posBetween, fmtDate, plural } from '../core/util.js';
 import { go } from '../core/router.js';
 import { api, friendlyError } from '../data/api.js';
-import { loadPrefs, getPref, setPref } from '../data/prefs.js';
+import { loadPrefs, getPref, setPref, prefsOf } from '../data/prefs.js';
 import { printToPdf, pdfHint } from '../core/print.js';
 import { windowOf, stateOf, clock, logSetpoints, dayStart } from '../data/setpoints.js';
 
@@ -13,7 +13,35 @@ const DEFAULT_TITLE = 'Paths';
 
 let seeding = null;
 
-export function mountPaths(root, initialOpen = null) {
+// Embedded (space widget) options:
+//   owner      whose paths to show (default: you). Someone else's paths are read-only.
+//   exclude    column ids shown elsewhere on the canvas (detached columns)
+//   only       show just this one column (a detached column widget)
+//   onDetach(colId, at)  pull a column out onto the canvas · onSnap()  put a detached column back
+export function mountPaths(root, initialOpen = null, opts = {}) {
+  const embedded = !!opts.embedded;
+  const me = api.auth.current()?.user?.id;
+  const owner = opts.owner || me;
+  const readOnly = owner !== me;
+  const instance = Math.random().toString(36).slice(2);
+  let exclude = new Set(opts.exclude || []);
+  let ownerTimes = null;       // someone else's setpoint windows
+  let active = false;          // embedded: keyboard shortcuts only while you're working in this widget
+  // Writes from a widget tell the other widgets showing the same paths to refresh.
+  const db = embedded ? new Proxy(api.db, {
+    get(t, k) {
+      const fn = t[k];
+      if (typeof fn !== 'function' || !['insert', 'update', 'remove'].includes(k)) return fn?.bind?.(t) ?? fn;
+      return async (...args) => {
+        const out = await fn.apply(t, args);
+        window.dispatchEvent(new CustomEvent('architect:paths-changed', { detail: { owner, from: instance } }));
+        return out;
+      };
+    },
+  }) : api.db;
+  const timesArg = () => (readOnly ? (ownerTimes?.pathTimes || {}) : undefined);
+  const stOf = (col) => stateOf(col, columns, new Date(), timesArg());
+  const winOf = (col) => windowOf(col, timesArg());
   let columns = [];
   let tasks = [];
   let loading = true;
@@ -33,32 +61,34 @@ export function mountPaths(root, initialOpen = null) {
   let openedFromGrid = false;
   let title = DEFAULT_TITLE;
   const mq = window.matchMedia('(max-width: 720px)');
-  const isMobile = () => mq.matches;
+  const isMobile = () => !embedded && mq.matches;
   const onMq = () => render();
   mq.addEventListener?.('change', onMq);
 
-  const el = h('div', { class: 'view paths' });
+  const el = h('div', { class: ['view paths', embedded && 'is-embedded', readOnly && 'is-readonly', opts.only && 'is-single'] });
   root.append(el);
 
   const fail = (e) => toast(`Not saved — ${friendlyError(e)}`, { tone: 'error', ms: 5000 });
   const tasksOf = (colId) => tasks.filter((t) => t.column_id === colId).sort((a, b) => a.position - b.position);
   const sortCols = () => columns.sort((a, b) => a.position - b.position);
   // Tasks in on-screen order: path by path, top to bottom.
-  const ordered = () => columns.flatMap((c) => tasksOf(c.id));
+  const shown = () => columns.filter((c) => (opts.only ? c.id === opts.only : !exclude.has(c.id)));
+  const ordered = () => shown().flatMap((c) => tasksOf(c.id));
   const pickedTasks = () => ordered().filter((t) => picked.has(t.id));
 
   async function load() {
     try {
       const [cols, ts] = await Promise.all([
-        api.db.select('path_columns', { order: 'position.asc' }),
-        api.db.select('path_tasks', { order: 'position.asc' }),
+        api.db.select('path_columns', { order: 'position.asc', filters: owner ? { user_id: owner } : {} }),
+        api.db.select('path_tasks', { order: 'position.asc', filters: owner ? { user_id: owner } : {} }),
         loadPrefs(),
+        readOnly ? prefsOf(owner).then((p) => { ownerTimes = p; }) : null,
       ]);
       columns = cols;
       tasks = ts;
       title = getPref('pathsTitle', DEFAULT_TITLE) || DEFAULT_TITLE;
-      if (!columns.length) {
-        seeding = seeding || api.db.insert('path_columns', DEFAULT_PATHS.map((t, i) => ({ id: uid(), title: t, position: (i + 1) * 1024 })));
+      if (!columns.length && !readOnly) {
+        seeding = seeding || db.insert('path_columns', DEFAULT_PATHS.map((t, i) => ({ id: uid(), title: t, position: (i + 1) * 1024 })));
         columns = await seeding;
         seeding = null;
       }
@@ -94,12 +124,12 @@ export function mountPaths(root, initialOpen = null) {
     el.classList.toggle('is-mobile-detail', !!detail);
     el.classList.toggle('is-picking', picked.size > 0);
     rendering = true;
-    try { el.replaceChildren(...(detail ? [detailHeader(detail), detailBody(detail)] : [header(), body()])); } finally { rendering = false; }
+    try { el.replaceChildren(...(detail ? [detailHeader(detail), detailBody(detail)] : embedded ? [body()] : [header(), body()])); } finally { rendering = false; }
     const next = el.querySelector('.pboard');
     if (next) next.scrollLeft = scrollLeft;
     renderSelBar();
     focusActive();
-    if (!loading && !loadError) { lastPhases = phases(); queueLog(); }
+    if (!loading && !loadError) { lastPhases = phases(); if (!readOnly) queueLog(); }
   }
 
   function header() {
@@ -117,7 +147,7 @@ export function mountPaths(root, initialOpen = null) {
 
   // Setpoint countdown. Live: time left (HH:MM:SS). Later today: its full length, dimmed. Ended: 00:00:00.
   function timerView(col, cls = 'pcol-timer') {
-    const st = stateOf(col, columns);
+    const st = stOf(col);
     if (!st) return null;
     return h('span', {
       class: [cls, `is-${st.phase}`], 'data-timer': col.id, role: 'timer',
@@ -143,7 +173,7 @@ export function mountPaths(root, initialOpen = null) {
         const list = tasksOf(col.id);
         const done = list.filter((t) => t.done).length;
         const left = list.length - done;
-        const live = stateOf(col, columns)?.phase === 'live';
+        const live = stOf(col)?.phase === 'live';
         return h('button', { class: ['ptile', live && 'is-now'], type: 'button', 'data-act': 'open-col', 'data-col': col.id, 'aria-label': `${col.title}, ${left} to do` },
           h('div', { class: 'ptile-top' },
             h('span', { class: 'ptile-count' }, String(left)),
@@ -187,38 +217,51 @@ export function mountPaths(root, initialOpen = null) {
     if (!loading && !loadError && isMobile()) return tiles();
     if (loading) return h('div', { class: 'empty' }, h('span', { class: 'dots-loader' }, h('i'), h('i'), h('i')));
     if (loadError) return h('div', { class: 'empty' }, h('p', { class: 'empty-text' }, loadError), h('button', { class: 'btn', onclick: () => { loading = true; loadError = null; render(); load(); } }, 'Try again'));
+    const cols = shown();
+    if (embedded && !cols.length) {
+      return h('div', { class: 'pboard is-empty' }, h('p', { class: 'empty-text' }, readOnly ? 'No paths to show.' : opts.only ? 'This path was deleted.' : 'Every path is out on the canvas.'),
+        readOnly || opts.only ? null : h('button', { class: 'pcol-new', 'data-act': 'new-col' }, icon('plus', 18), h('span', {}, 'New path')));
+    }
     return h('div', { class: 'pboard' },
-      columns.map(columnView),
-      h('button', { class: 'pcol-new', 'data-act': 'new-col' }, icon('plus', 18), h('span', {}, 'New path')));
+      cols.map(columnView),
+      readOnly || opts.only ? null : h('button', { class: 'pcol-new', 'data-act': 'new-col' }, icon('plus', 18), h('span', {}, 'New path')));
   }
 
   function columnView(col) {
     const list = tasksOf(col.id);
-    const live = stateOf(col, columns)?.phase === 'live';
+    const live = stOf(col)?.phase === 'live';
     const renaming = renamingCol === col.id;
     const allPicked = list.length && list.every((t) => picked.has(t.id));
-    return h('section', { class: ['pcol', live && 'is-now'], 'data-col': col.id, 'aria-label': col.title },
-      h('header', { class: 'pcol-head', title: renaming ? null : 'Drag to reorder' },
+    return h('section', { class: ['pcol', live && 'is-now', list.length > 10 && 'is-capped'], 'data-col': col.id, 'aria-label': col.title },
+      h('header', { class: 'pcol-head', title: renaming || readOnly ? null : embedded ? (opts.only ? 'Drag onto your Path to snap back' : 'Drag to reorder · drag out of the widget to detach') : 'Drag to reorder' },
         renaming
           ? h('input', { class: 'pcol-rename', value: col.title, maxlength: 40, 'data-rename': col.id, 'aria-label': 'Path name' })
           : h('h2', { class: 'pcol-title', 'data-act': 'rename-col', title: 'Double-click to rename · drag to reorder' }, col.title),
         timerView(col),
-        list.length ? h('button', { class: ['icon-btn', 'sm', allPicked && 'is-on'], 'data-act': 'select-col', 'aria-label': `Select all in ${col.title}`, 'aria-pressed': String(!!allPicked), 'data-tip': 'Select all' }, icon('selectAll', 16)) : null,
-        h('button', { class: 'icon-btn sm', 'data-act': 'col-menu', 'aria-label': `${col.title} options` }, icon('more', 16))),
+        list.length && !readOnly ? h('button', { class: ['icon-btn', 'sm', allPicked && 'is-on'], 'data-act': 'select-col', 'aria-label': `Select all in ${col.title}`, 'aria-pressed': String(!!allPicked), 'data-tip': 'Select all' }, icon('selectAll', 16)) : null,
+        readOnly ? null : h('button', { class: 'icon-btn sm', 'data-act': 'col-menu', 'aria-label': `${col.title} options` }, icon('more', 16))),
       list.length ? h('div', { class: 'pcol-dots', 'aria-hidden': 'true' }, list.slice(0, 40).map((t) => h('i', { class: t.done ? 'on' : null }))) : null,
       h('div', { class: 'pcol-list', 'data-list': col.id },
         list.map(taskView),
         composerFor === col.id ? composerView(col) : null),
-      composerFor !== col.id
+      composerFor !== col.id && !readOnly
         ? h('button', { class: 'pcol-add', 'data-act': 'add-task' }, icon('plus', 16), h('span', {}, 'Add task'))
         : null);
+  }
+
+  // "#12" in a task title links to ticket #012 on the Ticket board.
+  function titleView(text) {
+    const parts = String(text || 'Untitled').split(/(#\d{1,5}\b)/);
+    return parts.map((part) => (/^#\d{1,5}$/.test(part)
+      ? h('span', { class: 'ptask-ticket', 'data-act': 'open-ticket', 'data-no': String(Number(part.slice(1))), title: 'Open ticket' }, `#${part.slice(1).padStart(3, '0')}`)
+      : part));
   }
 
   function taskView(t) {
     const editTitle = editing?.id === t.id && editing.field === 'title';
     const editNote = editing?.id === t.id && editing.field === 'note';
     const sel = picked.has(t.id);
-    return h('article', { class: ['ptask', t.done && 'is-done', (editTitle || editNote) && 'is-editing', sel && 'is-picked'], 'data-task': t.id, 'aria-selected': picked.size ? String(sel) : null },
+    return h('article', { class: ['ptask', t.done && 'is-done', (editTitle || editNote) && 'is-editing', sel && 'is-picked', t.private && 'is-private'], 'data-task': t.id, 'aria-selected': picked.size ? String(sel) : null },
       h('button', {
         class: 'pcheck', 'data-act': 'toggle', role: 'checkbox', 'aria-checked': String(!!t.done),
         'aria-label': `${t.done ? 'Mark not done' : 'Mark done'}: ${t.title}`,
@@ -226,11 +269,11 @@ export function mountPaths(root, initialOpen = null) {
       h('div', { class: 'ptask-body' },
         editTitle
           ? textEditor(t.title, 'title')
-          : h('div', { class: 'ptask-title', 'data-act': 'edit-title' }, t.title || 'Untitled'),
+          : h('div', { class: 'ptask-title', 'data-act': 'edit-title' }, t.private ? h('span', { class: 'ptask-lock', title: 'Only you can see this' }, icon('lock', 11)) : null, titleView(t.title)),
         editNote
           ? textEditor(t.note, 'note')
           : t.note ? h('div', { class: 'ptask-note', 'data-act': 'edit-note' }, t.note) : null),
-      h('button', { class: 'icon-btn xs ptask-more', 'data-act': 'task-menu', 'aria-label': 'Task options' }, icon('more', 16)));
+      readOnly ? null : h('button', { class: 'icon-btn xs ptask-more', 'data-act': 'task-menu', 'aria-label': 'Task options' }, icon('more', 16)));
   }
 
   function textEditor(value, field) {
@@ -307,7 +350,7 @@ export function mountPaths(root, initialOpen = null) {
     const list = pickedTasks().filter((t) => !!t.done !== done);
     list.forEach((t) => { t.done = done; });
     render();
-    try { await Promise.all(list.map((t) => api.db.update('path_tasks', t.id, { done }))); } catch (e) { fail(e); }
+    try { await Promise.all(list.map((t) => db.update('path_tasks', t.id, { done }))); } catch (e) { fail(e); }
   }
 
   function bulkMoveMenu(anchor) {
@@ -337,7 +380,7 @@ export function mountPaths(root, initialOpen = null) {
       return { id: t.id, column_id: colId, position: pos };
     });
     render();
-    try { await Promise.all(patches.map((p) => api.db.update('path_tasks', p.id, { column_id: p.column_id, position: p.position }))); } catch (e) { fail(e); }
+    try { await Promise.all(patches.map((p) => db.update('path_tasks', p.id, { column_id: p.column_id, position: p.position }))); } catch (e) { fail(e); }
   }
 
   async function bulkDelete() {
@@ -347,7 +390,7 @@ export function mountPaths(root, initialOpen = null) {
     tasks = tasks.filter((t) => !ids.has(t.id));
     picked = new Set();
     render();
-    try { await api.db.remove('path_tasks', [...ids]); } catch (e) { fail(e); }
+    try { await db.remove('path_tasks', [...ids]); } catch (e) { fail(e); }
   }
 
   async function restore(copies) {
@@ -357,7 +400,7 @@ export function mountPaths(root, initialOpen = null) {
     tasks.push(...back);
     render();
     const rows = back.map(({ created_at, updated_at, user_id, ...r }) => r);
-    try { await api.db.insert('path_tasks', rows); } catch (e) { fail(e); }
+    try { await db.insert('path_tasks', rows); } catch (e) { fail(e); }
   }
 
   /* ---------------- Mutations ---------------- */
@@ -367,20 +410,20 @@ export function mountPaths(root, initialOpen = null) {
     const t = { id: uid(), column_id: colId, title: text, note: '', done: false, position: posBetween(list.at(-1)?.position ?? null, null) };
     tasks.push(t);
     render();
-    try { await api.db.insert('path_tasks', t); } catch (e) { fail(e); }
+    try { await db.insert('path_tasks', t); } catch (e) { fail(e); }
   }
 
   async function patchTask(t, patch) {
     Object.assign(t, patch);
     render();
-    try { await api.db.update('path_tasks', t.id, patch); } catch (e) { fail(e); }
+    try { await db.update('path_tasks', t.id, patch); } catch (e) { fail(e); }
   }
 
   async function deleteTask(t) {
     tasks = tasks.filter((x) => x.id !== t.id);
     picked.delete(t.id);
     render();
-    try { await api.db.remove('path_tasks', t.id); } catch (e) { fail(e); }
+    try { await db.remove('path_tasks', t.id); } catch (e) { fail(e); }
   }
 
   async function duplicateTask(t) {
@@ -390,14 +433,14 @@ export function mountPaths(root, initialOpen = null) {
     delete copy.created_at; delete copy.updated_at; delete copy.user_id;
     tasks.push(copy);
     render();
-    try { await api.db.insert('path_tasks', copy); } catch (e) { fail(e); }
+    try { await db.insert('path_tasks', copy); } catch (e) { fail(e); }
   }
 
   async function moveTask(t, colId, position) {
     t.column_id = colId;
     t.position = position;
     render();
-    try { await api.db.update('path_tasks', t.id, { column_id: colId, position }); } catch (e) { fail(e); }
+    try { await db.update('path_tasks', t.id, { column_id: colId, position }); } catch (e) { fail(e); }
   }
 
   async function addColumn() {
@@ -407,7 +450,7 @@ export function mountPaths(root, initialOpen = null) {
     columns.push(col);
     render();
     el.querySelector('.pboard')?.scrollTo({ left: 1e6, behavior: 'smooth' });
-    try { await api.db.insert('path_columns', col); } catch (e) { fail(e); }
+    try { await db.insert('path_columns', col); } catch (e) { fail(e); }
   }
 
   async function renameColumn(col, name) {
@@ -416,7 +459,7 @@ export function mountPaths(root, initialOpen = null) {
     if (!name || name === col.title) { render(); return; }
     col.title = name;
     render();
-    try { await api.db.update('path_columns', col.id, { title: name }); } catch (e) { fail(e); }
+    try { await db.update('path_columns', col.id, { title: name }); } catch (e) { fail(e); }
   }
 
   async function renameTitle(name) {
@@ -432,7 +475,7 @@ export function mountPaths(root, initialOpen = null) {
     col.position = position;
     sortCols();
     render();
-    try { await api.db.update('path_columns', col.id, { position }); } catch (e) { fail(e); }
+    try { await db.update('path_columns', col.id, { position }); } catch (e) { fail(e); }
   }
 
   function shiftColumn(col, dir) {
@@ -451,7 +494,7 @@ export function mountPaths(root, initialOpen = null) {
     tasks = tasks.filter((t) => !ids.includes(t.id));
     ids.forEach((id) => picked.delete(id));
     render();
-    try { await api.db.remove('path_tasks', ids); } catch (e) { fail(e); }
+    try { await db.remove('path_tasks', ids); } catch (e) { fail(e); }
   }
 
   async function deleteColumn(col) {
@@ -465,8 +508,8 @@ export function mountPaths(root, initialOpen = null) {
     ids.forEach((id) => picked.delete(id));
     render();
     try {
-      if (ids.length) await api.db.remove('path_tasks', ids);
-      await api.db.remove('path_columns', col.id);
+      if (ids.length) await db.remove('path_tasks', ids);
+      await db.remove('path_columns', col.id);
     } catch (e) { fail(e); }
   }
 
@@ -549,13 +592,19 @@ export function mountPaths(root, initialOpen = null) {
     const act = t.dataset.act;
     const task = taskOf(t);
     const col = colOf(t);
+    if (act === 'open-ticket' && !(e.metaKey || e.ctrlKey || e.shiftKey || picked.size)) {
+      e.stopPropagation();
+      window.dispatchEvent(new CustomEvent('architect:open-ticket', { detail: { no: Number(t.dataset.no) } }));
+      return;
+    }
+    if (readOnly) return;
     // Selecting: ⌘/Ctrl-click toggles, Shift-click selects a range; once anything is selected, a click toggles.
-    if (task && (act === 'edit-title' || act === 'edit-note') && (e.metaKey || e.ctrlKey || e.shiftKey || picked.size)) {
+    if (task && (act === 'edit-title' || act === 'edit-note' || act === 'open-ticket') && (e.metaKey || e.ctrlKey || e.shiftKey || picked.size)) {
       togglePick(task, { range: e.shiftKey });
       return;
     }
     if (act === 'toggle' && task) patchTask(task, { done: !task.done });
-    else if (act === 'edit-title' && task) { editing = { id: task.id, field: 'title' }; composerFor = null; render(); }
+    else if ((act === 'edit-title' || act === 'open-ticket') && task) { editing = { id: task.id, field: 'title' }; composerFor = null; render(); }
     else if (act === 'edit-note' && task) { editing = { id: task.id, field: 'note' }; composerFor = null; render(); }
     else if (act === 'add-task' && col) { composerFor = col.id; editing = null; render(); }
     else if (act === 'new-col') addColumn();
@@ -577,19 +626,22 @@ export function mountPaths(root, initialOpen = null) {
 
   offs.push(delegate(el, 'dblclick', '[data-act="rename-col"]', (e, t) => {
     const col = colOf(t);
-    if (!col) return;
+    if (!col || readOnly) return;
     renamingCol = col.id;
     render();
   }));
 
   el.addEventListener('pointerover', (e) => { hoverCol = e.target.closest?.('[data-col]')?.dataset.col || null; });
 
+  const onActive = (e) => { active = el.contains(e.target); };
+  if (embedded) document.addEventListener('pointerdown', onActive, true);
   function onKey(e) {
     if (isTypingTarget(e.target) || document.querySelector('.dlg')) return;
+    if (embedded && (!active || readOnly || !el.isConnected)) return;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'a' && !loading) {
       e.preventDefault();
-      const col = columns.find((c) => c.id === (openCol && isMobile() ? openCol : hoverCol));
+      const col = shown().find((c) => c.id === (openCol && isMobile() ? openCol : hoverCol));
       const scope = col ? tasksOf(col.id) : ordered();
       // A second ⌘A inside a fully selected path widens to everything.
       const ids = scope.every((t) => picked.has(t.id)) ? ordered().map((t) => t.id) : scope.map((t) => t.id);
@@ -611,6 +663,7 @@ export function mountPaths(root, initialOpen = null) {
     if (picked.has(task.id) && picked.size > 1) { selectionMenu(anchor); return; }
     const others = columns.filter((c) => c.id !== task.column_id);
     menu(anchor, [
+      { label: task.private ? 'Show to others' : 'Hide from others', icon: task.private ? 'eye' : 'lock', onSelect: () => patchTask(task, { private: !task.private }) },
       { label: 'Edit task', icon: 'edit', onSelect: () => { editing = { id: task.id, field: 'title' }; render(); } },
       { label: task.note ? 'Edit note' : 'Add note', icon: 'note', onSelect: () => { editing = { id: task.id, field: 'note' }; render(); } },
       { label: task.done ? 'Mark not done' : 'Mark done', icon: 'check', onSelect: () => patchTask(task, { done: !task.done }) },
@@ -649,14 +702,18 @@ export function mountPaths(root, initialOpen = null) {
     const n = tasksOf(col.id).length;
     menu(anchor, [
       { label: 'Rename', icon: 'edit', onSelect: () => { renamingCol = col.id; render(); } },
-      { label: windowOf(col) ? 'Setpoint timer…' : 'Make setpoint…', icon: 'clock', onSelect: () => editTime(col) },
+      { label: winOf(col) ? 'Setpoint timer…' : 'Make setpoint…', icon: 'clock', onSelect: () => editTime(col) },
       { label: 'Select all', icon: 'selectAll', kbd: '⌘A', disabled: !n, onSelect: () => selectColumn(col) },
       { label: 'Move left', icon: 'chevronLeft', disabled: i === 0, onSelect: () => shiftColumn(col, -1) },
       { label: 'Move right', icon: 'chevronRight', disabled: i === columns.length - 1, onSelect: () => shiftColumn(col, 1) },
       { label: doneCount ? `Clear ${doneCount} done` : 'Clear done', icon: 'check', disabled: !doneCount, onSelect: () => clearDone(col) },
       '-',
+      embedded && opts.onDetach && !opts.only ? '-' : null,
+      embedded && opts.onDetach && !opts.only ? { label: 'Detach to canvas', icon: 'external', onSelect: () => opts.onDetach(col.id, null) } : null,
+      embedded && opts.onSnap && opts.only ? { label: 'Snap back into Path', icon: 'collapse', onSelect: () => opts.onSnap() } : null,
+      '-',
       { label: 'Delete path', icon: 'trash', danger: true, onSelect: () => deleteColumn(col) },
-    ], { align: 'end' });
+    ].filter(Boolean), { align: 'end' });
   }
 
   // Inline editors: commit on Enter / blur, cancel on Escape.
@@ -715,7 +772,7 @@ export function mountPaths(root, initialOpen = null) {
   /* ---------------- Pointer: drag tasks, drag paths, lasso (mouse / pen) ---------------- */
 
   el.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || e.pointerType === 'touch') return;
+    if (e.button !== 0 || e.pointerType === 'touch' || readOnly) return;
     if (e.target.closest('button, textarea, input')) return;
     const card = e.target.closest('.ptask:not(.is-composer):not(.is-editing)');
     if (card) {
@@ -773,7 +830,7 @@ export function mountPaths(root, initialOpen = null) {
     drag.ghost.classList.add('ptask-ghost');
     if (group.length > 1) drag.ghost.append(h('span', { class: 'ptask-ghost-count' }, String(group.length)));
     Object.assign(drag.ghost.style, { width: `${r.width}px`, left: '0px', top: '0px' });
-    drag.ph = h('div', { class: 'ptask-ph', style: { height: `${r.height}px` } });
+    drag.ph = h('div', { class: 'ptask-ph', style: { height: `${drag.card.offsetHeight}px` } });
     drag.card.after(drag.ph);
     drag.hidden = [...el.querySelectorAll('.ptask[data-task]')].filter((n) => drag.group.has(n.dataset.task));
     drag.hidden.forEach((n) => { n.style.display = 'none'; });
@@ -850,18 +907,25 @@ export function mountPaths(root, initialOpen = null) {
       d.ghost = d.colEl.cloneNode(true);
       d.ghost.classList.add('pcol-ghost');
       Object.assign(d.ghost.style, { width: `${r.width}px`, height: `${Math.min(r.height, 420)}px`, left: '0px', top: '0px' });
-      d.ph = h('div', { class: 'pcol-ph', style: { height: `${r.height}px` } });
+      d.ph = h('div', { class: 'pcol-ph', style: { height: `${d.colEl.offsetHeight}px` } });
       d.colEl.after(d.ph);
       d.colEl.style.display = 'none';
       document.body.append(d.ghost);
       document.body.classList.add('is-dragging');
     }
     d.ghost.style.transform = `translate(${e.clientX - d.dx}px, ${e.clientY - d.dy}px) rotate(-1deg)`;
+    d.lx = e.clientX; d.ly = e.clientY;
+    if (embedded) {
+      const r = el.getBoundingClientRect();
+      d.outside = e.clientX < r.left - 20 || e.clientX > r.right + 20 || e.clientY < r.top - 20 || e.clientY > r.bottom + 20;
+      d.ghost.classList.toggle('is-detaching', !!d.outside && !opts.only);
+    }
     const board = el.querySelector('.pboard');
     const cols = [...board.querySelectorAll('.pcol')].filter((c) => c !== d.colEl);
     const before = cols.find((c) => { const r = c.getBoundingClientRect(); return e.clientX < r.left + r.width / 2; });
     const target = before || board.querySelector('.pcol-new');
     if (target && d.ph.nextElementSibling !== target) board.insertBefore(d.ph, target);
+    else if (!target && board.lastElementChild !== d.ph) board.append(d.ph);
     autoScroll(e);
   }
 
@@ -884,6 +948,16 @@ export function mountPaths(root, initialOpen = null) {
     d.ph.remove();
     const col = columns.find((c) => c.id === d.id);
     if (!col) { render(); return; }
+    // Dragged out of the widget: it becomes its own object on the canvas (or snaps back home).
+    if (embedded && d.outside) {
+      if (opts.only) {
+        const under = document.elementsFromPoint(d.lx, d.ly).find((n) => n.matches?.(`.el-widget[data-wkind="path"][data-owner="${owner}"]`));
+        if (under && opts.onSnap) { opts.onSnap(); return; }
+      } else if (opts.onDetach) { opts.onDetach(col.id, { clientX: d.lx, clientY: d.ly }); return; }
+      render();
+      return;
+    }
+    if (opts.only) { render(); return; }
     const i = columns.indexOf(col);
     if (columns[i - 1] === prev && columns[i + 1] === next) { render(); return; }
     placeColumn(col, posBetween(prev?.position ?? null, next?.position ?? null));
@@ -1036,28 +1110,42 @@ export function mountPaths(root, initialOpen = null) {
   el.addEventListener('contextmenu', (e) => { if (press || e.target.closest('.ptile')) e.preventDefault(); });
 
   // Tick the setpoint timers every second without re-rendering; re-render only when a setpoint starts or ends.
-  const phases = () => columns.map((c) => stateOf(c, columns)?.phase || '').join('|');
+  const phases = () => columns.map((c) => stOf(c)?.phase || '').join('|');
   let lastPhases = '';
   const idle = () => !editing && !composerFor && !renamingCol && !renamingTitle && !drag && !colDrag && !marquee;
   const nowTimer = setInterval(() => {
     if (loading || loadError) return;
     const ph = phases();
-    if (ph !== lastPhases && idle()) { lastPhases = ph; render(); logSetpoints(columns, tasks); return; }
+    if (ph !== lastPhases && idle()) { lastPhases = ph; render(); if (!readOnly) logSetpoints(columns, tasks); return; }
     el.querySelectorAll('[data-timer]').forEach((n) => {
       const col = columns.find((c) => c.id === n.dataset.timer);
-      const st = col && stateOf(col, columns);
+      const st = col && stOf(col);
       if (st) n.textContent = clock(st.left);
     });
   }, 1000);
   // Keep the setpoint log current while a timer runs (also after every change, via render()).
-  const logTimer = setInterval(() => { if (!loading && !loadError) logSetpoints(columns, tasks); }, 30_000);
+  const logTimer = setInterval(() => { if (!loading && !loadError && !readOnly) logSetpoints(columns, tasks); }, 30_000);
   let logT = 0;
   const queueLog = () => { clearTimeout(logT); logT = setTimeout(() => logSetpoints(columns, tasks), 800); };
+
+  // Other widgets (and other people, and the API) change these paths too.
+  const idleNow = () => idle() && !picked.size && !document.querySelector('.dlg') && !pointerDown;
+  let reloadT = 0;
+  const reloadSoon = () => { clearTimeout(reloadT); reloadT = setTimeout(() => { if (idleNow()) load(); else reloadSoon(); }, 250); };
+  const onChanged = (e) => { if (e.detail?.owner === owner && e.detail.from !== instance) reloadSoon(); };
+  if (embedded) window.addEventListener('architect:paths-changed', onChanged);
+  const livePoll = embedded ? setInterval(() => { if (!document.hidden && !loading) reloadSoon(); }, readOnly ? 15_000 : 30_000) : 0;
 
   render();
   load();
 
   return {
+    setExclude(ids) {
+      const next = new Set(ids || []);
+      if ([...next].join() === [...exclude].join()) return;
+      exclude = next;
+      render();
+    },
     update(r) {
       openCol = r.id || null;
       composerFor = null; editing = null; renamingCol = null; renamingTitle = false;
@@ -1066,6 +1154,9 @@ export function mountPaths(root, initialOpen = null) {
       window.scrollTo(0, 0);
     },
     destroy() {
+      clearInterval(livePoll); clearTimeout(reloadT);
+      window.removeEventListener('architect:paths-changed', onChanged);
+      document.removeEventListener('pointerdown', onActive, true);
       mq.removeEventListener?.('change', onMq);
       clearInterval(nowTimer);
       clearInterval(logTimer);

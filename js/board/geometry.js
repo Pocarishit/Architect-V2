@@ -51,11 +51,24 @@ export function rectOf(el, byId) {
 
 /* ---------------- Connectors ---------------- */
 
+// The side whose midpoint is nearest to p, by real distance. (Comparing offsets relative to width and
+// height made wide text blocks always connect at the bottom.)
 function sideFacing(r, p) {
-  const c = center(r);
-  const dx = (p.x - c.x) / (r.w || 1), dy = (p.y - c.y) / (r.h || 1);
-  return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'r' : 'l') : (dy > 0 ? 'b' : 't');
+  let best = 'b', bd = Infinity;
+  for (const s of ['t', 'r', 'b', 'l']) {
+    const q = sidePoint(r, s);
+    const d = Math.hypot(q.x - p.x, q.y - p.y);
+    if (d < bd) { bd = d; best = s; }
+  }
+  return best;
 }
+
+/** The edge of r nearest to the pointer — where a connector was dropped. */
+export function nearestSide(r, p) {
+  const d = { t: Math.abs(p.y - r.y), b: Math.abs(r.y + r.h - p.y), l: Math.abs(p.x - r.x), r: Math.abs(r.x + r.w - p.x) };
+  return Object.entries(d).sort((a, b) => a[1] - b[1])[0][0];
+}
+export const DIR_SIDE = { n: 't', e: 'r', s: 'b', w: 'l' };
 
 function sidePoint(r, side) {
   if (side === 'r') return { x: r.x + r.w, y: r.y + r.h / 2 };
@@ -127,12 +140,15 @@ export function lineGeom(line, byId) {
   const cb = rb ? center(rb) : { x: line.b.x, y: line.b.y };
   const route = line.route || 'straight';
   let a, b, sa = null, sb = null;
+  // An end attached to a specific side (where you dropped it / the dot you dragged from) stays there.
+  const fixedA = ra && ['t', 'r', 'b', 'l'].includes(line.a.side) ? line.a.side : null;
+  const fixedB = rb && ['t', 'r', 'b', 'l'].includes(line.b.side) ? line.b.side : null;
   if (route === 'straight') {
-    a = ra ? rayPoint(ta, ra, cb) : ca;
-    b = rb ? rayPoint(tb, rb, ca) : cb;
+    a = fixedA ? sidePoint(ra, (sa = fixedA)) : ra ? rayPoint(ta, ra, fixedB ? sidePoint(rb, fixedB) : cb) : ca;
+    b = fixedB ? sidePoint(rb, (sb = fixedB)) : rb ? rayPoint(tb, rb, fixedA ? a : ca) : cb;
   } else {
-    if (ra) { sa = sideFacing(ra, cb); a = sidePoint(ra, sa); } else a = ca;
-    if (rb) { sb = sideFacing(rb, ca); b = sidePoint(rb, sb); } else b = cb;
+    if (ra) { sa = fixedA || sideFacing(ra, fixedB ? sidePoint(rb, fixedB) : cb); a = sidePoint(ra, sa); } else a = ca;
+    if (rb) { sb = fixedB || sideFacing(rb, a); b = sidePoint(rb, sb); } else b = cb;
   }
   const dx = b.x - a.x, dy = b.y - a.y;
   const horiz = Math.abs(dx) >= Math.abs(dy);

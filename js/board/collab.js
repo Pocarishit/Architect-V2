@@ -38,7 +38,7 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
 
   const ch = live.join(`board:${boardId}`, {
     presenceKey: clientId,
-    meta: { uid: me.id, name: me.username, color },
+    meta: { uid: me.id, name: me.username, color, avatar: me.avatar || null },
     onStatus: (st, detail) => { status = st; onStatus?.(st, detail); },
     onPresence,
     onMessage,
@@ -88,7 +88,7 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
   offs.push(editor.on('change', (d) => { if (!d?.remote && !d?.silent) queueOps(); }));
 
   /* ---------- outgoing cursor, selection and typing ---------- */
-  const mine = { x: null, y: null, sel: [], editing: null };
+  const mine = { x: null, y: null, sel: [], editing: null, box: null };
   let curTimer = null, lastCur = 0;
   function queueCursor() {
     if (curTimer) return;
@@ -117,6 +117,12 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
     queueCursor();
   }));
 
+  // The drag-to-select box, so others see you sweeping across things.
+  offs.push(editor.on('marquee', (r) => {
+    mine.box = r ? { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) } : null;
+    queueCursor();
+  }));
+
   let typeTimer = null, pendingType = null;
   offs.push(editor.on('typing', (t) => {
     pendingType = t;
@@ -135,7 +141,7 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
     } else if (event === 'cur') {
       const peer = peerFor(p.from);
       const moved = peer.x !== p.x || peer.y !== p.y;
-      Object.assign(peer, { x: p.x, y: p.y, sel: p.sel || [], editing: p.editing || null });
+      Object.assign(peer, { x: p.x, y: p.y, sel: p.sel || [], editing: p.editing || null, mbox: p.box || null });
       if (moved) peer.moved = Date.now();
       paintPeer(peer);
     } else if (event === 'type') {
@@ -205,9 +211,9 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
       if (!m.key || m.key === clientId) continue;
       keys.add(m.key);
       const p = peerFor(m.key);
-      p.uid = m.uid; p.name = m.name || 'Someone'; p.color = m.color || colorFor(m.uid || m.key);
+      p.uid = m.uid; p.name = m.name || 'Someone'; p.color = m.color || colorFor(m.uid || m.key); p.avatar = m.avatar || null;
     }
-    for (const [k, p] of peers) if (!keys.has(k)) { p.cursor?.remove(); p.box?.remove(); peers.delete(k); }
+    for (const [k, p] of peers) if (!keys.has(k)) { p.cursor?.remove(); p.box?.remove(); p.mq?.remove(); peers.delete(k); }
     paintPeers();
     emitPeople();
   }
@@ -216,38 +222,51 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
     // One avatar per person, even with several tabs open.
     const byUser = new Map();
     for (const p of peers.values()) if (!byUser.has(p.uid || p.key)) byUser.set(p.uid || p.key, p);
-    onPeople?.([{ key: clientId, uid: me.id, name: me.username, color, self: true }, ...[...byUser.values()].filter((p) => p.uid !== me.id)]);
+    onPeople?.([{ key: clientId, uid: me.id, name: me.username, color, avatar: me.avatar || null, self: true }, ...[...byUser.values()].filter((p) => p.uid !== me.id)]);
   }
 
   /* ---------- drawing peers ---------- */
+  // A cursor is the person's face in a bubble with a small pointer; their selection and
+  // drag-to-select box show in their colour; after a while without moving it says "idle".
   function paintPeer(p) {
     if (!p.cursor) {
+      p.face = h('span', { class: 'rc-face' });
       p.cursor = h('div', { class: 'rc' },
-        s('svg', { class: 'rc-arrow', viewBox: '0 0 16 16', width: 16, height: 16 }, s('path', { d: 'M1.5 1.5 14 7.2 8.1 8.6 5.6 14.2z' })),
+        s('svg', { class: 'rc-arrow', viewBox: '0 0 16 16', width: 14, height: 14 }, s('path', { d: 'M1.5 1.5 14 7.2 8.1 8.6 5.6 14.2z' })),
+        p.face,
         h('span', { class: 'rc-name' }));
       p.box = h('div', { class: 'rc-sels' });
-      layer.append(p.box, p.cursor);
+      p.mq = h('div', { class: 'rc-marquee', hidden: true });
+      layer.append(p.box, p.mq, p.cursor);
     }
-    p.cursor.style.setProperty('--c', p.color);
-    p.box.style.setProperty('--c', p.color);
+    for (const n of [p.cursor, p.box, p.mq]) n.style.setProperty('--c', p.color);
+    const faceKey = p.avatar || p.name;
+    if (p.face._k !== faceKey) {
+      p.face._k = faceKey;
+      p.face.replaceChildren(p.avatar ? h('img', { src: p.avatar, alt: '' }) : h('b', {}, initials(p.name)));
+    }
+    const idle = Date.now() - p.moved > IDLE_MS;
     const label = p.cursor.lastChild;
-    const text = p.editing ? `${p.name} · typing` : p.name;
+    const text = p.editing ? `${p.name} · typing` : idle ? `${p.name} · idle` : p.name;
     if (label.textContent !== text) label.textContent = text;
     const show = p.x != null && p.y != null;
     p.cursor.hidden = !show;
     if (show) { p.cursor.style.left = `${p.x}px`; p.cursor.style.top = `${p.y}px`; }
-    p.cursor.classList.toggle('is-idle', Date.now() - p.moved > IDLE_MS);
-    // Their selection, outlined in their colour.
+    p.cursor.classList.toggle('is-idle', idle);
+    const mb = p.mbox;
+    p.mq.hidden = !mb;
+    if (mb) Object.assign(p.mq.style, { left: `${mb.x}px`, top: `${mb.y}px`, width: `${mb.w}px`, height: `${mb.h}px` });
+    // Their selection, outlined in their colour (never revealing something private to them).
     p.box.replaceChildren(...(p.sel || []).map((id) => {
       const el = editor.byId.get(id);
-      if (!el) return null;
+      if (!el || editor.isHidden?.(el)) return null;
       const r = rectOf(el, editor.byId);
       return h('div', { class: ['rc-sel', p.editing === id && 'is-typing'], style: { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` } });
     }).filter(Boolean));
   }
   function paintPeers() { for (const p of peers.values()) paintPeer(p); }
   offs.push(editor.on('change', () => { if (peers.size) paintPeers(); }));
-  const idleTick = setInterval(() => { for (const p of peers.values()) p.cursor?.classList.toggle('is-idle', Date.now() - p.moved > IDLE_MS); }, 5000);
+  const idleTick = setInterval(() => { for (const p of peers.values()) if (p.cursor) paintPeer(p); }, 5000);
 
   return {
     clientId,

@@ -122,6 +122,15 @@ const P = {
   users: '<circle cx="9" cy="8.5" r="3.4"/><path d="M2.8 19.5c.8-3.4 3.2-5.2 6.2-5.2s5.4 1.8 6.2 5.2"/><path d="M15.2 5.3a3.4 3.4 0 0 1 0 6.4M17.6 14.6c1.8.7 3 2.4 3.6 4.9"/>',
   share: '<circle cx="10" cy="8.5" r="3.6"/><path d="M3.5 19.8c.8-3.6 3.3-5.5 6.5-5.5 1.5 0 2.8.4 3.9 1.1"/><path d="M18 13.5v6M15 16.5h6"/>',
   leave: '<path d="M14 4.5h4.5v15H14"/><path d="M10 8l-4 4 4 4M6 12h9"/>',
+  collapse: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
+  target: '<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="2.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  borderBox: '<rect x="4" y="4" width="16" height="16" rx="4" stroke-dasharray="3 2.6"/>',
+  borderCurve: '<path d="M6.5 6.5c4-3.5 13-2.5 13 4.5s-6 9-11 8-6-8.5-2-12.5z"/>',
+  code: '<path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>',
+  widget: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><path d="M17 13.5v7M13.5 17h7"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+  ticket: '<path d="M4 7.5A1.5 1.5 0 0 1 5.5 6h13A1.5 1.5 0 0 1 20 7.5V10a2 2 0 0 0 0 4v2.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 16.5V14a2 2 0 0 0 0-4z"/><path d="M14.5 6.5v11" stroke-dasharray="2 2"/>',
+  home: '<path d="M4 11 12 4l8 7v8.5a.5.5 0 0 1-.5.5H15v-6H9v6H4.5a.5.5 0 0 1-.5-.5z"/>',
 };
 
 export function icon(name, size = 18, opts = {}) {

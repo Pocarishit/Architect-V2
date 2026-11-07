@@ -14,11 +14,18 @@ import { TEMPLATES } from './templates.js';
 import { SWATCHES, STICKY_FILLS, swatchStyle } from './palette.js';
 import { SHAPES, rectOf } from './geometry.js';
 import { startCollab, colorFor, initials } from './collab.js';
+import { myAvatar } from '../data/profile.js';
+import { getPref, setPref, loadPrefs } from '../data/prefs.js';
 
 const SHAPE_NAMES = { rect: 'Rectangle', round: 'Rounded', ellipse: 'Ellipse', triangle: 'Triangle', diamond: 'Diamond', hexagon: 'Hexagon', parallelogram: 'Parallelogram', star: 'Star', arrowblock: 'Arrow', pill: 'Pill' };
 
-export function mountBoard(root, boardId) {
-  const page = h('div', { class: 'bp-page' });
+// opts (used by the Space):
+//   space        true for the shared canvas: no chrome, no dot grid, right-click / "/" menus instead
+//   mountWidget  builds live modules inside 'widget' objects
+//   extendMenu(items, info)  adds to the right-click menu · onReady(api)  hands the page's tools over
+export function mountBoard(root, boardId, opts = {}) {
+  const space = !!opts.space;
+  const page = h('div', { class: ['bp-page', space && 'is-world'] });
   root.append(page);
   page.append(h('div', { class: 'bp-loading' }, h('span', { class: 'dots-loader' }, h('i'), h('i'), h('i'))));
 
@@ -37,6 +44,8 @@ export function mountBoard(root, boardId) {
     }
     if (destroyed) return;
     if (!board) { showProblem('This board doesn’t exist anymore.'); return; }
+    try { await loadPrefs(); } catch {}
+    if (destroyed) return;
     page.replaceChildren();
     setup(board);
     const paths = (board.data?.elements || []).map((e) => e.path).filter(Boolean);
@@ -54,18 +63,23 @@ export function mountBoard(root, boardId) {
   function showProblem(msg) {
     page.replaceChildren(h('div', { class: 'bp-problem' },
       h('p', { class: 'empty-text' }, msg),
-      h('a', { class: 'btn', href: '#/blueprint' }, icon('back', 16), 'Back to Archives')));
+      h('a', { class: 'btn', href: '#/' }, icon('back', 16), 'Back to the Space')));
   }
 
   function setup(board) {
     document.title = `${board.name} — Architect`;
     const canvas = h('div', { class: 'bp-canvas' });
     page.append(canvas);
+    const me = api.auth.current()?.user ? { ...api.auth.current().user } : null;
     editor = new Editor(canvas, {
       elements: board.data?.elements || [],
       camera: store.get(`architect.cam.${boardId}`),
       mediaUrl: (el) => el.src || (el.path ? media.get(el.path) : null) || null,
+      me: me?.id || null,
+      mountWidget: opts.mountWidget || null,
     });
+    // Blueprints open in compact mode (smaller chrome) unless you turn it off.
+    if (!space) page.classList.toggle('is-compact', getPref('bpCompact', true) !== false);
     if (/[?&]debug\b/.test(location.search)) window.__editor = editor;
 
     /* ---------- autosave ---------- */
@@ -144,7 +158,6 @@ export function mountBoard(root, boardId) {
       try { await api.db.update('blueprints', boardId, { name }); } catch (e) { toast(friendlyError(e), { tone: 'error' }); }
     });
 
-    const me = api.auth.current()?.user || null;
     const isOwner = !board.user_id || !me || board.user_id === me.id;
     let collab = null;
     let people = 1; // everyone with access, from the share list (owner included)
@@ -157,7 +170,7 @@ export function mountBoard(root, boardId) {
     const topRedo = topBtn('redo', 'Redo · three-finger tap', () => editor.redo(), { class: 'bp-icon show-sm' });
     const top = h('div', { class: 'bp-top' },
       h('div', { class: 'bp-pill' },
-        h('a', { class: 'bp-icon', href: isOwner && board.folder_id ? `#/blueprint/${board.folder_id}` : '#/blueprint', 'aria-label': 'Back to Archives', 'data-tip': 'Archives', 'data-tip-pos': 'bottom' }, icon('back', 18)),
+        h('a', { class: 'bp-icon', href: '#/', 'aria-label': 'Back to the Space', 'data-tip': 'Space', 'data-tip-pos': 'bottom' }, icon('back', 18)),
         h('span', { class: 'bp-mark', 'aria-hidden': 'true' }, 'Blueprint'),
         title,
         status),
@@ -173,7 +186,10 @@ export function mountBoard(root, boardId) {
     page.append(top);
 
     /* ---------- live collaboration ---------- */
-    if (api.live && me) {
+    if (api.live && me) (async () => {
+      // Your face rides along with your cursor.
+      me.avatar = await Promise.race([myAvatar().catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]);
+      if (destroyed) return;
       let warned = false;
       collab = startCollab({
         editor, boardId, me, live: api.live,
@@ -195,6 +211,25 @@ export function mountBoard(root, boardId) {
       });
       cleanups.push(() => collab.stop());
       if (api.mode !== 'local') api.rpc('board_people', { b: boardId }).then((rows) => { people = rows?.length || 1; }).catch(() => {});
+    })();
+
+    // The Space also changes from outside the page (the Local API): pick that up while you're idle.
+    if (space) {
+      let lastStamp = board.updated_at || null;
+      const poll = setInterval(async () => {
+        if (document.hidden || dirty || saving || editor.g || editor.editingId) return;
+        try {
+          const row = await api.db.get('blueprints', boardId, 'updated_at');
+          if (!row || row.updated_at === lastStamp) return;
+          lastStamp = row.updated_at;
+          const full = await api.db.get('blueprints', boardId);
+          if (!full || dirty || saving || editor.g || editor.editingId) return;
+          const next = full.data?.elements || [];
+          if (JSON.stringify(next) === JSON.stringify(editor.els)) return;
+          editor.applyRemote({ up: next, order: next.map((e) => e.id) }, { replaceAll: true });
+        } catch {}
+      }, 15_000);
+      cleanups.push(() => clearInterval(poll));
     }
 
     // Avatars of everyone else on the board right now. Tap one to jump to where they are.
@@ -303,6 +338,7 @@ export function mountBoard(root, boardId) {
       lineBtn,
       penBtn,
       tbtn('frame', 'frame', 'Frame (F)', () => editor.setTool('frame')),
+      tbtn('border', 'borderBox', 'Border (B · ⇧B curve)', () => { editor.setOpt('border', 'box'); editor.setTool('border'); }),
       sep(),
       tbtn(null, 'image', 'Upload image or video (U)', () => pickFiles()),
       tbtn(null, 'video', 'Add video or embed (K)', () => openEmbed()),
@@ -686,6 +722,8 @@ export function mountBoard(root, boardId) {
         { label: 'Import into board', icon: 'upload', onSelect: () => jsonInput.click() },
         '-',
         { label: 'Clear board', icon: 'trash', danger: true, disabled: !editor.els.length, onSelect: clearBoard },
+        '-',
+        { label: 'Compact mode', icon: 'collapse', checked: page.classList.contains('is-compact'), onSelect: () => { const on = !page.classList.contains('is-compact'); page.classList.toggle('is-compact', on); setPref('bpCompact', on).catch(() => {}); } },
       ], { align: 'end' });
     }
 
@@ -709,7 +747,7 @@ export function mountBoard(root, boardId) {
         { label: 'Select all', kbd: '⌘A', onSelect: () => editor.selectAll() },
         { label: 'Zoom to fit', icon: 'fit', kbd: '⇧1', onSelect: () => editor.zoomToFit() },
       ];
-      menu(at, items);
+      menu(at, opts.extendMenu ? opts.extendMenu(items, { onElement, world, sel }) : items);
     }
 
     async function pasteAt(world) {
@@ -754,9 +792,18 @@ export function mountBoard(root, boardId) {
       if (ok) editor.setEls([]);
     }
 
+    opts.onReady?.({
+      editor, page, board,
+      collab: () => collab,
+      addFiles, addUrl, pickFiles, openEmbed, askLink, openShare, openSearch, toggleFrames, startPresent,
+      exportPdf, exportJson, importJson: () => jsonInput.click(), showShortcuts, pasteAt, clearBoard,
+      saveNow: async () => { dirty = true; await save(); },
+    });
+
     function showShortcuts() {
       const groups = [
-        ['Tools', [['V', 'Select'], ['H / Space', 'Hand (pan)'], ['N', 'Sticky note'], ['T', 'Text'], ['S · R · O', 'Shape · Rectangle · Ellipse'], ['L · A', 'Line · Arrow'], ['P · E', 'Pen · Eraser'], ['F', 'Frame'], ['U', 'Upload media'], ['K', 'Video or link']]],
+        ['Tools', [['V', 'Select'], ['H / Space', 'Hand (pan)'], ['N', 'Sticky note'], ['T', 'Text'], ['S · R · O', 'Shape · Rectangle · Ellipse'], ['L · A', 'Line · Arrow'], ['P · E', 'Pen · Eraser'], ['F', 'Frame'], ['B · ⇧B', 'Border box · curve'], ['U', 'Upload media'], ['K', 'Video or link']]],
+        ...(space ? [['Space', [['Right-click · /', 'Space menu'], ['Your keys', 'Camera points & object shortcuts']]]] : []),
         ['Edit', [['⌘Z / ⇧⌘Z', 'Undo / redo'], ['2 / 3-finger tap', 'Undo / redo (touch)'], ['⌘C · ⌘X · ⌘V', 'Copy · cut · paste'], ['⌥⌘C / ⌥⌘V', 'Copy / paste style'], ['⌘D', 'Duplicate'], ['Alt + drag', 'Duplicate while moving'], ['⌘G / ⇧⌘G', 'Group / ungroup'], ['⇧⌘L', 'Lock'], [']  [', 'Front / back'], ['Arrows', 'Nudge (⇧ = 10px)'], ['Tab / ⇧Tab', 'Next / previous item'], ['Click · Enter · F2', 'Edit text'], ['Del', 'Delete']]],
         ['Text', [['⌘B · ⌘I · ⌘U', 'Bold · italic · underline'], ['⇧⌘X', 'Strikethrough'], ['⌘K', 'Link'], ['⇧⌘. / ⇧⌘,', 'Bigger / smaller'], ['⇧⌘L · E · R', 'Align text (while typing)'], ['⇧⌘7 / ⇧⌘8', 'Numbered / bullet list'], ['⌘\\', 'Clear formatting'], ['⌘Enter · Esc', 'Finish typing']]],
         ['Arrange', [['⌥A · ⌥D', 'Align left · right'], ['⌥W · ⌥S', 'Align top · bottom'], ['⌥H · ⌥V', 'Align centre · middle'], ['⇧⌥H · ⇧⌥V', 'Distribute across · down']]],

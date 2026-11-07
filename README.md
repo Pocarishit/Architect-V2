@@ -1,15 +1,14 @@
 # Architect
 
-Personal system in black and white.
+Personal system in black and white — now one shared canvas.
 
-- **Paths** — your kanban: Morning, Afternoon, Atemporal, Futures, Cache.
-- **Themes** — Dark, Light and Blueprint (navy), from the theme button or account menu.
-- **Parasites** — shared problem board: each member checks off when they can do it; the wall breaks when everyone has (needs `supabase/nov7.sql`).
-- **Countdown** — one big dot-matrix hourglass per deadline; quiet side arrows (or ←/→, or swipe) switch between them. Share with people by username.
-- **Meter** — Completion Meter: a bar of weekly slices with achievements and an evolution note per week. Share with people by username.
-- **Tracker** — log daily effort (hours, money, outreach — your own metrics), with a streak calendar and 14-day trends.
-- **Blueprint** — an infinite planning board (stickies, text, shapes, connectors, pen, frames, images, videos, embeds), with **Archives** for folders, renaming and pinning.
-- Username + password login, everything saved to your own Supabase project.
+- **ARCHITECT SPACE** (home, `#/`) — one infinite canvas shared by everyone you invite. No tabs, no sidebars: **right-click** (or press **/**; long-press on phones) for the menu. Everything below lives on it as movable widgets.
+- **Path** — one per person (“Maveri’s Path”, “Hiru’s Path”): your setpoint kanban. Pull a column out onto the canvas and snap it back. Write `#12` in a task to link ticket #012.
+- **Tracker & Weekly** — a calendar where a day turns red only after 3 logged attempts on the Ticket board (click a day to see them), and 8 squares = 8 weeks toward the next environment, each with its achievements.
+- **Ticket board** — problems reverse-engineered from the week’s achievements: chat, files, attempts (failed / partly / worked), red badges for unread messages.
+- **Blueprints** — deep boards with the dotted grid. Select things in the Space → **Convert to Blueprint** to collapse them into a portal.
+- Privacy toggle, camera points, object shortcuts, faces on cursors, custom widgets, and a **Local API** (personal tokens + custom CSS / JS with safe mode — see `API.md`).
+- Themes: Dark, Light, Blueprint. Username + password login, everything saved to your own Supabase project.
 
 No build step and no dependencies: plain HTML, CSS and JavaScript modules.
 
@@ -18,7 +17,7 @@ No build step and no dependencies: plain HTML, CSS and JavaScript modules.
 ## 1. Set up Supabase (about 5 minutes)
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. **SQL Editor → New query** → paste all of `supabase/schema.sql` → **Run**. (Already set up? Run it again — it adds the Tracker tables and keeps your data.)
+2. **SQL Editor → New query** → paste and **Run** each file in `supabase/`, in this order: `schema.sql`, `collab.sql`, `accountability.sql`, `nov7.sql`, `space.sql`. All are safe to run again and keep your data.
    This creates the tables, row-level security (each user only sees their own rows) and a private `architect-media` storage bucket.
 3. **Authentication → Sign In / Providers → Email** → turn **Confirm email** **off** → Save.
    Usernames are stored as `username@architect.local`; no email is ever sent, so confirmation must be off.
@@ -53,6 +52,15 @@ Or from the folder: `npx vercel`. Routing uses `#/…` URLs, so no rewrites are 
 
 ## Using it
 
+**The Space**
+- Right-click empty canvas or press `/` → add notes, text, shapes, connectors, drawings, borders (box or smooth curve — clicking inside a border doesn’t select it), frames, media, and widgets. Also: camera points, invite, settings & API, show toolbar, theme, sign out.
+- Drag a widget by its header; everything inside a widget works like a normal page (scroll, type, click).
+- Right-click an object → **Hide from others** (only you see it; dashed outline + lock), **Assign shortcut…** (press it anywhere to fly to the object or open the blueprint), **Convert to Blueprint…**.
+- **Save this view…** stores a camera point with a key (Alt+1…9 by default); manage them in **Camera points…**.
+- Invite people from **Invite…** — anyone in the Space can invite by username. Their Path appears the first time they open it.
+- Path tasks: `···` → **Hide from others** keeps a single task private. Paths of more than 10 tasks scroll inside.
+- Note: hiding a canvas object hides it in everyone else’s app; the object is still stored in the shared board. Private Path tasks are private in the database.
+
 **Paths**
 - `+` or **Add task**, type, `Enter` to add another, `Esc` to stop.
 - Click a task to edit it; `···` for note, duplicate, move, delete.
@@ -73,12 +81,9 @@ Or from the folder: `npx vercel`. Routing uses `#/…` URLs, so no rewrites are 
 - Frames become slides: **Present** (top right) walks through them with the arrow keys.
 - `···` → Export as PDF (`⌘/Ctrl+P`, whole board on one page — pick “Save as PDF”), or Export / Import as JSON.
 
-**Tracker**
-- Pick a day, enter your numbers (± steps them). Rings fill toward each metric's daily goal; a solid day means every goal was hit; a small dot means you beat the day before.
-- Streak = days in a row with anything logged. The flame shows it on this week; a check marks a full week.
-- **Metrics** edits names, units and daily goals.
-- **Partners** (needs Supabase + `supabase/accountability.sql`): add someone by username to share your tracker with them, read-only. You see theirs once they add you. The Accountability card shows each partner's day and streak; open theirs to comment on any day. Comments on your days show under each day.
-- Boards save automatically (status dot next to the name).
+**Tracker & Weekly**
+- Tracker: switch people with the faces on top. A day fills red at 3+ attempts with a result; 1–2 attempts show a partial ring. Click any day for the attempts behind it.
+- Weekly: 8 squares from the start date you pick; the current week has a red outline. Click a week to add / tick achievements, or turn one into a ticket.
 
 ## Notes
 
@@ -101,6 +106,8 @@ supabase/schema.sql   tables, security policies, storage bucket
 css/                  base tokens, app views, board canvas
 js/main.js            boot + routing
 js/data/              Supabase REST client, local-mode backend
-js/views/             login, shell, Paths, Archives
-js/board/             Blueprint editor (canvas engine, rendering, toolbars, templates)
+js/views/             login, shell, Space, Paths, Ticket board, Archives, Settings
+js/space/             Space widgets (Path, Tracker & Weekly, Ticket board, Blueprints, portals, custom)
+js/board/             canvas engine (rendering, toolbars, live collaboration)
+API.md                the Local API
 ```

@@ -32,10 +32,12 @@ export function mountArchive(root, folderId) {
     try {
       const [f, b] = await Promise.all([
         api.db.select('archive_folders', { order: 'name.asc' }),
-        api.db.select('blueprints', { columns: BOARD_COLS, order: 'updated_at.desc' }),
+        // Spaces are boards too, but they live at #/ — keep them out of the Archives.
+        api.db.select('blueprints', { columns: `${BOARD_COLS},kind`, order: 'updated_at.desc' })
+          .catch(() => api.db.select('blueprints', { columns: BOARD_COLS, order: 'updated_at.desc' })),
       ]);
       folders = f;
-      boards = b;
+      boards = b.filter((x) => x.kind !== 'space');
       loadError = null;
       if (api.mode !== 'local') await loadSharing();
       cache = { folders, boards, owners, sharedOut };

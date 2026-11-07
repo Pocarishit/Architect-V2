@@ -115,19 +115,19 @@ export function createContextBar(page, editor, { sendToPaths, present, openLink,
         colorGrid(onlySticky ? STICKY_FILLS : FILLS, cur, (c) => set({ fill: c }, ['sticky', 'shape', 'frame', 'text'])))), {}));
     }
 
-    const strokables = of('shape', 'line', 'pen');
+    const strokables = of('shape', 'line', 'pen', 'border');
     if (strokables.length) {
       const cur = common(strokables, 'stroke', 'auto');
       const curW = common(strokables, 'strokeWidth', 2);
-      const curDash = common(of('shape', 'line'), 'dash', 'solid');
-      const hasDash = of('shape', 'line').length > 0;
+      const curDash = common(of('shape', 'line', 'border'), 'dash', 'solid');
+      const hasDash = of('shape', 'line', 'border').length > 0;
       items.push(btn(swatchDot(cur || 'auto', true), 'Line colour and width', (a) => popover(a, h('div', { class: 'pop' },
         h('div', { class: 'pop-label' }, 'Colour'),
-        colorGrid(of('shape').length ? [{ id: 'none', name: 'No border' }, ...SWATCHES] : SWATCHES, cur, (c) => set({ stroke: c }, ['shape', 'line', 'pen'])),
-        row('Width', optionRow([1, 2, 3, 5, 8, 12].map((w) => ({ value: w, label: String(w) })), curW, (w) => set({ strokeWidth: w }, ['shape', 'line', 'pen']))),
+        colorGrid(of('shape').length ? [{ id: 'none', name: 'No border' }, ...SWATCHES] : SWATCHES, cur, (c) => set({ stroke: c }, ['shape', 'line', 'pen', 'border'])),
+        row('Width', optionRow([1, 2, 3, 5, 8, 12].map((w) => ({ value: w, label: String(w) })), curW, (w) => set({ strokeWidth: w }, ['shape', 'line', 'pen', 'border']))),
         hasDash ? row('Style', optionRow([
           { value: 'solid', label: 'Solid', icon: 'solid' }, { value: 'dashed', label: 'Dashed', icon: 'dash' }, { value: 'dotted', label: 'Dotted', icon: 'dotted' },
-        ], curDash, (d) => set({ dash: d }, ['shape', 'line']))) : null)), {}));
+        ], curDash, (d) => set({ dash: d }, ['shape', 'line', 'border']))) : null)), {}));
     }
 
     if (texty.length) {

@@ -158,9 +158,9 @@ body.bp-busy .el.is-live .el-media { pointer-events: none; }
   font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; cursor: pointer;
 }
 
-.el-line, .el-pen { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
-.el-line .hit, .el-pen .hit { fill: none; stroke: transparent; pointer-events: stroke; cursor: pointer; }
-.el-line .vis, .el-pen .vis { pointer-events: none; }
+.el-line, .el-pen, .el-border { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
+.el-line .hit, .el-pen .hit, .el-border .hit { fill: none; stroke: transparent; pointer-events: stroke; cursor: pointer; }
+.el-line .vis, .el-pen .vis, .el-border .vis { pointer-events: none; }
 .el-line.is-selected .vis { filter: drop-shadow(0 0 calc(3px * var(--iz)) color-mix(in srgb, var(--sel) 45%, transparent)); }
 .el-pen.is-selected .vis { filter: drop-shadow(0 0 calc(2px * var(--iz)) color-mix(in srgb, var(--sel) 45%, transparent)); }
 .bp-live-svg { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
@@ -538,3 +538,32 @@ body.bp-busy .el.is-live .el-media { pointer-events: none; }
   .bp-av { width: 24px; height: 24px; font-size: 10px; }
   .bp-people .bp-av:nth-child(n+3):not(.is-more) { display: none; }
 }
+
+.el-border.is-selected .vis { filter: drop-shadow(0 0 calc(2px * var(--iz)) color-mix(in srgb, var(--sel) 55%, transparent)); }
+/* Private objects: only their owner sees them, marked with a dashed outline and a lock. */
+.el.is-private:not(.el-line):not(.el-pen):not(.el-border) { outline: 1.5px dashed color-mix(in srgb, var(--fg) 45%, transparent); outline-offset: calc(4px * var(--iz)); }
+.el.is-private:not(svg)::after {
+  content: ''; position: absolute; top: calc(-10px * var(--iz)); right: calc(-10px * var(--iz)); width: calc(20px * var(--iz)); height: calc(20px * var(--iz));
+  border-radius: 50%; background: var(--fg) center / 60% no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='12'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.2' stroke-linecap='round'%3E%3Crect x='6' y='11' width='12' height='9' rx='2'/%3E%3Cpath d='M8.5 11V8a3.5 3.5 0 0 1 7 0v3'/%3E%3C/svg%3E");
+  pointer-events: none; z-index: 3;
+}
+.el-border.is-private .vis { opacity: .6; }
+
+/* Live cursors: face bubble + pointer, selection box while dragging, idle state (.rc is already zoom-scaled) */
+.rc-face {
+  position: absolute; left: 11px; top: 11px; width: 26px; height: 26px; border-radius: 50% 50% 50% 5px;
+  display: grid; place-items: center; overflow: hidden; background: var(--c); color: #fff;
+  box-shadow: 0 0 0 2px var(--c), 0 2px 6px rgba(0, 0, 0, .3);
+  font: 700 11px/1 var(--f-mono);
+}
+.rc-face img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rc .rc-name { left: 44px; top: 15px; }
+.rc.is-idle { opacity: .5; }
+.rc.is-idle .rc-face { filter: grayscale(.7); }
+.rc-marquee {
+  position: absolute; pointer-events: none; border: calc(1px * var(--iz)) dashed var(--c);
+  background: color-mix(in srgb, var(--c) 10%, transparent); border-radius: calc(3px * var(--iz));
+}
+.rc-marquee[hidden] { display: none; }

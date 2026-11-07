@@ -17,7 +17,7 @@ const FONT = Object.fromEntries(FONTS.map((f) => [f.id, `f-${f.id}`]));
 const STICKY_PAD = 16;
 
 export function createNode(el) {
-  const node = el.type === 'line' || el.type === 'pen'
+  const node = el.type === 'line' || el.type === 'pen' || el.type === 'border'
     ? s('svg', { class: `el el-${el.type}`, 'data-eid': el.id })
     : h('div', { class: `el el-${el.type}`, 'data-eid': el.id });
   node._type = el.type;
@@ -272,7 +272,54 @@ export function updateNode(node, el, ctx) {
       node._hit.setAttribute('stroke-width', Math.max(12, sw + 10));
       break;
     }
+    case 'border': {
+      // Only the outline can be clicked — the empty inside lets you select what's within.
+      if (!node._g) {
+        node._hit = s('path', { class: 'hit' });
+        node._vis = s('path', { class: 'vis', fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+        node._g = s('g', {}, node._hit, node._vis);
+        node.append(node._g);
+      }
+      node._g.setAttribute('transform', `translate(${el.x} ${el.y})`);
+      const d = el.shape === 'curve' ? closedCurve(el.points || []) : roundRect(el.w, el.h, el.radius ?? 18);
+      if (node._d !== d) { node._d = d; node._hit.setAttribute('d', d); node._vis.setAttribute('d', d); }
+      const sw = el.strokeWidth ?? 2;
+      node._vis.setAttribute('stroke', css(el.stroke || 'auto'));
+      node._vis.setAttribute('stroke-width', sw);
+      node._vis.setAttribute('stroke-dasharray', el.dash === 'dashed' ? `${sw * 4} ${sw * 3}` : el.dash === 'dotted' ? `0 ${sw * 2.4}` : '');
+      node._hit.setAttribute('stroke-width', Math.max(14, sw + 12));
+      break;
+    }
+    case 'widget': {
+      place(node, el);
+      // Live modules (Paths, Tracker, Ticket board, Blueprint portals, custom widgets) are built by the page.
+      if (!node._ctl && ctx.mountWidget) {
+        node.replaceChildren();
+        node._ctl = ctx.mountWidget(el, node) || { update() {}, destroy() {} };
+      } else node._ctl?.update?.(el);
+      break;
+    }
     default:
       place(node, el);
   }
+}
+
+function roundRect(w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  return `M${r} 0H${w - r}Q${w} 0 ${w} ${r}V${h - r}Q${w} ${h} ${w - r} ${h}H${r}Q0 ${h} 0 ${h - r}V${r}Q0 0 ${r} 0Z`;
+}
+
+// A smooth closed loop through hand-drawn points (midpoint quadratic curves, wrapped around).
+function closedCurve(pts) {
+  if (pts.length < 3) return '';
+  const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const n = pts.length;
+  const start = mid(pts[n - 1], pts[0]);
+  let d = `M${start[0]} ${start[1]}`;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], q = pts[(i + 1) % n];
+    const m = mid(p, q);
+    d += `Q${p[0]} ${p[1]} ${m[0]} ${m[1]}`;
+  }
+  return d + 'Z';
 }

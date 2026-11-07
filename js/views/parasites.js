@@ -1,4 +1,4 @@
-// Parasites: a ticket tracker for the problems a team has to break through together.
+// Ticket board (formerly Parasites): a ticket tracker for the problems a team has to break through together.
 // Open a ticket for a problem, work it like a bug: chat, log every attempt (failed / partly / worked),
 // label it and move it across the board — Open → Working on it → Testing → Solved.
 // Everyone on a ticket checks "I can do it" once they can; when all have, it's solved.
@@ -39,7 +39,10 @@ function dueText(p, now = Date.now()) {
   return { text: days ? `${days}d ${pad(hrs)}h left` : `${hrs}h ${pad(Math.floor((left % 3_600_000) / 60_000))}m left`, tone: days < 2 ? 'soon' : 'run' };
 }
 
-export function mountParasites(root, initialId = null) {
+// opts.embedded: lives inside a canvas widget — tickets open in place instead of changing the page.
+// opts.onUnread(n): how many messages from others you haven't seen yet (red badge on the widget).
+export function mountParasites(root, initialId = null, opts = {}) {
+  const embedded = !!opts.embedded;
   const session = api.auth.current();
   const meId = session?.user?.id;
   const names = new Map([[meId, session?.user?.username || 'you']]);
@@ -60,7 +63,22 @@ export function mountParasites(root, initialId = null) {
   let outcome = 'failed';
   const local = api.mode === 'local';
 
-  const el = h('div', { class: 'view parasites' });
+  const el = h('div', { class: ['view parasites', embedded && 'is-embedded'] });
+  // Last message you've seen in each ticket → red dots for anything newer from someone else.
+  const SEEN = `architect.px.seen.${meId}`;
+  let seen = store.get(SEEN, {});
+  const unreadOf = (p) => talkOf(p).filter((m) => m.user_id !== meId && m.kind !== 'event' && String(m.created_at) > String(seen[p.id] || '')).length;
+  const markSeen = (p) => {
+    const last = talkOf(p).at(-1);
+    if (!last || String(seen[p.id] || '') >= String(last.created_at)) return;
+    seen = { ...store.get(SEEN, {}), [p.id]: last.created_at };
+    store.set(SEEN, seen);
+    window.dispatchEvent(new CustomEvent('architect:tickets-seen'));
+  };
+  const reportUnread = () => opts.onUnread?.(list.reduce((n, p) => n + (p.id === openId ? 0 : unreadOf(p)), 0));
+  const onSeen = () => { seen = store.get(SEEN, {}); reportUnread(); };
+  window.addEventListener('architect:tickets-seen', onSeen);
+  let linked = { no: null, rows: [] }; // path tasks that mention the open ticket
   root.append(el);
   const fail = (e) => toast(friendlyError(e), { tone: 'error', ms: 5000 });
 
@@ -72,10 +90,12 @@ export function mountParasites(root, initialId = null) {
   const talkOf = (p) => messages.filter((m) => m.parasite_id === p.id);
   const attemptsOf = (p) => talkOf(p).filter((m) => m.kind === 'attempt');
   const allLabels = () => [...new Set(list.flatMap((p) => p.labels || []))].sort();
-  const numberOf = (p) => {
+  const noOf = (p) => {
+    if (p.no) return Number(p.no);
     const order = [...list].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
-    return `#${String(order.findIndex((x) => x.id === p.id) + 1).padStart(3, '0')}`;
+    return order.findIndex((x) => x.id === p.id) + 1;
   };
+  const numberOf = (p) => `#${String(noOf(p)).padStart(3, '0')}`;
 
   async function load() {
     try {
@@ -110,6 +130,24 @@ export function mountParasites(root, initialId = null) {
     if (chat && atBottom) chat.scrollTop = chat.scrollHeight;
     if (typing) el.querySelector('[data-draft]')?.focus();
     signMissing();
+    if (ticket) markSeen(ticket);
+    reportUnread();
+    if (ticket && linked.no !== noOf(ticket)) loadLinked(ticket);
+  }
+
+  // Path tasks whose title mentions this ticket ("#12"), from everyone in your space.
+  async function loadLinked(p) {
+    const no = noOf(p);
+    linked = { no, rows: [], loading: true };
+    try {
+      if (local) {
+        const ts = await api.db.select('path_tasks', {});
+        const re = new RegExp(`#0*${no}(?!\\d)`);
+        linked.rows = ts.filter((t) => re.test(t.title || '')).map((t) => ({ ...t, username: names.get(t.user_id) || 'you' }));
+      } else linked.rows = (await api.rpc('ticket_tasks', { ticket_no: no })) || [];
+    } catch { linked.rows = []; }
+    linked.loading = false;
+    if (openId === p.id) softRender();
   }
 
   // Signed links for attachments (private bucket), fetched in one batch.
@@ -131,13 +169,13 @@ export function mountParasites(root, initialId = null) {
   const loader = () => h('div', { class: 'empty' }, h('span', { class: 'dots-loader' }, h('i'), h('i'), h('i')));
   const errorView = () => h('div', { class: 'empty' },
     h('p', { class: 'empty-text' }, loadError),
-    h('p', { class: 'empty-text px-hint' }, 'Parasites needs its tables — run supabase/nov7.sql in the Supabase SQL editor.'),
+    h('p', { class: 'empty-text px-hint' }, 'The Ticket board needs its tables — run supabase/nov7.sql and supabase/space.sql in the Supabase SQL editor.'),
     h('button', { class: 'btn', onclick: () => { loading = true; render(); load(); } }, 'Try again'));
 
   function header() {
     return h('header', { class: 'view-head px-head' },
-      h('div', { class: 'px-head-main' },
-        h('h1', { class: 'paths-title px-title' }, 'Parasites'),
+      embedded ? h('div', { class: 'px-head-main' }, h('p', { class: 'px-sub' }, 'Problems reverse-engineered from the week’s achievements. Every logged attempt counts on the Tracker.')) : h('div', { class: 'px-head-main' },
+        h('h1', { class: 'paths-title px-title' }, 'Ticket board'),
         h('p', { class: 'px-sub' }, 'Open a ticket for anything you’re stuck behind. Work it like a bug — talk it through, log every attempt, move it along until everyone can do it.')),
       h('div', { class: 'px-head-actions' },
         h('div', { class: 'subtabs px-layout', role: 'tablist', 'aria-label': 'Layout' },
@@ -193,8 +231,9 @@ export function mountParasites(root, initialId = null) {
     const due = dueText(p);
     const tries = attemptsOf(p);
     const talk = talkOf(p).filter((m) => m.kind !== 'event');
+    const unread = unreadOf(p);
     return h('article', {
-      class: ['px-tcard', statusOf(p) === 'solved' && 'is-solved'], draggable: 'true', tabindex: '0',
+      class: ['px-tcard', statusOf(p) === 'solved' && 'is-solved', unread && 'has-unread'], draggable: 'true', tabindex: '0',
       ondragstart: (e) => { e.dataTransfer.setData('text/ticket', p.id); e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('is-dragging'); },
       ondragend: (e) => e.currentTarget.classList.remove('is-dragging'),
       onclick: () => openTicket(p.id),
@@ -208,7 +247,7 @@ export function mountParasites(root, initialId = null) {
       h('div', { class: 'px-tcard-foot' },
         h('div', { class: 'cd-avatars' }, people.slice(0, 4).map((id) => h('span', { class: ['tk-av', checked(p, id) && 'is-through'], title: `${nameOf(id)}${checked(p, id) ? ' · can do it' : ''}` }, nameOf(id).slice(0, 1).toUpperCase()))),
         h('span', { class: 'px-meta' }, icon('flask', 13), String(tries.length)),
-        h('span', { class: 'px-meta' }, icon('chat', 13), String(talk.length)),
+        h('span', { class: ['px-meta', unread && 'is-unread'] }, icon('chat', 13), String(talk.length), unread ? h('b', { class: 'px-unread', 'aria-label': `${unread} unread` }, String(unread)) : null),
         h('span', { class: 'px-meta px-meta-wall' }, `${done}/${people.length}`)));
   }
 
@@ -221,8 +260,9 @@ export function mountParasites(root, initialId = null) {
       const done = people.filter((id) => checked(p, id)).length;
       const due = dueText(p);
       const last = talkOf(p).at(-1);
-      return h('button', { class: ['px-row', statusOf(p) === 'solved' && 'is-broken'], type: 'button', onclick: () => openTicket(p.id) },
-        h('span', { class: 'px-row-no' }, numberOf(p)),
+      const unread = unreadOf(p);
+      return h('button', { class: ['px-row', statusOf(p) === 'solved' && 'is-broken', unread && 'has-unread'], type: 'button', onclick: () => openTicket(p.id) },
+        h('span', { class: 'px-row-no' }, numberOf(p), unread ? h('b', { class: 'px-unread' }, String(unread)) : null),
         h('div', { class: 'px-row-main' },
           h('span', { class: 'px-row-title' }, p.title || 'Untitled problem'),
           h('span', { class: 'px-row-last' }, last ? lastLine(last) : (p.detail || 'No messages yet'))),
@@ -246,13 +286,34 @@ export function mountParasites(root, initialId = null) {
 
   /* ---------------- A ticket ---------------- */
 
-  function openTicket(id) { go(`parasites/${id}`); }
-  function closeTicket() { go('parasites'); }
+  function openTicket(id) {
+    linked = { no: null, rows: [] };
+    if (embedded) { openId = id; draft = ''; mode = 'msg'; editingId = null; render(); return; }
+    go(`parasites/${id}`);
+  }
+  function closeTicket() {
+    if (embedded) { openId = null; editingId = null; render(); return; }
+    go('parasites');
+  }
+  // "#12" chips in path tasks open the ticket here.
+  const primary = () => !embedded || !opts.isPrimary || opts.isPrimary();
+  const onOpenTicket = (e) => {
+    if (!primary()) return;
+    const no = Number(e.detail?.no);
+    const p = list.find((x) => noOf(x) === no);
+    if (!p) { toast(loading ? 'Tickets are still loading.' : `No ticket #${String(no).padStart(3, '0')}.`); return; }
+    if (embedded) { opts.onReveal?.(); openTicket(p.id); }
+    else go(`parasites/${p.id}`);
+  };
+  window.addEventListener('architect:open-ticket', onOpenTicket);
+  // A weekly achievement turned into a problem to break.
+  const onNewTicket = (e) => { if (primary()) { opts.onReveal?.(); edit(null, e.detail || {}); } };
+  window.addEventListener('architect:new-ticket', onNewTicket);
 
   function ticketView(p) {
     return h('div', { class: 'px-ticket' },
       h('div', { class: 'px-ticket-bar' },
-        h('button', { class: 'pback', type: 'button', onclick: closeTicket }, icon('back', 16), 'Parasites'),
+        h('button', { class: 'pback', type: 'button', onclick: closeTicket }, icon('back', 16), 'Ticket board'),
         h('span', { class: 'px-ticket-no' }, numberOf(p))),
       h('div', { class: 'px-ticket-grid' },
         h('div', { class: 'px-ticket-info' }, infoCard(p)),
@@ -304,7 +365,22 @@ export function mountParasites(root, initialId = null) {
               h('i', {}, ok ? icon('check', 11, { weight: 2.8 }) : null), ok ? 'Can do it' : 'I can do it')
             : h('span', { class: ['px-state', ok && 'is-ok'] }, ok ? 'Can do it' : 'Not yet'));
       })),
-      h('button', { class: 'btn sm px-add-member', type: 'button', onclick: () => addMember(p) }, icon('users', 14), h('span', {}, 'Add member')));
+      !people.includes(meId) && !local
+        ? h('button', { class: 'btn btn-primary sm px-add-member', type: 'button', onclick: () => addByName(p, session?.user?.username) }, icon('plus', 14), h('span', {}, 'Join this ticket'))
+        : null,
+      h('button', { class: 'btn sm px-add-member', type: 'button', onclick: () => addMember(p) }, icon('users', 14), h('span', {}, 'Add member')),
+      linkedView(p));
+  }
+
+  function linkedView(p) {
+    const rows = linked.no === noOf(p) ? linked.rows : [];
+    return h('div', { class: 'px-linked' },
+      h('span', { class: 'tk-stat-label' }, 'Linked tasks'),
+      rows.length ? h('ul', {}, rows.map((t) => h('li', { class: t.done ? 'is-done' : null },
+        h('i', { class: 'px-linked-check' }, t.done ? icon('check', 10, { weight: 2.6 }) : null),
+        h('span', { class: 'px-linked-title' }, t.title),
+        h('span', { class: 'px-linked-who' }, t.user_id === meId ? 'You' : (t.username || nameOf(t.user_id))))))
+        : h('p', { class: 'px-hint' }, linked.loading ? 'Looking…' : `Write ${numberOf(p)} in a Path task to link it here.`));
   }
 
   function chatPanel(p) {
@@ -503,6 +579,7 @@ export function mountParasites(root, initialId = null) {
     draft = '';
     try {
       await post(p, attempt ? { kind: 'attempt', outcome, body, files } : { body, files });
+      if (attempt) window.dispatchEvent(new CustomEvent('architect:attempt-logged'));
       const list = el.querySelector('.px-chat-list');
       if (list) list.scrollTop = list.scrollHeight;
       // Something worked: time to test it.
@@ -559,9 +636,9 @@ export function mountParasites(root, initialId = null) {
     } catch (e) { p.checks = before; render(); fail(e); }
   }
 
-  async function edit(p) {
-    const title = h('input', { class: 'input', value: p?.title || '', maxlength: 120, placeholder: 'e.g. Can’t finish and publish a video on my own', 'aria-label': 'Problem' });
-    const detail = h('textarea', { class: 'input', rows: 3, maxlength: 1000, placeholder: 'What “solved” looks like — e.g. you can actually do it, not just follow along.', value: p?.detail || '', 'aria-label': 'Solved when' });
+  async function edit(p, prefill = {}) {
+    const title = h('input', { class: 'input', value: p?.title || prefill.title || '', maxlength: 120, placeholder: 'e.g. Can’t finish and publish a video on my own', 'aria-label': 'Problem' });
+    const detail = h('textarea', { class: 'input', rows: 3, maxlength: 1000, placeholder: 'What “solved” looks like — e.g. you can actually do it, not just follow along.', value: p?.detail || prefill.detail || '', 'aria-label': 'Solved when' });
     const deadline = h('input', { class: 'input', type: 'date', value: p?.deadline ? String(p.deadline).slice(0, 10) : '', 'aria-label': 'Deadline' });
     const labels = h('input', { class: 'input', value: (p?.labels || []).join(', '), placeholder: 'e.g. editing, scripting', 'aria-label': 'Labels', autocapitalize: 'none' });
     const who = p ? null : h('input', { class: 'input', placeholder: local ? 'Needs Supabase sync' : 'Usernames, comma separated', disabled: local, autocapitalize: 'none', spellcheck: false, 'aria-label': 'Members' });
@@ -591,6 +668,7 @@ export function mountParasites(root, initialId = null) {
         await api.db.update('parasites', p.id, body);
       } else {
         const row = { id: uid(), ...body, status: 'open', members: [], checks: {} };
+        if (local) row.no = list.reduce((m, x) => Math.max(m, noOf(x)), 0) + 1;
         const made = await api.db.insert('parasites', row);
         const item = { ...row, user_id: meId, created_at: new Date().toISOString(), ...(made || {}) };
         list = [item, ...list];
@@ -660,14 +738,18 @@ export function mountParasites(root, initialId = null) {
     } catch {}
   }, 5000);
   const poll = setInterval(() => {
-    if (openId || document.hidden || loading || document.querySelector('.dlg') || selecting()) return;
+    if ((openId && !embedded) || document.hidden || loading || document.querySelector('.dlg') || selecting()) return;
     load();
   }, 30_000);
 
   return {
-    update(r) { openId = r.id || null; draft = ''; mode = 'msg'; editingId = null; pending = []; render(); window.scrollTo(0, 0); },
+    open(id) { openTicket(id); },
+    update(r) { openId = r.id || null; linked = { no: null, rows: [] }; draft = ''; mode = 'msg'; editingId = null; pending = []; render(); window.scrollTo(0, 0); },
     destroy() {
       clearInterval(poll); clearInterval(chatPoll);
+      window.removeEventListener('architect:open-ticket', onOpenTicket);
+      window.removeEventListener('architect:new-ticket', onNewTicket);
+      window.removeEventListener('architect:tickets-seen', onSeen);
       document.removeEventListener('selectionchange', onSelChange);
       pending.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
       el.remove();

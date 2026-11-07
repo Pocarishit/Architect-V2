@@ -159,11 +159,12 @@ begin
   update public.api_tokens set last_used_at = now()
    where token_hash = encode(digest(convert_to(token, 'UTF8'), 'sha256'), 'hex');
 
-  -- Your Space: the one the app last opened for you, else one you were invited to, else your own.
+  -- Your Space: one you were invited to (the app's last pick first), else your own.
   select b.id into space_id from public.blueprints b
    where b.kind = 'space' and (b.user_id = me or exists (select 1 from public.blueprint_members m where m.board_id = b.id and m.user_id = me))
-   order by (b.id::text = (select p.data->>'spaceId' from public.architect_prefs p where p.user_id = me limit 1)) desc nulls last,
-            (b.user_id = me) asc, b.created_at limit 1;
+   order by (b.user_id = me) asc,
+            (b.id::text = (select p.data->>'spaceId' from public.architect_prefs p where p.user_id = me limit 1)) desc nulls last,
+            b.created_at limit 1;
 
   case action
   when 'whoami' then

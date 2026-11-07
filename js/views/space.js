@@ -58,7 +58,11 @@ export function mountSpace(root) {
       throw err;
     }
     const saved = getPref('spaceId', null);
-    const pick = rows.find((r) => r.id === saved) || rows.find((r) => r.user_id !== me.id) || rows[0];
+    // Once someone invites you, their Space wins over the solo one you may have started.
+    const savedRow = rows.find((r) => r.id === saved);
+    const invited = rows.find((r) => r.user_id !== me.id);
+    const pick = (savedRow && savedRow.user_id !== me.id ? savedRow : invited) || savedRow || rows[0];
+    if (pick && savedRow && pick.id !== savedRow.id) setTimeout(() => toast('You joined a shared Space.', { ms: 3500 }), 1200);
     if (pick) { if (pick.id !== saved) setPref('spaceId', pick.id).catch(() => {}); return pick.id; }
     const id = uid();
     await api.db.insert('blueprints', { id, name: 'Architect Space', kind: 'space', folder_id: null, pinned: false, data: { v: 1, elements: starter() }, preview: [] });

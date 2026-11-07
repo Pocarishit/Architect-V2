@@ -11,6 +11,9 @@ import { sanitize, hasRichMarkup } from './richtext.js';
 
 export const CLIP_MARK = 'ARCHITECT/BLUEPRINT/1\n';
 const MIN_Z = 0.05;
+// CSS zoom with standard (Chrome 128+ / Firefox 126+ / Safari) semantics.
+const CHROME = Number((navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1]) || 0;
+const ZOOM_OK = typeof CSS !== 'undefined' && !!CSS.supports?.('zoom', '2') && (!CHROME || CHROME >= 128);
 const MAX_Z = 8;
 
 const DEFAULTS = {
@@ -158,8 +161,15 @@ export class Editor {
     // While the view moves, promote the board to its own layer; drop it after so text re-sharpens.
     if (!this._moving) { this._moving = true; this.vp.classList.add('is-moving'); }
     clearTimeout(this._movingT);
-    this._movingT = setTimeout(() => { this._moving = false; this.vp.classList.remove('is-moving'); }, 160);
-    this.world.style.transform = `translate(${x}px, ${y}px) scale(${z})`;
+    this._movingT = setTimeout(() => { this._moving = false; this.vp.classList.remove('is-moving'); this.settleCamera(); }, 160);
+    if (this._zz === z) {
+      // Panning at a settled zoom: just slide the already-sharp board.
+      this.world.style.transform = `translate(${x / z}px, ${y / z}px)`;
+    } else {
+      this._zz = null;
+      this.world.style.zoom = '';
+      this.world.style.transform = `translate(${x}px, ${y}px) scale(${z})`;
+    }
     this.vp.style.setProperty('--iz', String(1 / z));
     let step = 24 * z;
     while (step < 14) step *= 4;
@@ -172,6 +182,18 @@ export class Editor {
     this.vp.classList.toggle('no-grid', !this.prefs.grid);
     if (this._lastZ !== z) { this._lastZ = z; this.renderOverlay(); }
     this.emit('camera', this.cam);
+  }
+
+  // Once the view stops, re-lay the board out at the real zoom (CSS zoom) instead of scaling a bitmap:
+  // text, borders and widgets render natively sharp at any zoom. Translation snaps to device pixels.
+  settleCamera() {
+    if (!ZOOM_OK || this._zz === this.cam.z) return;
+    const { x, y, z } = this.cam;
+    const dpr = window.devicePixelRatio || 1;
+    const rx = Math.round(x * dpr) / dpr, ry = Math.round(y * dpr) / dpr;
+    this.world.style.zoom = String(z);
+    this.world.style.transform = `translate(${rx / z}px, ${ry / z}px)`;
+    this._zz = z;
   }
 
   setCamera(c, { animate = false } = {}) {

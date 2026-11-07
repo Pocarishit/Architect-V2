@@ -251,3 +251,30 @@ alter table public.parasites add column if not exists labels text[] not null def
 update public.parasites set status = 'solved' where broken_at is not null and status = 'open';
 alter table public.parasite_messages add column if not exists kind text not null default 'msg';   -- msg | attempt | event
 alter table public.parasite_messages add column if not exists outcome text;                         -- failed | partial | worked
+
+-- ---------- Ticket chat: edit your messages, attach files ----------
+alter table public.parasite_messages add column if not exists edited_at timestamptz;
+alter table public.parasite_messages add column if not exists files jsonb not null default '[]'::jsonb; -- [{ path, name, size, type }]
+alter table public.parasite_messages drop constraint if exists parasite_messages_body_check;
+alter table public.parasite_messages add constraint parasite_messages_body_check check (char_length(body) <= 2000);
+
+drop policy if exists "parasite messages: edit own" on public.parasite_messages;
+create policy "parasite messages: edit own" on public.parasite_messages
+  for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+grant update on table public.parasite_messages to authenticated;
+
+-- Files attached in a ticket live in the uploader's folder; teammates on any shared ticket can read them.
+create or replace function public.shares_parasite_with(other text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.parasites p
+    where (p.user_id = auth.uid() or auth.uid() = any (p.members))
+      and (p.user_id::text = other or other = any (select m::text from unnest(p.members) m))
+  );
+$$;
+grant execute on function public.shares_parasite_with(text) to authenticated;
+
+drop policy if exists "architect: ticket members read files" on storage.objects;
+create policy "architect: ticket members read files" on storage.objects
+  for select to authenticated
+  using (bucket_id = 'architect-media' and public.shares_parasite_with((storage.foldername(name))[1]));

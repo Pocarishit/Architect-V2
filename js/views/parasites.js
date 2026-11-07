@@ -52,6 +52,11 @@ export function mountParasites(root, initialId = null) {
   let openId = initialId;      // ticket on screen (null = overview)
   let draft = '';
   let mode = 'msg';            // composer: 'msg' or 'attempt'
+  let pending = [];            // files waiting to be sent: [{ id, file, preview }]
+  let uploading = false;
+  let editingId = null;        // message being edited
+  const signed = new Map();    // storage path → signed URL
+  let dirty = false;           // a redraw is waiting for you to finish selecting text
   let outcome = 'failed';
   const local = api.mode === 'local';
 
@@ -89,7 +94,12 @@ export function mountParasites(root, initialId = null) {
 
   /* ---------------- Render ---------------- */
 
+  // True while you have text highlighted in this view — redrawing then would clear it.
+  const selecting = () => { const sel = window.getSelection?.(); return !!sel && !sel.isCollapsed && el.contains(sel.anchorNode); };
+  const softRender = () => { if (selecting() || editingId) dirty = true; else render(); };
+
   function render() {
+    dirty = false;
     const ticket = openId && list.find((p) => p.id === openId);
     const keep = el.querySelector('.px-chat-list');
     const atBottom = !keep || keep.scrollHeight - keep.scrollTop - keep.clientHeight < 40;
@@ -99,7 +109,24 @@ export function mountParasites(root, initialId = null) {
     const chat = el.querySelector('.px-chat-list');
     if (chat && atBottom) chat.scrollTop = chat.scrollHeight;
     if (typing) el.querySelector('[data-draft]')?.focus();
+    signMissing();
   }
+
+  // Signed links for attachments (private bucket), fetched in one batch.
+  let signing = false;
+  async function signMissing() {
+    if (signing) return;
+    const paths = messages.flatMap((m) => (m.files || []).map((f) => f.path)).filter((x) => x && !signed.has(x));
+    if (!paths.length) return;
+    signing = true;
+    try {
+      const map = await api.media.sign(paths);
+      for (const x of paths) signed.set(x, map[x] || null);
+      softRender();
+    } catch {} finally { signing = false; }
+  }
+  document.addEventListener('selectionchange', onSelChange);
+  function onSelChange() { if (dirty && !selecting() && !editingId) render(); }
 
   const loader = () => h('div', { class: 'empty' }, h('span', { class: 'dots-loader' }, h('i'), h('i'), h('i')));
   const errorView = () => h('div', { class: 'empty' },
@@ -291,7 +318,13 @@ export function mountParasites(root, initialId = null) {
       onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(p); } },
     });
     let lastDay = '';
-    return h('section', { class: 'px-chat', 'aria-label': 'Ticket chat' },
+    return h('section', {
+      class: 'px-chat', 'aria-label': 'Ticket chat',
+      onpaste: (e) => { const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addFiles(files); } },
+      ondragover: (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); e.currentTarget.classList.add('is-drop'); } },
+      ondragleave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('is-drop'); },
+      ondrop: (e) => { e.currentTarget.classList.remove('is-drop'); if (e.dataTransfer?.files?.length) { e.preventDefault(); addFiles([...e.dataTransfer.files]); } },
+    },
       h('header', { class: 'px-chat-head' },
         h('span', { class: 'tk-stat-label' }, 'Thread'),
         h('span', { class: 'px-chat-n' }, talk.length ? String(talk.length) : '')),
@@ -314,33 +347,111 @@ export function mountParasites(root, initialId = null) {
               class: ['px-outcome', `is-${o.id}`, outcome === o.id && 'is-on'], type: 'button', role: 'radio', 'aria-checked': String(outcome === o.id),
               onclick: () => { outcome = o.id; render(); el.querySelector('[data-draft]')?.focus(); },
             }, o.label))) : null),
-        h('div', { class: 'px-chat-compose' }, input,
-          h('button', { class: 'icon-btn tk-talk-send', type: 'button', 'aria-label': 'Send', onclick: () => send(p) }, icon('arrow', 16)))));
+        pending.length ? h('div', { class: 'px-pending' }, pending.map((f) => h('span', { class: 'px-pending-item' },
+          f.preview ? h('img', { src: f.preview, alt: '' }) : icon('file', 14),
+          h('span', { class: 'px-file-name' }, f.file.name),
+          h('button', { type: 'button', 'aria-label': `Remove ${f.file.name}`, onclick: () => dropPending(f.id) }, icon('close', 11))))) : null,
+        h('div', { class: 'px-chat-compose' },
+          h('label', { class: 'icon-btn px-attach', title: 'Attach files', 'aria-label': 'Attach files' },
+            icon('paperclip', 17),
+            h('input', { type: 'file', multiple: true, hidden: true, onchange: (e) => { addFiles([...e.target.files]); e.target.value = ''; } })),
+          input,
+          h('button', { class: ['icon-btn', 'tk-talk-send', uploading && 'is-busy'], type: 'button', 'aria-label': 'Send', disabled: uploading, onclick: () => send(p) },
+            uploading ? h('span', { class: 'dots-loader sm' }, h('i'), h('i'), h('i')) : icon('arrow', 16)))));
   }
+
+  const fmtSize = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+  function filesView(m) {
+    const files = m.files || [];
+    if (!files.length) return null;
+    return h('div', { class: 'px-files' }, files.map((f) => {
+      const url = f.preview || signed.get(f.path);
+      if (/^image\//.test(f.type) && url) {
+        return h('a', { class: 'px-file-img', href: url, target: '_blank', rel: 'noopener', title: f.name }, h('img', { src: url, alt: f.name, loading: 'lazy' }));
+      }
+      if (/^video\//.test(f.type) && url) return h('video', { class: 'px-file-video', src: url, controls: true, preload: 'metadata' });
+      return h('a', { class: ['px-file', !url && 'is-loading'], href: url || null, target: '_blank', rel: 'noopener', download: f.name },
+        icon('file', 16), h('span', { class: 'px-file-name' }, f.name), h('span', { class: 'px-file-size' }, fmtSize(f.size || 0)));
+    }));
+  }
+
+  // Your own messages and attempts can be edited in place.
+  function editBox(m) {
+    const box = h('textarea', { class: 'input px-edit-input', rows: 2, maxlength: 2000, value: m.body, 'data-edit': m.id, 'aria-label': 'Edit message',
+      onkeydown: (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(m, e.target.value); }
+        else if (e.key === 'Escape') { e.preventDefault(); editingId = null; render(); }
+      } });
+    requestAnimationFrame(() => { box.focus(); box.setSelectionRange(box.value.length, box.value.length); box.style.height = `${box.scrollHeight}px`; });
+    return h('div', { class: 'px-edit' }, box,
+      h('div', { class: 'px-edit-actions' },
+        h('span', {}, 'Enter to save · Esc to cancel'),
+        h('button', { class: 'btn sm', type: 'button', onclick: () => { editingId = null; render(); } }, 'Cancel'),
+        h('button', { class: 'btn btn-primary sm', type: 'button', onclick: () => saveEdit(m, box.value) }, 'Save')));
+  }
+
+  const ownTools = (m) => h('div', { class: 'px-msg-tools' },
+    h('button', { class: 'icon-btn xs', type: 'button', 'aria-label': 'Edit', title: 'Edit', onclick: () => { editingId = m.id; render(); } }, icon('edit', 12)),
+    h('button', { class: 'icon-btn xs', type: 'button', 'aria-label': 'Delete', title: 'Delete', onclick: () => unsend(m) }, icon('trash', 12)));
 
   function messageView(m, no) {
     const self = m.user_id === meId;
     const time = new Date(m.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+    const stamp = m.edited_at ? `${time} · edited` : time;
+    const editing = editingId === m.id;
     if (m.kind === 'event') {
       return h('div', { class: 'px-event' }, h('b', {}, self ? 'You' : nameOf(m.user_id)), ` ${m.body} · ${time}`);
     }
     if (m.kind === 'attempt') {
       const o = OUTCOMES.find((x) => x.id === m.outcome) || OUTCOMES[0];
-      return h('div', { class: ['px-attempt', `is-${o.id}`] },
+      return h('div', { class: ['px-attempt', `is-${o.id}`, editing && 'is-editing'] },
         h('header', {},
           h('span', { class: 'px-attempt-no' }, `Attempt ${no || ''}`),
           h('span', { class: ['px-outcome-tag', `is-${o.id}`] }, o.label),
-          h('span', { class: 'px-attempt-by' }, `${self ? 'You' : nameOf(m.user_id)} · ${time}`),
-          self ? h('button', { class: 'icon-btn xs px-msg-del', type: 'button', 'aria-label': 'Delete attempt', onclick: () => unsend(m) }, icon('close', 12)) : null),
-        h('p', {}, m.body));
+          h('span', { class: 'px-attempt-by' }, `${self ? 'You' : nameOf(m.user_id)} · ${stamp}`),
+          self && !editing ? ownTools(m) : null),
+        editing ? editBox(m) : m.body ? h('p', { class: 'px-text' }, m.body) : null,
+        filesView(m));
     }
-    return h('div', { class: ['px-msg', self && 'is-me'] },
+    return h('div', { class: ['px-msg', self && 'is-me', editing && 'is-editing'] },
       self ? null : h('span', { class: 'tk-av' }, nameOf(m.user_id).slice(0, 1).toUpperCase()),
       h('div', { class: 'px-msg-body' },
         self ? null : h('b', { class: 'px-msg-name' }, nameOf(m.user_id)),
-        h('p', {}, m.body),
-        h('span', { class: 'px-msg-time' }, time)),
-      self ? h('button', { class: 'icon-btn xs px-msg-del', type: 'button', 'aria-label': 'Delete message', onclick: () => unsend(m) }, icon('close', 12)) : null);
+        editing ? editBox(m) : m.body ? h('p', { class: 'px-text' }, m.body) : null,
+        filesView(m),
+        h('span', { class: 'px-msg-time' }, stamp)),
+      self && !editing ? ownTools(m) : null);
+  }
+
+  async function saveEdit(m, text) {
+    const body = String(text || '').trim();
+    editingId = null;
+    if (!body && !(m.files || []).length) { render(); return; }
+    if (body === m.body) { render(); return; }
+    const prev = { body: m.body, edited_at: m.edited_at };
+    m.body = body;
+    m.edited_at = new Date().toISOString();
+    render();
+    try { await api.db.update('parasite_messages', m.id, { body, edited_at: m.edited_at }); }
+    catch (e) { Object.assign(m, prev); render(); fail(e); }
+  }
+
+  /* Attachments waiting in the composer */
+  function addFiles(fileList) {
+    const max = api.media?.maxBytes || 50 * 1024 * 1024;
+    for (const file of fileList) {
+      if (file.size > max) { toast(`${file.name} is over ${Math.round(max / 1048576)} MB.`, { tone: 'error' }); continue; }
+      pending.push({ id: uid(), file, preview: /^image\//.test(file.type) ? URL.createObjectURL(file) : null });
+    }
+    render();
+    el.querySelector('[data-draft]')?.focus();
+  }
+  function dropPending(id) {
+    const f = pending.find((x) => x.id === id);
+    if (f?.preview) URL.revokeObjectURL(f.preview);
+    pending = pending.filter((x) => x.id !== id);
+    render();
   }
 
   function cardMenu(anchor, p) {
@@ -368,15 +479,30 @@ export function mountParasites(root, initialId = null) {
     try { await api.db.insert('parasite_messages', full); }
     catch (e) { messages = messages.filter((m) => m.id !== full.id); render(); throw e; }
   }
-  const logEvent = (p, text) => post(p, { kind: 'event', body: text }).catch(() => {});
+  const logEvent = (p, text) => post(p, { kind: 'event', body: text, files: [] }).catch(() => {});
 
   async function send(p) {
     const body = draft.trim();
-    if (!body) return;
+    if ((!body && !pending.length) || uploading) return;
     const attempt = mode === 'attempt';
+    let files = [];
+    if (pending.length) {
+      uploading = true;
+      render();
+      try {
+        for (const f of pending) {
+          const up = await api.media.upload(f.file);
+          files.push({ path: up.path, name: f.file.name, size: f.file.size, type: f.file.type || 'application/octet-stream' });
+          if (up.url) signed.set(up.path, up.url);
+        }
+      } catch (e) { uploading = false; render(); fail(e); return; }
+      pending.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
+      pending = [];
+      uploading = false;
+    }
     draft = '';
     try {
-      await post(p, attempt ? { kind: 'attempt', outcome, body } : { body });
+      await post(p, attempt ? { kind: 'attempt', outcome, body, files } : { body, files });
       const list = el.querySelector('.px-chat-list');
       if (list) list.scrollTop = list.scrollHeight;
       // Something worked: time to test it.
@@ -385,6 +511,7 @@ export function mountParasites(root, initialId = null) {
       if (attempt) { mode = 'msg'; outcome = 'failed'; render(); }
     } catch (e) { draft = body; render(); fail(e); }
   }
+
 
   async function unsend(m) {
     messages = messages.filter((x) => x.id !== m.id);
@@ -522,21 +649,28 @@ export function mountParasites(root, initialId = null) {
         api.db.select('parasite_messages', { order: 'created_at.asc', filters: { parasite_id: openId } }),
         api.db.select('parasites', { filters: { id: openId } }),
       ]);
-      const before = talkOf({ id: openId }).length;
+      const sig = (arr) => arr.map((m) => `${m.id}:${m.edited_at || ''}`).join('|');
+      const before = sig(talkOf({ id: openId }));
       messages = [...messages.filter((m) => m.parasite_id !== openId), ...fresh];
       const p = list.find((x) => x.id === openId);
-      const changed = rows[0] && p && (rows[0].status !== p.status || JSON.stringify(rows[0].checks) !== JSON.stringify(p.checks) || JSON.stringify(rows[0].labels) !== JSON.stringify(p.labels));
+      const keys = (o) => JSON.stringify(Object.keys(o || {}).sort());
+      const changed = rows[0] && p && (rows[0].status !== p.status || keys(rows[0].checks) !== keys(p.checks) || (rows[0].labels || []).join() !== (p.labels || []).join());
       if (changed) Object.assign(p, rows[0]);
-      if (fresh.length !== before || changed) render();
+      if (sig(fresh) !== before || changed) softRender();
     } catch {}
   }, 5000);
   const poll = setInterval(() => {
-    if (openId || document.hidden || loading || document.querySelector('.dlg')) return;
+    if (openId || document.hidden || loading || document.querySelector('.dlg') || selecting()) return;
     load();
   }, 30_000);
 
   return {
-    update(r) { openId = r.id || null; draft = ''; mode = 'msg'; render(); window.scrollTo(0, 0); },
-    destroy() { clearInterval(poll); clearInterval(chatPoll); el.remove(); },
+    update(r) { openId = r.id || null; draft = ''; mode = 'msg'; editingId = null; pending = []; render(); window.scrollTo(0, 0); },
+    destroy() {
+      clearInterval(poll); clearInterval(chatPoll);
+      document.removeEventListener('selectionchange', onSelChange);
+      pending.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
+      el.remove();
+    },
   };
 }

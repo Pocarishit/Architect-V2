@@ -1272,6 +1272,19 @@ export class Editor {
     } else {
       let dx = e.deltaX * unit, dy = e.deltaY * unit;
       if (e.shiftKey && !dx) { dx = dy; dy = 0; }
+      // Axis lock: a scroll gesture moves up/down OR sideways — whichever it starts with —
+      // so trackpad drift (or circling fingers) doesn't slide the screen sideways.
+      const now = performance.now();
+      const lock = this._axis;
+      if (!lock || now - lock.at > 220) this._axis = { at: now, dir: null, sx: 0, sy: 0 };
+      const ax = this._axis;
+      ax.at = now;
+      if (!ax.dir) {
+        ax.sx += Math.abs(dx); ax.sy += Math.abs(dy);
+        if (ax.sx + ax.sy > 6) ax.dir = ax.sy >= ax.sx ? 'y' : 'x';
+      }
+      if (ax.dir === 'y') dx = 0;
+      else if (ax.dir === 'x') dy = 0;
       w.dx += dx; w.dy += dy;
     }
     if (this._whRaf) return;

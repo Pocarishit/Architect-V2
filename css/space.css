@@ -124,16 +124,18 @@ body.is-space .shell-head { display: none; }
 .tw-day.is-out { opacity: .3; }
 .tw-day.is-future { color: var(--fg-4); border-style: dashed; }
 .tw-day.is-today { border-color: var(--fg); color: var(--fg); }
-/* 1–2 attempts: a ring filling toward the 3 that count. */
-.tw-day.is-p1, .tw-day.is-p2 { border-color: transparent; }
-.tw-day.is-p1::before, .tw-day.is-p2::before {
+/* 1–4 attempts: a ring filling toward the 5 that count. */
+.tw-day.is-p1, .tw-day.is-p2, .tw-day.is-p3, .tw-day.is-p4 { border-color: transparent; }
+.tw-day.is-p1::before, .tw-day.is-p2::before, .tw-day.is-p3::before, .tw-day.is-p4::before {
   content: ''; position: absolute; inset: -1px; border-radius: 50%;
   background: conic-gradient(var(--red) var(--p), var(--line-2) 0);
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
 }
-.tw-day.is-p1 { --p: 33%; }
-.tw-day.is-p2 { --p: 66%; }
+.tw-day.is-p1 { --p: 20%; }
+.tw-day.is-p2 { --p: 40%; }
+.tw-day.is-p3 { --p: 60%; }
+.tw-day.is-p4 { --p: 80%; }
 /* 3+: tried. */
 .tw-day.is-tried { background: var(--red); border-color: var(--red); color: #fff; font-weight: 700; }
 .tw-mark { position: absolute; bottom: 14%; width: 4px; height: 4px; border-radius: 50%; background: #fff; }

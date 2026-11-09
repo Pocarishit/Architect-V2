@@ -11,7 +11,7 @@ import { api } from '../data/api.js';
 import { avatarsFor } from '../data/profile.js';
 
 const DAY = 86_400_000;
-const NEED = 3; // attempts that make a day count
+const NEED = 5; // attempts that make a day count
 const pad = (n) => String(n).padStart(2, '0');
 const keyOf = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const parseKey = (k) => { const [y, m, d] = String(k).split('-').map(Number); return new Date(y, (m || 1) - 1, d || 1); };

@@ -4,7 +4,7 @@ Personal system in black and white — now one shared canvas.
 
 - **ARCHITECT SPACE** (home, `#/`) — one infinite canvas shared by everyone you invite. No tabs, no sidebars: **right-click** (or press **/**; long-press on phones) for the menu. Everything below lives on it as movable widgets.
 - **Path** — one per person (“Maveri’s Path”, “Hiru’s Path”): your setpoint kanban. Pull a column out onto the canvas and snap it back. Write `#12` in a task to link ticket #012.
-- **Tracker & Weekly** — a calendar where a day turns red only after 3 logged attempts on the Ticket board (click a day to see them), and 8 squares = 8 weeks toward the next environment, each with its achievements.
+- **Tracker & Weekly** — a calendar where a day turns red only after 5 logged attempts on the Ticket board (click a day to see them), and 8 squares = 8 weeks toward the next environment, each with its achievements.
 - **Ticket board** — problems reverse-engineered from the week’s achievements: chat, files, attempts (failed / partly / worked), red badges for unread messages.
 - **Blueprints** — deep boards with the dotted grid. Select things in the Space → **Convert to Blueprint** to collapse them into a portal.
 - Privacy toggle, camera points, object shortcuts, faces on cursors, custom widgets, and a **Local API** (personal tokens + custom CSS / JS with safe mode — see `API.md`).
@@ -82,7 +82,7 @@ Or from the folder: `npx vercel`. Routing uses `#/…` URLs, so no rewrites are 
 - `···` → Export as PDF (`⌘/Ctrl+P`, whole board on one page — pick “Save as PDF”), or Export / Import as JSON.
 
 **Tracker & Weekly**
-- Tracker: switch people with the faces on top. A day fills red at 3+ attempts with a result; 1–2 attempts show a partial ring. Click any day for the attempts behind it.
+- Tracker: switch people with the faces on top. A day fills red at 5+ attempts with a result; 1–4 attempts show a partial ring. Click any day for the attempts behind it.
 - Weekly: 8 squares from the start date you pick; the current week has a red outline. Click a week to add / tick achievements, or turn one into a ticket.
 
 ## Notes

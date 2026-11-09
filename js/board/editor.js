@@ -53,7 +53,7 @@ export class Editor {
     this.opts = { shape: 'rect', line: 'arrow', pen: 'pen', penColor: 'auto', penWidth: 3, hlColor: '#F0B429', sticky: '#FFFFFF', ...store.get('architect.board.opts', {}) };
     this.lastStyle = store.get('architect.board.style', {});
     for (const t of Object.values(this.lastStyle)) if (t && typeof t === 'object') delete t.fontSize; // drop sizes saved by older versions
-    this.prefs = { grid: true, snap: false, wheelZoom: false, ...store.get('architect.board.prefs', {}) };
+    this.prefs = { grid: true, snap: false, ...store.get('architect.board.prefs', {}) };
     this.undoStack = [];
     this.redoStack = [];
     this.editingId = null;
@@ -729,6 +729,18 @@ export class Editor {
   /* ================= pointer gestures ================= */
   onDown(e) {
     if (!(e.target instanceof Element)) return;
+    // Moving the screen never depends on what's under the pointer:
+    // right-drag, middle-drag or Space+drag pan from anywhere — objects and widgets included.
+    if ((e.button === 1 || e.button === 2 || (this.space && e.button === 0)) && e.pointerType !== 'touch' && !e.target.closest('[contenteditable="true"]')) {
+      this.inWidget = false;
+      this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.editingId) this.finishEditing();
+      const start = { cx: e.clientX, cy: e.clientY, p: this.toWorld(e.clientX, e.clientY), pointerId: e.pointerId };
+      try { this.vp.setPointerCapture(e.pointerId); } catch {}
+      if (e.button === 2) { start.right = true; start.target = e.target; } else e.preventDefault();
+      this.beginPan(start);
+      return;
+    }
     this.inWidget = !!e.target.closest('.wg-body');
     if (this.inWidget && this.sel.size) this.clearSel();
     if (e.target.closest('[data-noptr]')) return;
@@ -1238,9 +1250,17 @@ export class Editor {
     this.applyCamera();
   }
 
+  // Scroll = move around · Ctrl/⌘ + scroll (or a trackpad pinch) = zoom.
+  // Over a chat or list that can scroll, the wheel scrolls it — and keeps doing so for a moment
+  // after it hits the end, so the canvas doesn't lurch away mid-scroll.
   onWheel(e) {
     if (e.target instanceof Element && e.target.closest('.is-live .el-media')) return;
-    if (e.target instanceof Element && !e.ctrlKey && !e.metaKey && scrollsInside(e.target, e.deltaY, e.deltaX)) return;
+    const zoom = e.ctrlKey || e.metaKey;
+    if (e.target instanceof Element && !zoom) {
+      const now = performance.now();
+      if (scrollsInside(e.target, e.deltaY, e.deltaX)) { this._innerScroll = now + 400; return; }
+      if (now < (this._innerScroll || 0) && e.target.closest('.wg-body')) { this._innerScroll = now + 400; e.preventDefault(); return; }
+    }
     e.preventDefault();
     cancelAnimationFrame(this._anim);
     // Trackpads fire many wheel events per frame: add them up and apply once per frame.
@@ -1248,9 +1268,6 @@ export class Editor {
     const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
     if (e.ctrlKey || e.metaKey) {
       w.zoom += -clamp(e.deltaY * unit, -60, 60) * 0.01;
-      w.cx = e.clientX; w.cy = e.clientY;
-    } else if (this.prefs.wheelZoom && !e.shiftKey && Math.abs(e.deltaX) < 1) {
-      w.zoom += -clamp(e.deltaY * unit, -200, 200) * 0.0016;
       w.cx = e.clientX; w.cy = e.clientY;
     } else {
       let dx = e.deltaX * unit, dy = e.deltaY * unit;

@@ -464,7 +464,6 @@ export function mountBoard(root, boardId, opts = {}) {
         '-',
         { label: 'Dot grid', icon: 'grid', kbd: 'G', checked: editor.prefs.grid, onSelect: () => editor.setPref('grid', !editor.prefs.grid) },
         { label: 'Snap to grid', icon: 'magnet', checked: editor.prefs.snap, onSelect: () => editor.setPref('snap', !editor.prefs.snap) },
-        { label: 'Scroll wheel zooms', icon: 'mouse', checked: editor.prefs.wheelZoom, onSelect: () => editor.setPref('wheelZoom', !editor.prefs.wheelZoom) },
       ], { side: 'top', align: 'end' });
     });
 
@@ -807,7 +806,7 @@ export function mountBoard(root, boardId, opts = {}) {
         ['Edit', [['⌘Z / ⇧⌘Z', 'Undo / redo'], ['2 / 3-finger tap', 'Undo / redo (touch)'], ['⌘C · ⌘X · ⌘V', 'Copy · cut · paste'], ['⌥⌘C / ⌥⌘V', 'Copy / paste style'], ['⌘D', 'Duplicate'], ['Alt + drag', 'Duplicate while moving'], ['⌘G / ⇧⌘G', 'Group / ungroup'], ['⇧⌘L', 'Lock'], [']  [', 'Front / back'], ['Arrows', 'Nudge (⇧ = 10px)'], ['Tab / ⇧Tab', 'Next / previous item'], ['Click · Enter · F2', 'Edit text'], ['Del', 'Delete']]],
         ['Text', [['⌘B · ⌘I · ⌘U', 'Bold · italic · underline'], ['⇧⌘X', 'Strikethrough'], ['⌘K', 'Link'], ['⇧⌘. / ⇧⌘,', 'Bigger / smaller'], ['⇧⌘L · E · R', 'Align text (while typing)'], ['⇧⌘7 / ⇧⌘8', 'Numbered / bullet list'], ['⌘\\', 'Clear formatting'], ['⌘Enter · Esc', 'Finish typing']]],
         ['Arrange', [['⌥A · ⌥D', 'Align left · right'], ['⌥W · ⌥S', 'Align top · bottom'], ['⌥H · ⌥V', 'Align centre · middle'], ['⇧⌥H · ⇧⌥V', 'Distribute across · down']]],
-        ['View', [['⇧1', 'Fit all'], ['⇧2', 'Fit selection'], ['⌘+ / ⌘−', 'Zoom'], ['⌘0', '100%'], ['G', 'Toggle dot grid'], ['⌘F', 'Find'], ['⌘E', 'Export JSON'], ['⌘P', 'Export PDF'], ['?', 'This list']]],
+        ['View', [['Scroll · ⇧Scroll', 'Move up/down · sideways'], ['Ctrl + scroll / pinch', 'Zoom'], ['Right-drag · middle-drag · Space+drag', 'Move the screen (works over objects too)'], ['⇧1', 'Fit all'], ['⇧2', 'Fit selection'], ['⌘+ / ⌘−', 'Zoom'], ['⌘0', '100%'], ['G', 'Toggle dot grid'], ['⌘F', 'Find'], ['⌘E', 'Export JSON'], ['⌘P', 'Export PDF'], ['?', 'This list']]],
       ];
       dialog({
         title: 'Keyboard shortcuts',

@@ -291,3 +291,6 @@ body.is-space .shell-head { display: none; }
 .px-solo .px-tcard { margin: 0; }
 .px-solo .px-tcard:hover { border-color: var(--fg-3); }
 .px-tcard.is-popped { opacity: .45; border-style: dashed; }
+
+/* The widget you clicked into takes the scroll wheel; others let it move the screen. */
+.el-widget.is-active:not(.is-selected) { border-color: var(--fg-3); }

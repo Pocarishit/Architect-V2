@@ -218,6 +218,14 @@ export class Editor {
     this._anim = requestAnimationFrame(step);
   }
 
+  // The widget you clicked into: it gets the scroll wheel until you click somewhere else.
+  setActiveWidget(node) {
+    if (this.activeWidget === node) return;
+    this.activeWidget?.classList.remove('is-active');
+    this.activeWidget = node || null;
+    this.activeWidget?.classList.add('is-active');
+  }
+
   zoomAt(cx, cy, factor) {
     const r = this.rect();
     const z = clamp(this.cam.z * factor, MIN_Z, MAX_Z);
@@ -742,6 +750,7 @@ export class Editor {
       return;
     }
     this.inWidget = !!e.target.closest('.wg-body');
+    this.setActiveWidget(this.inWidget ? e.target.closest('.el-widget') : null);
     if (this.inWidget && this.sel.size) this.clearSel();
     if (e.target.closest('[data-noptr]')) return;
     if (e.target.closest('[contenteditable="true"]')) return;
@@ -1256,10 +1265,12 @@ export class Editor {
   onWheel(e) {
     if (e.target instanceof Element && e.target.closest('.is-live .el-media')) return;
     const zoom = e.ctrlKey || e.metaKey;
-    if (e.target instanceof Element && !zoom) {
+    // A widget only takes the wheel once you've clicked into it; hovering over one still moves the screen.
+    const inActive = e.target instanceof Element && this.activeWidget && this.activeWidget.contains(e.target) && !!e.target.closest('.wg-body');
+    if (inActive && !zoom) {
       const now = performance.now();
       if (scrollsInside(e.target, e.deltaY, e.deltaX)) { this._innerScroll = now + 400; return; }
-      if (now < (this._innerScroll || 0) && e.target.closest('.wg-body')) { this._innerScroll = now + 400; e.preventDefault(); return; }
+      if (now < (this._innerScroll || 0)) { this._innerScroll = now + 400; e.preventDefault(); return; }
     }
     e.preventDefault();
     cancelAnimationFrame(this._anim);
@@ -1272,19 +1283,6 @@ export class Editor {
     } else {
       let dx = e.deltaX * unit, dy = e.deltaY * unit;
       if (e.shiftKey && !dx) { dx = dy; dy = 0; }
-      // Axis lock: a scroll gesture moves up/down OR sideways — whichever it starts with —
-      // so trackpad drift (or circling fingers) doesn't slide the screen sideways.
-      const now = performance.now();
-      const lock = this._axis;
-      if (!lock || now - lock.at > 220) this._axis = { at: now, dir: null, sx: 0, sy: 0 };
-      const ax = this._axis;
-      ax.at = now;
-      if (!ax.dir) {
-        ax.sx += Math.abs(dx); ax.sy += Math.abs(dy);
-        if (ax.sx + ax.sy > 6) ax.dir = ax.sy >= ax.sx ? 'y' : 'x';
-      }
-      if (ax.dir === 'y') dx = 0;
-      else if (ax.dir === 'x') dy = 0;
       w.dx += dx; w.dy += dy;
     }
     if (this._whRaf) return;

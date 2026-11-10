@@ -13,6 +13,7 @@ import { parseUrl, looksLikeUrl } from './embed.js';
 import { TEMPLATES } from './templates.js';
 import { SWATCHES, STICKY_FILLS, swatchStyle } from './palette.js';
 import { SHAPES, rectOf } from './geometry.js';
+import { pdfInfo, openPdfViewer, PDF_HEAD } from './pdf.js';
 import { startCollab, colorFor, initials } from './collab.js';
 import { myAvatar } from '../data/profile.js';
 import { getPref, setPref, loadPrefs } from '../data/prefs.js';
@@ -340,7 +341,7 @@ export function mountBoard(root, boardId, opts = {}) {
       tbtn('frame', 'frame', 'Frame (F)', () => editor.setTool('frame')),
       tbtn('border', 'borderBox', 'Border (B · ⇧B curve)', () => { editor.setOpt('border', 'box'); editor.setTool('border'); }),
       sep(),
-      tbtn(null, 'image', 'Upload image or video (U)', () => pickFiles()),
+      tbtn(null, 'image', 'Upload image, video or PDF (U)', () => pickFiles()),
       tbtn(null, 'video', 'Add video or embed (K)', () => openEmbed()),
       tbtn(null, 'templates', 'Templates', (a) => templateFly(a)),
       h('span', { class: 'bp-tspace' }),
@@ -473,10 +474,11 @@ export function mountBoard(root, boardId, opts = {}) {
       askLink,
       present: (id) => startPresent(id),
       openLink: (url) => window.open(url, '_blank', 'noopener'),
+      openPdf: (el) => openPdf(el),
     });
 
     /* ---------- files, links, embeds ---------- */
-    const fileInput = h('input', { type: 'file', accept: 'image/*,video/*', multiple: true, hidden: true });
+    const fileInput = h('input', { type: 'file', accept: 'image/*,video/*,application/pdf,.pdf', multiple: true, hidden: true });
     fileInput.addEventListener('change', () => {
       const files = [...fileInput.files];
       fileInput.value = '';
@@ -499,24 +501,43 @@ export function mountBoard(root, boardId, opts = {}) {
       else if (cmd === 'link') askLink();
     });
     editor.on('notice', (msg) => toast(msg, { ms: 900 }));
+    const openPdf = (el) => {
+      const url = el.src || media.get(el.path);
+      if (!url) { toast('The PDF is still loading.', { ms: 1400 }); return; }
+      openPdfViewer({ url, name: el.name, page: el.page || 1, onClose: (page) => {
+        if (editor.byId.has(el.id) && page !== (editor.byId.get(el.id).page || 1)) editor.updateEls([el.id], { page }, { commit: false });
+      } });
+    };
+    editor.on('open-pdf', openPdf);
     editor.on('contextmenu', ({ x, y, onElement, at }) => contextMenu({ x, y }, onElement, at));
 
     async function addFiles(files, at) {
-      const list = files.filter((f) => /^(image|video)\//.test(f.type));
-      if (!list.length) { toast('Only images and videos can go on a board.', { tone: 'error' }); return; }
+      const isPdf = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
+      const list = files.filter((f) => /^(image|video)\//.test(f.type) || isPdf(f));
+      if (!list.length) { toast('Only images, videos and PDFs can go on a board.', { tone: 'error' }); return; }
       let offset = 0;
       for (const f of list) {
         const limit = api.media.maxBytes || 50 * 1024 * 1024;
         if (f.size > limit) { toast(`${f.name} is larger than ${Math.round(limit / 1048576)} MB.`, { tone: 'error', ms: 5000 }); continue; }
         const t = toast(`Uploading ${f.name}`, { ms: 0 });
         try {
+          const p = { x: at.x + offset, y: at.y + offset };
+          if (isPdf(f)) {
+            const file = f.type === 'application/pdf' ? f : new File([f], f.name, { type: 'application/pdf' });
+            const info = await pdfInfo(file).catch(() => null);
+            if (!info) throw new Error('That PDF couldn’t be read.');
+            const { path, url } = await api.media.upload(file);
+            if (url) media.set(path, url);
+            const w = 420, hh = Math.round(w * (info.h / info.w)) + PDF_HEAD;
+            editor.addEls([{ id: uid(), type: 'pdf', path, name: f.name, page: 1, pages: info.pages, x: p.x - w / 2, y: p.y - hh / 2, w, h: hh }]);
+          } else {
           const kind = f.type.startsWith('video/') ? 'video' : 'image';
           const dims = await mediaSize(f, kind);
           const { path, url } = await api.media.upload(f);
           if (url) media.set(path, url);
           const fit = fitSize(dims, kind === 'video' ? 560 : 480);
-          const p = { x: at.x + offset, y: at.y + offset };
           editor.addEls([{ id: uid(), type: kind, path, name: f.name, x: p.x - fit.w / 2, y: p.y - fit.h / 2, w: fit.w, h: fit.h }]);
+          }
           offset += 32;
           t.close();
         } catch (e) {

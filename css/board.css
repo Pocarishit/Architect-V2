@@ -567,3 +567,64 @@ body.bp-busy .el.is-live .el-media { pointer-events: none; }
   background: color-mix(in srgb, var(--c) 10%, transparent); border-radius: calc(3px * var(--iz));
 }
 .rc-marquee[hidden] { display: none; }
+
+/* ---------- PDF card + reader ---------- */
+.el-pdf {
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--s1); border-radius: 10px; box-shadow: 0 0 0 1px var(--line);
+}
+.pdf-head {
+  flex: none; height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 12px;
+  border-bottom: 1px solid var(--line); color: var(--fg-2);
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+}
+.pdf-head .ic { flex: none; width: 14px; height: 14px; }
+.pdf-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.pdf-count { flex: none; color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.pdf-stage { position: relative; flex: 1; min-height: 0; background: #fff; }
+.pdf-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.pdf-img:not([src]) { visibility: hidden; }
+.pdf-stage[data-state="loading"]::after, .pdf-stage[data-state="missing"]::after, .pdf-stage[data-state="error"]::after {
+  position: absolute; inset: 0; display: grid; place-items: center; background: var(--s2);
+  color: var(--fg-3); font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+}
+.pdf-stage[data-state="loading"]::after, .pdf-stage[data-state="missing"]::after { content: 'Loading PDF'; }
+.pdf-stage[data-state="error"]::after { content: 'PDF unavailable'; }
+.pdf-nav {
+  position: absolute; left: 0; right: 0; bottom: 10px; display: flex; justify-content: center; gap: 6px;
+  opacity: 0; transition: opacity .15s; pointer-events: none;
+}
+.el-pdf.is-multi:hover .pdf-nav, .el-pdf.is-multi.is-selected .pdf-nav { opacity: 1; pointer-events: auto; }
+.pdf-flip {
+  width: 30px; height: 30px; display: grid; place-items: center; border-radius: 999px;
+  background: rgba(0, 0, 0, .78); color: #fff; border: 0; cursor: pointer; backdrop-filter: blur(6px);
+}
+.pdf-flip:hover { background: #000; }
+.pdf-flip:disabled { opacity: .3; cursor: default; }
+
+.pdfv-overlay { padding: 0; }
+.dlg.pdfv {
+  width: min(1100px, 100vw); height: 100dvh; max-height: 100dvh; padding: 0; gap: 0;
+  grid-template-rows: auto 1fr; border-radius: 0; border-width: 0 1px; overflow: hidden;
+}
+@media (min-width: 900px) { .dlg.pdfv { height: calc(100dvh - 32px); border-radius: var(--r-xl); border-width: 1px; } .pdfv-overlay { padding: 16px; } }
+.pdfv-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.pdfv-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-family: var(--f-mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+.pdfv-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdfv-tools { display: flex; align-items: center; gap: 2px; flex: none; }
+.pdfv-count, .pdfv-zoom { min-width: 58px; text-align: center; font-family: var(--f-mono); font-size: 12px; color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.pdfv-zoom { min-width: 46px; }
+.pdfv-sep { width: 1px; height: 18px; background: var(--line); margin: 0 6px; }
+.pdfv-body { overflow: auto; overscroll-behavior: contain; padding: 24px; display: flex; flex-direction: column; align-items: center; gap: 16px; background: var(--bg); }
+.pdfv-page { flex: none; position: relative; background: #fff; box-shadow: 0 0 0 1px var(--line); }
+.pdfv-page img { width: 100%; height: 100%; display: block; opacity: 0; transition: opacity .15s; }
+.pdfv-page.is-ready img { opacity: 1; }
+.pdfv-msg { margin: auto; color: var(--fg-3); font-family: var(--f-mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+.pdfv-msg a { color: var(--fg); }
+@media (max-width: 640px) {
+  .pdfv-body { padding: 12px; }
+  .pdfv-tools .pdfv-zoom, .pdfv-tools [aria-label="Zoom out"], .pdfv-tools [aria-label="Zoom in"], .pdfv-tools [aria-label="Fit width"], .pdfv-sep { display: none; }
+}

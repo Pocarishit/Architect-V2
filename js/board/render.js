@@ -4,6 +4,7 @@ import { icon } from '../core/icons.js';
 import { css, onColor } from './palette.js';
 import { lineGeom, capPath, shapePath, penPath } from './geometry.js';
 import { sanitize } from './richtext.js';
+import { updatePdfNode } from './pdf.js';
 
 export const FONTS = [
   { id: 'sans', name: 'Space Grotesk' },
@@ -154,6 +155,11 @@ export function updateNode(node, el, ctx) {
         node._img = null;
         node.replaceChildren(h('div', { class: 'el-missing' }, icon('image', 22), h('span', {}, el.path ? 'Loading image' : 'Image unavailable')));
       }
+      break;
+    }
+    case 'pdf': {
+      place(node, el);
+      updatePdfNode(node, el, safeMedia(ctx.mediaUrl(el)), ctx);
       break;
     }
     case 'video': {

@@ -1,7 +1,7 @@
 // Pure geometry for board elements. World coordinates throughout.
 
 export const TEXTUAL = new Set(['sticky', 'text', 'shape']);
-export const CONNECTABLE = new Set(['sticky', 'text', 'shape', 'image', 'video', 'embed', 'link']);
+export const CONNECTABLE = new Set(['sticky', 'text', 'shape', 'image', 'video', 'pdf', 'embed', 'link']);
 
 export const center = (r) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
 const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y });

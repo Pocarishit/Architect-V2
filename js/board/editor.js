@@ -38,6 +38,8 @@ const STYLE_KEYS = {
 
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
+const isPdf = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
+
 export class Editor {
   constructor(host, { elements = [], camera = null, mediaUrl = () => null, me = null, mountWidget = null } = {}) {
     this.host = host;
@@ -274,7 +276,7 @@ export class Editor {
   }
 
   /* ================= rendering ================= */
-  ctx() { return { byId: this.byId, editingId: this.editingId, activeId: this.activeId, mediaUrl: this.mediaUrl, mountWidget: this.mountWidget, me: this.me }; }
+  ctx() { return { byId: this.byId, editingId: this.editingId, activeId: this.activeId, mediaUrl: this.mediaUrl, mountWidget: this.mountWidget, me: this.me, pdfPage: (id, page, pages) => this.updateEls([id], pages ? { page, pages } : { page }, { commit: false }) }; }
 
   // Hidden to others, visible to self: someone else's private object doesn't exist on your screen.
   isHidden(el) { return !!el?.privateTo && el.privateTo !== this.me; }
@@ -334,7 +336,7 @@ export class Editor {
 
   refreshAll() { for (const n of this.nodes.values()) n._force = true; this.sync(); }
   refreshMedia() {
-    for (const el of this.els) if (el.type === 'image' || el.type === 'video') { const n = this.nodes.get(el.id); if (n) n._force = true; }
+    for (const el of this.els) if (el.type === 'image' || el.type === 'video' || el.type === 'pdf') { const n = this.nodes.get(el.id); if (n) n._force = true; }
     this.sync();
   }
 
@@ -377,7 +379,7 @@ export class Editor {
       if (busy && g.type !== 'resize') return;
       if (this.editingId === el.id) return;
       const dirs = el.type === 'text' ? ['nw', 'ne', 'se', 'sw', 'e', 'w']
-        : el.type === 'image' || el.type === 'video' ? ['nw', 'ne', 'se', 'sw']
+        : el.type === 'image' || el.type === 'video' || el.type === 'pdf' ? ['nw', 'ne', 'se', 'sw']
           : ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
       dirs.forEach((d) => o.append(handle(d, r)));
       // Connection dots: drag one to draw a connector, click one to add a connected item.
@@ -1026,7 +1028,7 @@ export class Editor {
     const ob = unionRects([...rects.values()]);
     const single = sel.length === 1 ? sel[0] : null;
     const corner = dir.length === 2;
-    const aspectDefault = !single || single.type === 'image' || single.type === 'video';
+    const aspectDefault = !single || single.type === 'image' || single.type === 'video' || single.type === 'pdf';
     const g = {
       type: 'resize', pointerId: start.pointerId,
       onMove: (p, e) => {
@@ -1319,6 +1321,7 @@ export class Editor {
       return;
     }
     if (el.type === 'video' || el.type === 'embed') { this.activate(el.id); return; }
+    if (el.type === 'pdf') { this.emit('open-pdf', el); return; }
     if (this.presenting || el.locked) return;
     if (TEXTUAL.has(el.type) || el.type === 'frame') this.startEditing(el.id);
     else if (el.type === 'link' && el.url) window.open(el.url, '_blank', 'noopener');
@@ -1803,7 +1806,7 @@ export class Editor {
     const dt = e.clipboardData;
     if (!dt) return;
     const at = this.pasteAnchor();
-    const files = [...dt.files].filter((f) => /^(image|video)\//.test(f.type));
+    const files = [...dt.files].filter((f) => /^(image|video)\//.test(f.type) || isPdf(f));
     if (files.length) { e.preventDefault(); this.emit('files', { files, at }); return; }
     const text = dt.getData('text/plain');
     if (!text) return;

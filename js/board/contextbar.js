@@ -60,7 +60,7 @@ function optionRow(options, current, onPick) {
   return wrap;
 }
 
-export function createContextBar(page, editor, { sendToPaths, present, openLink, askLink }) {
+export function createContextBar(page, editor, { sendToPaths, present, openLink, askLink, openPdf }) {
   const bar = h('div', { class: 'bp-ctx', role: 'toolbar', 'aria-label': 'Selection tools', hidden: true });
   page.append(bar);
 
@@ -159,6 +159,7 @@ export function createContextBar(page, editor, { sendToPaths, present, openLink,
       const live = editor.activeId === one.id;
       items.push(btn(live ? 'stop' : 'play', live ? 'Stop interacting' : 'Play / interact', () => (live ? editor.deactivate() : editor.activate(one.id)), { text: live ? 'Stop' : 'Play' }));
     }
+    if (one?.type === 'pdf' && openPdf) items.push(btn('file', 'Open PDF (double-click)', () => openPdf(one), { text: 'Open' }));
     if (one && (one.type === 'link' || one.type === 'embed') && one.url) items.push(btn('external', 'Open link in new tab', () => openLink(one.url)));
     if (one?.type === 'sticky' && sendToPaths) items.push(btn('toPaths', 'Send to Paths', (a) => sendToPaths(a, one)));
     if (one?.type === 'frame' && present) items.push(btn('present', 'Present from this frame', () => present(one.id)));

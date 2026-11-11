@@ -70,7 +70,7 @@ export async function elevenAudio(text, key = elKey()) {
   if (!r.ok) {
     let msg = `ElevenLabs error ${r.status}`;
     try { const j = await r.json(); msg = j?.detail?.message || j?.detail?.status || (typeof j?.detail === 'string' ? j.detail : msg); } catch {}
-    if (r.status === 401) msg = 'ElevenLabs rejected the API key.';
+    if (r.status === 401 && !/sk_/.test(msg)) msg = 'ElevenLabs rejected the API key — paste the one that starts with “sk_”.';
     throw new Error(msg);
   }
   return r.blob();
@@ -295,8 +295,14 @@ export function mountChat(body, el, w, { tts = false } = {}) {
         label: 'API key — saved on this device only (elevenlabs.io → Developers → API keys)',
       });
       if (k == null) { if (firstTime) toast('Using the browser voice for now — set the key from the voice ⚙.', { ms: 4000 }); return; }
-      setElKey(k.trim());
-      toast(k.trim() ? 'ElevenLabs voice on.' : 'Key removed — using the browser voice.', { ms: 2200 });
+      const key = k.trim();
+      // The dashboard lists each key's ID too; only the secret (shown once, starts with sk_) works.
+      if (key && !/^sk_\w{10,}/.test(key)) {
+        toast('That looks like the key’s ID, not the key. The real key starts with “sk_” and is shown once when you create or rotate it (ElevenLabs → Developers → API Keys).', { tone: 'error', ms: 9000 });
+        return;
+      }
+      setElKey(key);
+      toast(key ? 'ElevenLabs voice on.' : 'Key removed — using the browser voice.', { ms: 2200 });
     } finally { askKey.open = false; }
   }
   function commit() {

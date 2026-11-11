@@ -80,7 +80,7 @@ Or from the folder: `npx vercel`. Routing uses `#/…` URLs, so no rewrites are 
 - Objects **snap to each other** as you drag or resize: edges touch, edges and centres line up (red guides). Hold Ctrl/⌘ to place freely; toggle in the Space menu → **Snap objects together**.
 - Long menu sections (more than 5 actions) fold: click the section name.
 - Phones and tablets get a dock along the bottom: Menu, Path, Tickets, Tracker, Blueprints, Add.
-- **Enter** on the Space (nothing selected) → say something out loud through the Voice chat. It speaks with your ElevenLabs voice (default `G3zrXA9moYrFCgwBAvxJ`): the sender makes the audio once and everyone plays that file. Add your ElevenLabs API key from the Voice chat's ⚙ — it's kept on that device only. Without a key it uses the browser's voice.
+- **Enter** on the Space (nothing selected) → say something out loud through the Voice chat.
 - Right-click any object → **Chat about this** starts a chat connected to it (dotted line). Chats scroll on hover, resize like any object and export as Markdown, text or JSON.
 
 **Blueprint**

@@ -10,32 +10,83 @@
 // new messages above everyone else's). "… is typing" travels over the live channel only.
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { menu, toast } from '../core/ui.js';
+import { menu, toast, promptDialog } from '../core/ui.js';
 import { uid, store } from '../core/util.js';
+import { api, friendlyError } from '../data/api.js';
 
 const MAX = 400; // messages kept on the object (older ones drop off; export before if you need them all)
 
 /* ---------------- speech ---------------- */
+// ElevenLabs (default): the sender makes the audio once, saves it with the message, and everyone
+// plays that same file — one generation per message, and only the sender needs the API key.
+// The key stays on your device (localStorage), never in the shared Space or your synced prefs.
+// Browser voice is the fallback (no key, or ElevenLabs fails).
+export const EL_DEFAULT_VOICE = 'G3zrXA9moYrFCgwBAvxJ';
+const EL_MODEL = 'eleven_flash_v2_5'; // lowest latency: it plays almost as you hit Enter
 const spoken = new Set();
 export const ttsSupported = () => typeof window !== 'undefined' && 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
 const voicePref = () => store.get('architect.tts.voice', '');
 const ratePref = () => Number(store.get('architect.tts.rate', 1)) || 1;
+const elKey = () => { try { return localStorage.getItem('architect.tts.elKey') || ''; } catch { return ''; } };
+const setElKey = (k) => { try { if (k) localStorage.setItem('architect.tts.elKey', k); else localStorage.removeItem('architect.tts.elKey'); } catch {} };
+const elVoice = () => store.get('architect.tts.elVoice', EL_DEFAULT_VOICE) || EL_DEFAULT_VOICE;
+const engine = () => store.get('architect.tts.engine', 'eleven');
 
 function voices() {
   try { return window.speechSynthesis.getVoices() || []; } catch { return []; }
 }
 
+// One voice at a time: messages queue up instead of talking over each other.
+let chain = Promise.resolve();
+const enqueue = (fn) => { chain = chain.then(fn).catch((e) => console.warn('TTS', e)); return chain; };
+
+function playUrl(url) {
+  return new Promise((resolve) => {
+    const a = new Audio(url);
+    a.onended = a.onerror = () => resolve();
+    a.play().catch(() => { toast('Click anywhere once so the Voice chat can play sound.', { ms: 3500 }); resolve(); });
+  });
+}
+function browserSay(text) {
+  if (!ttsSupported()) return Promise.resolve();
+  return new Promise((resolve) => {
+    try {
+      const u = new SpeechSynthesisUtterance(String(text).slice(0, 600));
+      const v = voices().find((x) => x.name === voicePref());
+      if (v) u.voice = v;
+      u.rate = ratePref();
+      u.onend = u.onerror = () => resolve();
+      window.speechSynthesis.speak(u);
+    } catch { resolve(); }
+  });
+}
+
+export async function elevenAudio(text, key = elKey()) {
+  const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(elVoice())}?output_format=mp3_44100_128`, {
+    method: 'POST',
+    headers: { 'xi-api-key': key, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
+    body: JSON.stringify({ text: String(text).slice(0, 1000), model_id: EL_MODEL }),
+  });
+  if (!r.ok) {
+    let msg = `ElevenLabs error ${r.status}`;
+    try { const j = await r.json(); msg = j?.detail?.message || j?.detail?.status || (typeof j?.detail === 'string' ? j.detail : msg); } catch {}
+    if (r.status === 401) msg = 'ElevenLabs rejected the API key.';
+    throw new Error(msg);
+  }
+  return r.blob();
+}
+
+// Plays a message: its saved ElevenLabs audio if it has some, otherwise the browser voice.
 export function speak(m, { force = false } = {}) {
-  if (!ttsSupported() || !m?.text) return;
+  if (!m?.text) return;
   if (!force && spoken.has(m.id)) return;
   spoken.add(m.id);
-  try {
-    const u = new SpeechSynthesisUtterance(String(m.text).slice(0, 600));
-    const v = voices().find((x) => x.name === voicePref());
-    if (v) u.voice = v;
-    u.rate = ratePref();
-    window.speechSynthesis.speak(u);
-  } catch (e) { console.warn('TTS failed', e); }
+  if (m.audio) {
+    enqueue(async () => {
+      const url = (await api.media.sign([m.audio]).catch(() => ({})))[m.audio];
+      if (url) await playUrl(url); else await browserSay(m.text);
+    });
+  } else enqueue(() => browserSay(m.text));
 }
 
 /* ---------------- labels for the object a chat is about ---------------- */
@@ -89,6 +140,7 @@ export function mountChat(body, el, w, { tts = false } = {}) {
   const known = new Set((el.messages || []).map((m) => m.id));
   (el.messages || []).forEach((m) => spoken.add(m.id)); // history isn't read out on load
   const mountedAt = Date.now();
+  const waiting = new Map(); // message id → fallback timer while its ElevenLabs audio is on the way
   let retry = null;
 
   const list = h('div', { class: 'ch-list', 'data-wheel': '', role: 'log', 'aria-live': tts ? 'off' : 'polite' });
@@ -149,14 +201,28 @@ export function mountChat(body, el, w, { tts = false } = {}) {
   w.tools.append(...[muteBtn, voiceBtn, exportBtn].filter(Boolean));
 
   function voiceMenu(anchor) {
-    const vs = voices().filter((v) => /^en|^fil|^tl/i.test(v.lang)).slice(0, 14);
+    const vs = voices().filter((v) => /^en|^fil|^tl/i.test(v.lang)).slice(0, 10);
+    const test = () => {
+      if (engine() === 'eleven' && elKey()) elevenAudio('Like this.').then((b) => { const u = URL.createObjectURL(b); enqueue(() => playUrl(u)); }).catch((e) => toast(e.message, { tone: 'error' }));
+      else enqueue(() => browserSay('Like this.'));
+    };
     menu(anchor, [
-      { header: 'Voice (only for you)' },
-      { label: 'Default voice', checked: !voicePref(), onSelect: () => store.set('architect.tts.voice', '') },
-      ...vs.map((v) => ({ label: v.name, checked: voicePref() === v.name, onSelect: () => { store.set('architect.tts.voice', v.name); speak({ id: uid(), text: 'Like this.' }); } })),
+      { header: 'Your voice' },
+      { label: `ElevenLabs · ${elVoice().slice(0, 8)}…`, icon: 'speaker', checked: engine() === 'eleven', onSelect: () => { store.set('architect.tts.engine', 'eleven'); if (!elKey()) askKey(); else test(); } },
+      { label: 'Browser voice', icon: 'speaker', checked: engine() === 'browser', onSelect: () => { store.set('architect.tts.engine', 'browser'); test(); } },
       '-',
-      { header: 'Speed' },
-      ...[[0.85, 'Slow'], [1, 'Normal'], [1.2, 'Fast'], [1.45, 'Faster']].map(([r, l]) => ({ label: l, checked: ratePref() === r, onSelect: () => store.set('architect.tts.rate', r) })),
+      { header: 'ElevenLabs' },
+      { label: elKey() ? 'Change API key…' : 'Add API key…', icon: 'key', onSelect: () => askKey() },
+      { label: 'Voice ID…', icon: 'edit', onSelect: async () => {
+        const v = await promptDialog('ElevenLabs voice ID', { value: elVoice(), ok: 'Save', maxLength: 64, label: `Default: ${EL_DEFAULT_VOICE}` });
+        if (v != null) { store.set('architect.tts.elVoice', v.trim() || EL_DEFAULT_VOICE); test(); }
+      } },
+      elKey() ? { label: 'Remove API key', icon: 'trash', onSelect: () => { setElKey(''); toast('Key removed from this device.'); } } : null,
+      '-',
+      { header: 'Browser voice (fallback)' },
+      { label: 'Default voice', checked: !voicePref(), onSelect: () => store.set('architect.tts.voice', '') },
+      ...vs.map((v) => ({ label: v.name, checked: voicePref() === v.name, onSelect: () => { store.set('architect.tts.voice', v.name); enqueue(() => browserSay('Like this.')); } })),
+      ...[[0.85, 'Slow'], [1, 'Normal'], [1.2, 'Fast']].map(([r, l]) => ({ label: `Speed: ${l}`, checked: ratePref() === r, onSelect: () => store.set('architect.tts.rate', r) })),
     ], { align: 'end' });
   }
 
@@ -178,13 +244,60 @@ export function mountChat(body, el, w, { tts = false } = {}) {
     const t = String(text || '').trim();
     if (!t) return;
     const m = { id: uid(), by: me.id, name: me.username || 'Me', text: t.slice(0, 2000), ts: Date.now() };
+    const useEl = tts && engine() === 'eleven' && !!elKey();
+    if (useEl) m.voice = 'el'; // tells everyone the ElevenLabs audio is on its way
     mineSent.set(m.id, m);
     mineAfter.set(m.id, (w.current().messages || []).at(-1)?.id || null); // where it went, in case it has to be put back
     known.add(m.id);
     if (text === input.value) { input.value = ''; grow(); stopTyping(); }
     commit();
-    if (tts && !muted) speak(m);
+    if (useEl) voiceOver(m);
+    else if (tts && !muted) speak(m);
+    else if (tts) spoken.add(m.id);
     paint(true);
+    if (tts && engine() === 'eleven' && !elKey()) askKey(true);
+  }
+
+  // Make the ElevenLabs audio, play it here right away, then attach it to the message for everyone.
+  async function voiceOver(m) {
+    spoken.add(m.id);
+    let blob;
+    try { blob = await elevenAudio(m.text); }
+    catch (e) {
+      toast(`${e.message} Using the browser voice.`, { tone: 'error', ms: 5000 });
+      patchMine(m.id, { voice: null });
+      if (!muted) enqueue(() => browserSay(m.text));
+      return;
+    }
+    const local = URL.createObjectURL(blob);
+    if (!muted) enqueue(() => playUrl(local)).then(() => URL.revokeObjectURL(local));
+    try {
+      const { path } = await api.media.upload(new File([blob], 'voice.mp3', { type: 'audio/mpeg' }));
+      patchMine(m.id, { audio: path });
+    } catch (e) {
+      patchMine(m.id, { voice: null }); // others fall back to their browser voice
+      console.warn('Voice upload failed', friendlyError(e));
+    }
+  }
+  function patchMine(id, patch) {
+    const mine = mineSent.get(id);
+    if (mine) Object.assign(mine, patch);
+    const cur = w.current().messages || [];
+    if (cur.some((x) => x.id === id)) w.live({ messages: cur.map((x) => (x.id === id ? { ...x, ...patch } : x)) });
+  }
+
+  async function askKey(firstTime = false) {
+    if (askKey.open) return;
+    askKey.open = true;
+    try {
+      const k = await promptDialog(firstTime ? 'Use your ElevenLabs voice' : 'ElevenLabs API key', {
+        value: firstTime ? '' : elKey(), placeholder: 'sk_…', ok: 'Save', maxLength: 200,
+        label: 'API key — saved on this device only (elevenlabs.io → Developers → API keys)',
+      });
+      if (k == null) { if (firstTime) toast('Using the browser voice for now — set the key from the voice ⚙.', { ms: 4000 }); return; }
+      setElKey(k.trim());
+      toast(k.trim() ? 'ElevenLabs voice on.' : 'Key removed — using the browser voice.', { ms: 2200 });
+    } finally { askKey.open = false; }
   }
   function commit() {
     const cur = w.current().messages || [];
@@ -234,7 +347,7 @@ export function mountChat(body, el, w, { tts = false } = {}) {
           h('b', {}, mine ? 'You' : (m.name || 'Someone')),
           h('time', {}, new Date(m.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }))),
         h('div', { class: 'ch-bubble' }, m.text,
-          tts ? h('button', { class: 'ch-replay', type: 'button', title: 'Play again', 'aria-label': 'Play again', onclick: () => speak(m, { force: true }) }, icon('play', 11)) : null)));
+          tts ? h('button', { class: 'ch-replay', type: 'button', title: 'Play again', 'aria-label': 'Play again', onclick: () => speak((w.current().messages || []).find((x) => x.id === m.id) || m, { force: true }) }, icon('play', 11)) : null)));
       prev = m;
     }
     list.replaceChildren(...(rows.length ? rows : [h('p', { class: 'ch-empty' }, tts ? 'Messages here are read out loud for everyone in the Space.' : cur.about ? 'Talk about the connected object here.' : 'No messages yet.')]));
@@ -247,16 +360,22 @@ export function mountChat(body, el, w, { tts = false } = {}) {
       const msgs = next.messages || [];
       const ids = new Set(msgs.map((m) => m.id));
       for (const m of msgs) {
+        // ElevenLabs audio arriving for a message we were waiting on.
+        if (waiting.has(m.id) && (m.audio || m.voice !== 'el')) { clearTimeout(waiting.get(m.id)); waiting.delete(m.id); if (!muted) speak(m); }
         if (known.has(m.id)) continue;
         known.add(m.id);
         if (typers.delete(m.by)) paintTyping();
-        if (tts && !muted && m.by !== me.id && m.ts > mountedAt - 15_000) speak(m);
+        if (!tts || muted || m.by === me.id || m.ts < mountedAt - 15_000) continue;
+        if (m.voice === 'el' && !m.audio) {
+          // The sender is still making it: wait a few seconds, then fall back to this browser's voice.
+          waiting.set(m.id, setTimeout(() => { waiting.delete(m.id); if (!muted) speak({ ...m, audio: null }); }, 9000));
+        } else speak(m);
       }
       // Lost in a simultaneous send (their copy didn't have yours yet): add it back.
       if ([...mineSent.keys()].some((id) => !ids.has(id))) { clearTimeout(retry); retry = setTimeout(commit, 250 + Math.random() * 250); }
       paint();
     },
-    destroy() { clearTimeout(retry); clearTimeout(typingTimer); stopTyping(); offSignal?.(); },
+    destroy() { clearTimeout(retry); clearTimeout(typingTimer); stopTyping(); offSignal?.(); waiting.forEach((t) => clearTimeout(t)); },
     send,
   };
 }

@@ -6,12 +6,13 @@ import { go } from '../core/router.js';
 import { api, friendlyError } from '../data/api.js';
 import { loadPrefs, getPref, setPref, prefsOf } from '../data/prefs.js';
 import { printToPdf, pdfHint } from '../core/print.js';
-import { windowOf, stateOf, clock, logSetpoints, dayStart } from '../data/setpoints.js';
+import { windowOf, stateOf, clock, logSetpoints, dayStart, spDayKey, keyOf } from '../data/setpoints.js';
 
 export const DEFAULT_PATHS = ['Morning', 'Afternoon', 'Atemporal', 'Futures', 'Cache'];
 const DEFAULT_TITLE = 'Paths';
 
 let seeding = null;
+const rolling = new Map(); // owner|day → the rollover running for it (several widgets mount the same paths)
 
 // Embedded (space widget) options:
 //   owner      whose paths to show (default: you). Someone else's paths are read-only.
@@ -69,12 +70,59 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   root.append(el);
 
   const fail = (e) => toast(`Not saved — ${friendlyError(e)}`, { tone: 'error', ms: 5000 });
-  const tasksOf = (colId) => tasks.filter((t) => t.column_id === colId).sort((a, b) => a.position - b.position);
+  /* ---- Days: today's path plus tabs to plan the next days ("prelude") ---- */
+  // A task with no day (or a day that has come) is on today's path; one with a later day waits in its tab.
+  let viewDay = null;          // null = today, else 'YYYY-MM-DD'
+  const todayKey = () => spDayKey(new Date(), dayStart(columns, timesArg()));
+  const dayOfTask = (t) => (!t.day || t.day <= todayKey() ? null : t.day);
+  const onView = (t) => dayOfTask(t) === viewDay;
+  const dayTasks = () => tasks.filter(onView);
+  const todayTasks = () => tasks.filter((t) => dayOfTask(t) === null);
+  const tasksOf = (colId) => tasks.filter((t) => t.column_id === colId && onView(t)).sort((a, b) => a.position - b.position);
   const sortCols = () => columns.sort((a, b) => a.position - b.position);
   // Tasks in on-screen order: path by path, top to bottom.
   const shown = () => columns.filter((c) => (opts.only ? c.id === opts.only : !exclude.has(c.id)));
   const ordered = () => shown().flatMap((c) => tasksOf(c.id));
   const pickedTasks = () => ordered().filter((t) => picked.has(t.id));
+
+  // A new day: plans for today join the path, and yesterday's setpoint tasks are cleared
+  // (the clean-up you'd otherwise do by hand). Timeless paths (no setpoint) are never cleared.
+  async function rollover() {
+    const today = todayKey();
+    const last = getPref('pathsDay', null);
+    const key = `${owner}|${today}`;
+    if (rolling.has(key)) { await rolling.get(key); return true; } // another widget did it: reload what it left
+    if (last === today) { if (tasks.some((t) => t.day && t.day <= today)) await promote(today); return false; }
+    const job = (async () => {
+      const setpointCols = new Set(columns.filter((c) => windowOf(c)).map((c) => c.id));
+      const stale = last ? tasks.filter((t) => setpointCols.has(t.column_id) && (!t.day || t.day < today)) : [];
+      try { await setPref('pathsDay', today); } catch {}
+      if (stale.length) {
+        const ids = new Set(stale.map((t) => t.id));
+        tasks = tasks.filter((t) => !ids.has(t.id));
+        try { await db.remove('path_tasks', [...ids]); } catch (e) { fail(e); }
+        const copies = stale.map((t) => { const c = { ...t }; delete c.created_at; delete c.updated_at; delete c.user_id; return c; });
+        setTimeout(() => toast(`New day — yesterday’s path was cleared (${plural(stale.length, 'task')}).`, {
+          ms: 9000,
+          action: { label: 'Undo', onClick: async () => {
+            tasks.push(...copies);
+            render();
+            try { await db.insert('path_tasks', copies); } catch (e) { fail(e); }
+          } },
+        }), 400);
+      }
+      await promote(today);
+    })();
+    rolling.set(key, job);
+    try { await job; } finally { setTimeout(() => rolling.delete(key), 5000); }
+    return false;
+  }
+  async function promote(today) {
+    const due = tasks.filter((t) => t.day && t.day <= today);
+    if (!due.length) return;
+    due.forEach((t) => { t.day = null; });
+    try { await Promise.all(due.map((t) => db.update('path_tasks', t.id, { day: null }))); } catch (e) { dayFail(e) || console.warn(e); }
+  }
 
   async function load() {
     try {
@@ -86,6 +134,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       ]);
       columns = cols;
       tasks = ts;
+      if (!readOnly && await rollover()) tasks = await api.db.select('path_tasks', { order: 'position.asc', filters: owner ? { user_id: owner } : {} });
       title = getPref('pathsTitle', DEFAULT_TITLE) || DEFAULT_TITLE;
       if (!columns.length && !readOnly) {
         seeding = seeding || db.insert('path_columns', DEFAULT_PATHS.map((t, i) => ({ id: uid(), title: t, position: (i + 1) * 1024 })));
@@ -128,21 +177,55 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     const next = el.querySelector('.pboard');
     if (next) next.scrollLeft = scrollLeft;
     renderSelBar();
+    paintSlot();
+    el.classList.toggle('is-future-day', !!viewDay);
     focusActive();
     if (!loading && !loadError) { lastPhases = phases(); if (!readOnly) queueLog(); }
   }
 
   function header() {
-    const total = tasks.length;
-    const done = tasks.filter((t) => t.done).length;
+    const total = dayTasks().length;
+    const done = dayTasks().filter((t) => t.done).length;
     const segs = 24;
     const filled = total ? Math.round((done / total) * segs) : 0;
     return h('header', { class: 'view-head paths-head' },
       renamingTitle
         ? h('input', { class: 'paths-title-input', value: title, maxlength: 32, 'data-rename-title': '1', 'aria-label': 'Page title' })
         : h('h1', { class: 'paths-title', 'data-act': 'rename-title', title: 'Click to rename', tabindex: '0' }, title),
+      loading || loadError ? null : dayTabs(),
       h('div', { class: 'paths-meta' },
         h('button', { class: 'icon-btn sm', type: 'button', 'data-act': 'export-pdf', 'aria-label': 'Export as PDF', 'data-tip': 'Export PDF' }, icon('download', 16))));
+  }
+
+  const addDays = (k, n) => { const [y, m, d] = k.split('-').map(Number); return keyOf(new Date(y, m - 1, d + n)); };
+  const dayLabel = (k, i) => {
+    if (i === 0) return 'Today';
+    if (i === 1) return 'Tomorrow';
+    const [y, m, d] = k.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    // Within the week: "Sat 14". Further out: "Jan 1" (and the year if it isn't this one).
+    if (date - new Date() < 7 * 86_400_000) return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(y !== new Date().getFullYear() ? { year: 'numeric' } : {}) });
+  };
+  function dayTabs() {
+    const today = todayKey();
+    const planned = new Map();
+    for (const t of tasks) { const k = dayOfTask(t); if (k) planned.set(k, (planned.get(k) || 0) + 1); }
+    const keys = Array.from({ length: 7 }, (_, i) => (i ? addDays(today, i) : null));
+    for (const k of [...planned.keys()].sort()) if (!keys.includes(k)) keys.push(k); // plans further out keep a tab
+    return h('div', { class: 'pdays', role: 'tablist', 'aria-label': 'Day' }, keys.map((k, i) => {
+      const n = k ? planned.get(k) || 0 : 0;
+      return h('button', {
+        type: 'button', role: 'tab', class: ['pday', viewDay === k && 'is-on', n && 'has-plan'], 'aria-selected': String(viewDay === k),
+        title: k ? `${n ? `${n} planned` : 'Plan'} for ${dayLabel(k, i)} — it becomes your path when that day starts` : 'Today’s path',
+        onclick: () => { if (viewDay === k) return; viewDay = k; picked = new Set(); composerFor = null; editing = null; render(); },
+      }, dayLabel(k, i), n ? h('b', {}, String(n)) : null);
+    }));
+  }
+  // Embedded (on the Space): the tabs live in the widget's header, next to its title.
+  function paintSlot() {
+    if (!opts.daySlot) return;
+    opts.daySlot.replaceChildren(...(loading || loadError || opts.only ? [] : [dayTabs()]));
   }
 
   // Setpoint countdown. Live: time left (HH:MM:SS). Later today: its full length, dimmed. Ended: 00:00:00.
@@ -409,15 +492,22 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   async function addTask(colId, text) {
     const list = tasksOf(colId);
     const t = { id: uid(), column_id: colId, title: text, note: '', done: false, position: posBetween(list.at(-1)?.position ?? null, null) };
+    if (viewDay) t.day = viewDay;
     tasks.push(t);
     render();
-    try { await db.insert('path_tasks', t); } catch (e) { fail(e); }
+    try { await db.insert('path_tasks', t); } catch (e) { dayFail(e) || fail(e); }
   }
 
   async function patchTask(t, patch) {
     Object.assign(t, patch);
     render();
-    try { await db.update('path_tasks', t.id, patch); } catch (e) { fail(e); }
+    try { await db.update('path_tasks', t.id, patch); } catch (e) { dayFail(e) || fail(e); }
+  }
+  // Planning ahead needs the `day` column (supabase/nov12.sql).
+  function dayFail(e) {
+    if (!/\bday\b/i.test(String(e?.message || e))) return false;
+    toast('Planning days ahead needs one database update — run supabase/nov12.sql in Supabase.', { tone: 'error', ms: 7000 });
+    return true;
   }
 
   async function deleteTask(t) {
@@ -670,6 +760,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       { label: task.done ? 'Mark not done' : 'Mark done', icon: 'check', onSelect: () => patchTask(task, { done: !task.done }) },
       { label: picked.has(task.id) ? 'Deselect' : 'Select', icon: 'selectAll', kbd: '⌘Click', onSelect: () => togglePick(task) },
       { label: 'Duplicate', icon: 'copy', onSelect: () => duplicateTask(task) },
+      readOnly ? null : { label: 'Plan for another day…', icon: 'calendar', onSelect: () => dayMenu(anchor, [task]) },
       '-',
       { header: 'Move to' },
       ...others.map((c) => ({
@@ -678,6 +769,24 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       })),
       '-',
       { label: 'Delete task', icon: 'trash', danger: true, onSelect: () => deleteTask(task) },
+    ], { align: 'end' });
+  }
+
+  function dayMenu(anchor, list) {
+    const today = todayKey();
+    const cur = list.length === 1 ? dayOfTask(list[0]) : undefined;
+    menu(anchor, [
+      { header: 'Plan for' },
+      ...Array.from({ length: 8 }, (_, i) => (i ? addDays(today, i) : null)).map((k, i) => ({
+        label: dayLabel(k, i), icon: 'calendar', checked: cur === undefined ? null : cur === k,
+        onSelect: async () => {
+          list.forEach((t) => { t.day = k; });
+          picked = new Set();
+          render();
+          try { await Promise.all(list.map((t) => db.update('path_tasks', t.id, { day: k }))); } catch (e) { dayFail(e) || fail(e); }
+          toast(k ? `Planned for ${dayLabel(k, Math.round((new Date(k) - new Date(today)) / 86_400_000))}.` : 'Back on today’s path.', { ms: 1800 });
+        },
+      })),
     ], { align: 'end' });
   }
 
@@ -1115,10 +1224,15 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   const phases = () => columns.map((c) => stOf(c)?.phase || '').join('|');
   let lastPhases = '';
   const idle = () => !editing && !composerFor && !renamingCol && !renamingTitle && !drag && !colDrag && !marquee;
+  let seenDay = null;
   const nowTimer = setInterval(() => {
     if (loading || loadError) return;
+    // The day turned over while open: roll the path over (and refresh the tabs).
+    const tk = todayKey();
+    if (seenDay && tk !== seenDay && idle()) { seenDay = tk; if (viewDay && viewDay <= tk) viewDay = null; load(); return; }
+    seenDay = tk;
     const ph = phases();
-    if (ph !== lastPhases && idle()) { lastPhases = ph; render(); if (!readOnly) logSetpoints(columns, tasks); return; }
+    if (ph !== lastPhases && idle()) { lastPhases = ph; render(); if (!readOnly) logSetpoints(columns, todayTasks()); return; }
     el.querySelectorAll('[data-timer]').forEach((n) => {
       const col = columns.find((c) => c.id === n.dataset.timer);
       const st = col && stOf(col);
@@ -1126,9 +1240,9 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     });
   }, 1000);
   // Keep the setpoint log current while a timer runs (also after every change, via render()).
-  const logTimer = setInterval(() => { if (!loading && !loadError && !readOnly) logSetpoints(columns, tasks); }, 30_000);
+  const logTimer = setInterval(() => { if (!loading && !loadError && !readOnly) logSetpoints(columns, todayTasks()); }, 30_000);
   let logT = 0;
-  const queueLog = () => { clearTimeout(logT); logT = setTimeout(() => logSetpoints(columns, tasks), 800); };
+  const queueLog = () => { clearTimeout(logT); logT = setTimeout(() => logSetpoints(columns, todayTasks()), 800); };
 
   // Other widgets (and other people, and the API) change these paths too.
   const idleNow = () => idle() && !picked.size && !document.querySelector('.dlg') && !pointerDown;

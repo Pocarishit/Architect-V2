@@ -8,8 +8,9 @@ import { getPref, setPref, loadPrefs } from '../data/prefs.js';
 import { myAvatar, setMyAvatar, clearMyAvatar, avatarsFor } from '../data/profile.js';
 import { colorFor, initials } from '../board/collab.js';
 import { applyCustom } from '../core/custom.js';
+import { releases, pushRelease, rollback } from '../data/releases.js';
 
-const TABS = [['profile', 'Profile'], ['members', 'Members'], ['api', 'API'], ['custom', 'Customize']];
+const TABS = [['profile', 'Profile'], ['members', 'Members'], ['api', 'API'], ['custom', 'Updates']];
 
 export async function openSettings({ tab = 'profile', spaceId = null } = {}) {
   await loadPrefs().catch(() => {});
@@ -175,29 +176,56 @@ function apiTab({ me }) {
         'tickets.message {no, body} · attempts.log {no, outcome: failed|partial|worked, body}',
         'attempts.list {since?, until?}',
         'style.get · style.set {css} · script.set {js} · safe_mode.set {on}',
+        'updates.push {css?, js?, note?} · updates.list · updates.current · updates.rollback {version?}',
       ].join('\n'))));
   return wrap;
 }
 
-/* ---------------- Custom CSS / JS ---------------- */
+/* ---------------- Updates: custom CSS / JS, versioned, with rollback ---------------- */
 function custom() {
   const css = h('textarea', { class: 'input code-input', rows: 8, spellcheck: false, value: getPref('customCss', '') || '', placeholder: '/* e.g. */\n:root { --red: #ff3b30; }', 'aria-label': 'Custom CSS' });
-  const js = h('textarea', { class: 'input code-input', rows: 8, spellcheck: false, value: getPref('customJs', '') || '', placeholder: '// runs once on load, with `architect` = { api, toast, version }', 'aria-label': 'Custom JS' });
+  const js = h('textarea', { class: 'input code-input', rows: 8, spellcheck: false, value: getPref('customJs', '') || '', placeholder: '// runs once on load, with `architect` = { api, toast, update, rollback }', 'aria-label': 'Custom JS' });
+  const note = h('input', { class: 'input', maxlength: 200, placeholder: 'What does this update change? (optional)', 'aria-label': 'Update note' });
   let safe = !!getPref('safeMode', false);
   const sw = h('button', { type: 'button', class: ['px-check', safe && 'is-on'], role: 'switch', 'aria-checked': String(safe) });
   const paintSw = () => { sw.classList.toggle('is-on', safe); sw.setAttribute('aria-checked', String(safe)); sw.replaceChildren(h('i', {}, safe ? icon('check', 11, { weight: 2.8 }) : null), safe ? 'Safe mode on' : 'Safe mode off'); };
-  sw.addEventListener('click', () => { safe = !safe; paintSw(); });
+  sw.addEventListener('click', async () => { safe = !safe; paintSw(); await setPref('safeMode', safe); applyCustom({ rerunJs: true }); });
   paintSw();
-  const save = async () => {
-    await setPref('customCss', css.value);
-    await setPref('customJs', js.value);
-    await setPref('safeMode', safe);
-    applyCustom({ rerunJs: true });
-    toast(safe ? 'Saved — safe mode keeps them switched off.' : 'Saved and applied.');
+  const history = h('div', { class: 'rel-list' });
+  const paintHistory = async () => {
+    const { list, active } = await releases();
+    history.replaceChildren(...(list.length ? list.map((r) => h('div', { class: ['rel-row', r.v === active && 'is-active'] },
+      h('b', { class: 'rel-v' }, `v${r.v}`),
+      h('div', { class: 'rel-main' },
+        h('span', { class: 'rel-note' }, r.note || (r.v === 0 ? 'Before the first update' : 'No note')),
+        h('span', { class: 'rel-meta' }, `${new Date(r.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${r.source || 'app'} · ${(r.css || '').length + (r.js || '').length} chars`)),
+      r.v === active ? h('span', { class: 'rel-live' }, h('i'), 'Live')
+        : h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
+          if (!(await confirmDialog(`Roll back to v${r.v}?`, 'Your CSS and JS go back to that version right away. Newer versions stay in the list.', { ok: 'Roll back' }))) return;
+          const t = await rollback(r.v);
+          css.value = t.css || ''; js.value = t.js || '';
+          applyCustom({ rerunJs: true });
+          toast(`Rolled back to v${t.v}. Reload if a script was running.`, { ms: 4000 });
+          paintHistory();
+        } }, icon('history', 13), r.v < (active ?? Infinity) ? 'Roll back' : 'Restore')))
+      : [h('p', { class: 'dlg-text' }, 'No updates yet. Push one and it shows up here — every version can be rolled back.')]));
+  };
+  paintHistory();
+  const push = async () => {
+    try {
+      const r = await pushRelease({ css: css.value, js: js.value, note: note.value.trim(), source: 'app' });
+      note.value = '';
+      applyCustom({ rerunJs: true });
+      toast(safe ? `Pushed v${r.v} — safe mode keeps it switched off.` : `Pushed v${r.v} and applied.`);
+      paintHistory();
+    } catch (e) { toast(friendlyError(e), { tone: 'error' }); }
   };
   return h('div', { class: 'stack' },
-    h('p', { class: 'dlg-text' }, 'Your own theme tweaks and hotfixes, for your account only. The API can set these too. Safe mode switches both off; so does opening Architect with ?safe in the address.'),
+    h('p', { class: 'dlg-text' }, 'Push your own fixes and theme tweaks as numbered updates (for your account only). Something broke? Roll back to any earlier version — or open Architect with ?safe to switch them all off. The API can push and roll back too.'),
     h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'CSS'), css),
     h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'JavaScript'), js),
-    h('div', { class: 'set-row' }, sw, h('span', { class: 'set-space' }), h('button', { class: 'btn btn-primary sm', type: 'button', onclick: save }, 'Save & apply')));
+    note,
+    h('div', { class: 'set-row' }, sw, h('span', { class: 'set-space' }), h('button', { class: 'btn btn-primary sm', type: 'button', onclick: push }, icon('upload', 14), 'Push update')),
+    h('div', { class: 'pop-label' }, 'Versions'),
+    history);
 }

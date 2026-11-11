@@ -148,10 +148,17 @@ body.bp-busy .el.is-live .el-media { pointer-events: none; }
 .el-embed.is-live .el-chip { opacity: 0; }
 
 .el-link { border-radius: 14px; background: var(--s1); border: 1px solid var(--line-2); overflow: hidden; }
-.lk { position: absolute; inset: 0; padding: 16px 18px; display: grid; grid-template-rows: auto 1fr auto; gap: 8px; }
+.lk { position: absolute; inset: 0; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.lk > .lk-title { flex: 1; }
+.lk > .lk-title.has-desc { flex: none; }
+.lk > .lk-desc { flex: 1; min-height: 0; font-size: 13px; line-height: 1.45; color: var(--fg-2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.lk.has-pic { padding-top: 0; }
+.lk-pic { flex: none; height: 46%; min-height: 90px; margin: 0 -18px 4px; overflow: hidden; background: var(--s2); border-bottom: 1px solid var(--line); }
+.lk-pic img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.lk-fav { width: 16px; height: 16px; border-radius: 4px; flex: none; }
 .lk-top { display: flex; align-items: center; gap: 8px; color: var(--fg-3); }
 .lk-host { font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lk-title { font-size: 17px; font-weight: 500; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; text-transform: capitalize; }
+.lk-title { font-size: 17px; font-weight: 500; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .lk-open {
   justify-self: start; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px;
   border-radius: 999px; background: var(--fg); color: var(--bg); text-decoration: none;
@@ -628,3 +635,8 @@ body.bp-busy .el.is-live .el-media { pointer-events: none; }
   .pdfv-body { padding: 12px; }
   .pdfv-tools .pdfv-zoom, .pdfv-tools [aria-label="Zoom out"], .pdfv-tools [aria-label="Zoom in"], .pdfv-tools [aria-label="Fit width"], .pdfv-sep { display: none; }
 }
+
+/* Smart guides: objects snapping to each other */
+.ov-guide { background: var(--red); pointer-events: none; }
+.ov-guide.is-v { width: calc(1px * var(--iz)); margin-left: calc(-.5px * var(--iz)); }
+.ov-guide.is-h { height: calc(1px * var(--iz)); margin-top: calc(-.5px * var(--iz)); }

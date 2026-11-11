@@ -9,7 +9,7 @@ import { api, friendlyError } from '../data/api.js';
 import { Editor, CLIP_MARK } from './editor.js';
 import { createContextBar } from './contextbar.js';
 import { makePreview } from './preview.js';
-import { parseUrl, looksLikeUrl } from './embed.js';
+import { parseUrl, looksLikeUrl, extractUrl, unfurl, faviconFor } from './embed.js';
 import { TEMPLATES } from './templates.js';
 import { SWATCHES, STICKY_FILLS, swatchStyle } from './palette.js';
 import { SHAPES, rectOf } from './geometry.js';
@@ -24,9 +24,11 @@ const SHAPE_NAMES = { rect: 'Rectangle', round: 'Rounded', ellipse: 'Ellipse', t
 //   space        true for the shared canvas: no chrome, no dot grid, right-click / "/" menus instead
 //   mountWidget  builds live modules inside 'widget' objects
 //   extendMenu(items, info)  adds to the right-click menu · onReady(api)  hands the page's tools over
+//   windowed     { surface, onClose(), onExpand() } — a Blueprint opened as a window over the Space
 export function mountBoard(root, boardId, opts = {}) {
   const space = !!opts.space;
-  const page = h('div', { class: ['bp-page', space && 'is-world'] });
+  const win = opts.windowed || null;
+  const page = h('div', { class: ['bp-page', space && 'is-world', win && 'is-window'] });
   root.append(page);
   page.append(h('div', { class: 'bp-loading' }, h('span', { class: 'dots-loader' }, h('i'), h('i'), h('i'))));
 
@@ -68,7 +70,8 @@ export function mountBoard(root, boardId, opts = {}) {
   }
 
   function setup(board) {
-    document.title = `${board.name} — Architect`;
+    if (!win) document.title = `${board.name} — Architect`;
+    win?.onName?.(board.name);
     const canvas = h('div', { class: 'bp-canvas' });
     page.append(canvas);
     const me = api.auth.current()?.user ? { ...api.auth.current().user } : null;
@@ -78,9 +81,8 @@ export function mountBoard(root, boardId, opts = {}) {
       mediaUrl: (el) => el.src || (el.path ? media.get(el.path) : null) || null,
       me: me?.id || null,
       mountWidget: opts.mountWidget || null,
+      surface: win?.surface || null,
     });
-    // Blueprints open in compact mode (smaller chrome) unless you turn it off.
-    if (!space) page.classList.toggle('is-compact', getPref('bpCompact', true) !== false);
     if (/[?&]debug\b/.test(location.search)) window.__editor = editor;
 
     /* ---------- autosave ---------- */
@@ -154,7 +156,8 @@ export function mountBoard(root, boardId, opts = {}) {
       sizeTitle();
       if (name === board.name) return;
       board.name = name;
-      document.title = `${name} — Architect`;
+      if (!win) document.title = `${name} — Architect`;
+      win?.onName?.(name);
       collab?.sendMeta({ name });
       try { await api.db.update('blueprints', boardId, { name }); } catch (e) { toast(friendlyError(e), { tone: 'error' }); }
     });
@@ -171,7 +174,7 @@ export function mountBoard(root, boardId, opts = {}) {
     const topRedo = topBtn('redo', 'Redo · three-finger tap', () => editor.redo(), { class: 'bp-icon show-sm' });
     const top = h('div', { class: 'bp-top' },
       h('div', { class: 'bp-pill' },
-        h('a', { class: 'bp-icon', href: '#/', 'aria-label': 'Back to the Space', 'data-tip': 'Space', 'data-tip-pos': 'bottom' }, icon('back', 18)),
+        win ? null : h('a', { class: 'bp-icon', href: '#/', 'aria-label': 'Back to the Space', 'data-tip': kbd('Space (Ctrl+Esc)'), 'data-tip-pos': 'bottom' }, icon('back', 18)),
         h('span', { class: 'bp-mark', 'aria-hidden': 'true' }, 'Blueprint'),
         title,
         status),
@@ -465,6 +468,7 @@ export function mountBoard(root, boardId, opts = {}) {
         '-',
         { label: 'Dot grid', icon: 'grid', kbd: 'G', checked: editor.prefs.grid, onSelect: () => editor.setPref('grid', !editor.prefs.grid) },
         { label: 'Snap to grid', icon: 'magnet', checked: editor.prefs.snap, onSelect: () => editor.setPref('snap', !editor.prefs.snap) },
+        { label: 'Snap to objects', icon: 'magnet', checked: editor.prefs.guides !== false, onSelect: () => editor.setPref('guides', editor.prefs.guides === false) },
       ], { side: 'top', align: 'end' });
     });
 
@@ -563,10 +567,32 @@ export function mountBoard(root, boardId, opts = {}) {
         el = { type: 'embed', url: info.url, embed: info.url, provider: 'Web page', w: 720, h: 480 };
       } else {
         const u = new URL(info.url);
-        const tail = decodeURIComponent(u.pathname.replace(/\/$/, '').split('/').pop() || '').replace(/[-_]+/g, ' ');
-        el = { type: 'link', url: info.url, host: info.host, title: tail || info.host, w: 320, h: 132 };
+        let tail = '';
+        try { tail = decodeURIComponent(u.pathname.replace(/\/$/, '').split('/').pop() || '').replace(/[-_]+/g, ' '); } catch {}
+        el = { type: 'link', url: info.url, host: info.host, title: tail || info.host, icon: faviconFor(info.host), w: 340, h: 140 };
       }
-      editor.addEls([editor.place(el, at)]);
+      const placed = editor.place(el, at);
+      editor.addEls([placed]);
+      if (el.type === 'embed') toast(`${info.label || info.provider || 'Embed'} added`, { ms: 1600 });
+      if (el.type !== 'link') return;
+      // Fill the card in: real title, a line of description and the page's picture.
+      const meta = await unfurl(info.url);
+      if (destroyed || !editor.byId.has(placed.id)) return;
+      const patch = {};
+      if (meta?.title) patch.title = meta.title;
+      if (meta?.desc) patch.desc = meta.desc;
+      if (meta?.logo) patch.icon = meta.logo;
+      if (meta?.site) patch.site = meta.site;
+      if (meta?.image) { patch.image = meta.image; patch.h = Math.max(placed.h, 300); }
+      else if (meta?.desc) patch.h = Math.max(placed.h, 168);
+      if (Object.keys(patch).length) editor.updateEls([placed.id], patch, { commit: false });
+      toast('Link card added', { ms: 2600, action: { label: 'Show the page instead', onClick: () => {
+        const cur = editor.byId.get(placed.id);
+        if (!cur) return;
+        const page = { id: uid(), type: 'embed', url: info.url, embed: info.url, provider: 'Web page', x: cur.x, y: cur.y, w: 720, h: 480 };
+        editor.setEls([...editor.els.filter((x) => x.id !== cur.id), page]);
+        editor.select([page.id]);
+      } } });
     }
 
     function askLink() {
@@ -581,17 +607,17 @@ export function mountBoard(root, boardId, opts = {}) {
         h('input', { type: 'checkbox', onchange: (e) => { asPage = e.target.checked; } }),
         h('span', {}, 'Show the page itself (some sites block this)'));
       input.addEventListener('input', () => {
-        const info = looksLikeUrl(input.value) ? parseUrl(input.value) : null;
+        const info = extractUrl(input.value) ? parseUrl(input.value) : null;
         pageToggle.hidden = !(info && info.type === 'link');
         hint.textContent = !input.value.trim() ? 'Videos play right on the board. Other links become cards.'
-          : !info ? 'Paste a full link starting with https://'
+          : !info ? 'That doesn’t look like a link yet'
             : info.type === 'link' ? `Link card for ${info.host}` : `${info.label} — ready to add`;
       });
       dialog({
         title: 'Add video or link',
         width: 480,
         body: h('div', { class: 'stack' }, input, hint, pageToggle),
-        actions: [{ label: 'Cancel', value: null }, { label: 'Add to board', primary: true, value: () => (looksLikeUrl(input.value) ? input.value.trim() : (hint.textContent = 'Paste a full link starting with https://', undefined)) }],
+        actions: [{ label: 'Cancel', value: null }, { label: 'Add to board', primary: true, value: () => (looksLikeUrl(input.value) ? input.value.trim() : (hint.textContent = 'That doesn’t look like a link yet', undefined)) }],
       }).then((url) => { if (url) addUrl(url, editor.viewCenter(), { asPage }); });
     }
 
@@ -743,7 +769,10 @@ export function mountBoard(root, boardId, opts = {}) {
         '-',
         { label: 'Clear board', icon: 'trash', danger: true, disabled: !editor.els.length, onSelect: clearBoard },
         '-',
-        { label: 'Compact mode', icon: 'collapse', checked: page.classList.contains('is-compact'), onSelect: () => { const on = !page.classList.contains('is-compact'); page.classList.toggle('is-compact', on); setPref('bpCompact', on).catch(() => {}); } },
+        win
+          ? { label: 'Full screen', icon: 'expand', onSelect: () => win.onExpand() }
+          : { label: 'Open as a window', icon: 'collapse', onSelect: () => { setPref('bpCompact', true).catch(() => {}); try { sessionStorage.setItem('architect.openWin', boardId); } catch {} go(''); } },
+        { label: 'Blueprints open as a window', icon: 'layers', checked: getPref('bpCompact', true) !== false, onSelect: () => setPref('bpCompact', getPref('bpCompact', true) === false).catch(() => {}) },
       ], { align: 'end' });
     }
 
@@ -775,7 +804,7 @@ export function mountBoard(root, boardId, opts = {}) {
       try { text = (await navigator.clipboard.readText()) || text; } catch {}
       if (!text) { toast('Clipboard is empty.'); return; }
       if (text.startsWith(CLIP_MARK)) editor.pasteSerialized(text, world);
-      else if (looksLikeUrl(text)) addUrl(text.trim(), world);
+      else if (looksLikeUrl(text)) addUrl(extractUrl(text), world);
       else { const el = editor.makeEl('text', null, world); el.text = text.slice(0, 5000); editor.addEls([el]); }
     }
 
@@ -847,7 +876,7 @@ export function mountBoard(root, boardId, opts = {}) {
       closeFloating();
       editor?.destroy();
       page.remove();
-      document.title = 'Architect';
+      if (!win) document.title = 'Architect';
     },
   };
 }

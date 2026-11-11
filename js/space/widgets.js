@@ -11,6 +11,8 @@ import { mountPaths } from '../views/paths.js';
 import { mountParasites } from '../views/parasites.js';
 import { previewSvg } from '../board/preview.js';
 import { mountTrackerWidget } from './tracker.js';
+import { mountChat } from './chat.js';
+import { mountRadio } from './radio.js';
 
 export const WIDGETS = {
   path: { label: 'Path', icon: 'toPaths', w: 1490, h: 520 },
@@ -22,6 +24,9 @@ export const WIDGETS = {
   blueprints: { label: 'Blueprints', icon: 'frame', w: 380, h: 460 },
   portal: { label: 'Blueprint', icon: 'frame', w: 340, h: 260 },
   custom: { label: 'Custom widget', icon: 'code', w: 420, h: 320 },
+  chat: { label: 'Chat', icon: 'chat', w: 380, h: 480, hint: 'A thread — connect it to any object, export it' },
+  tts: { label: 'Voice chat', icon: 'speaker', w: 380, h: 460, hint: 'Messages are read out loud for everyone' },
+  radio: { label: 'Radio', icon: 'radio', w: 400, h: 500, hint: 'Your YouTube playlist — solo or live stream' },
 };
 
 const possessive = (name) => `${name || 'Someone'}’${/s$/i.test(name || '') ? '' : 's'}`;
@@ -42,7 +47,8 @@ export function createWidgetHost(host) {
       onclick: (e) => host.openMenuFor(el.id, e.currentTarget),
     }, icon('more', 15));
     const lock = h('span', { class: 'wg-lock', title: 'Only you can see this', hidden: true }, icon('lock', 12));
-    const head = h('div', { class: 'wg-head' }, h('span', { class: 'wg-grip', 'aria-hidden': 'true' }), title, lock, badge, h('span', { class: 'wg-space' }), tools, more);
+    const slot = h('span', { class: 'wg-slot', 'data-noptr': '' }); // extra controls next to the title (Path day tabs)
+    const head = h('div', { class: 'wg-head' }, h('span', { class: 'wg-grip', 'aria-hidden': 'true' }), title, lock, badge, slot, h('span', { class: 'wg-space' }), tools, more);
     const body = h('div', { class: 'wg-body', 'data-noptr': '' });
     node.append(head, body);
     const w = {
@@ -50,10 +56,12 @@ export function createWidgetHost(host) {
       spaceId: host.spaceId,
       me: host.me,
       tools,
+      slot,
       setTitle(t) { title.textContent = t; },
       setBadge(n) { badge.hidden = !n; badge.textContent = n > 99 ? '99+' : String(n || ''); },
       current: () => host.editor()?.byId.get(el.id) || w.el,
       patch(p) { host.editor()?.updateEls([el.id], p); },
+      live(p) { host.editor()?.updateEls([el.id], p, { commit: false }); }, // syncs + saves, but isn't an undo step
       host,
     };
     lock.hidden = !el.privateTo;
@@ -70,7 +78,7 @@ const KINDS = {
   path(body, el, w) {
     w.setTitle(`${possessive(el.owner === w.me?.id ? w.me.username : el.ownerName)} Path`.toUpperCase());
     const ctl = mountPaths(body, null, {
-      embedded: true, owner: el.owner, exclude: el.detached || [],
+      embedded: true, owner: el.owner, exclude: el.detached || [], daySlot: w.slot,
       onDetach: (colId, at) => w.host.detach(el.id, colId, at),
     });
     w.tools.append(h('button', { class: 'wg-btn', type: 'button', title: 'Open full page', 'aria-label': 'Open full page', onclick: () => go('paths') }, icon('external', 14)));
@@ -168,7 +176,7 @@ const KINDS = {
       if (state !== 'ok') { list.replaceChildren(h('p', { class: 'wg-empty' }, state)); return; }
       const shown = boards.filter((b) => !q || String(b.name).toLowerCase().includes(q)).slice(0, 60);
       list.replaceChildren(...(shown.length ? shown.map((b) => h('div', { class: 'bs-row' },
-        h('button', { class: 'bs-open', type: 'button', onclick: () => go(`board/${b.id}`) },
+        h('button', { class: 'bs-open', type: 'button', onclick: () => w.host.openBoard(b.id) },
           h('span', { class: 'bs-thumb' }, previewSvg(b.preview) || icon('frame', 16)),
           h('span', { class: 'bs-name' }, b.name || 'Untitled')),
         h('button', { class: 'icon-btn xs', type: 'button', title: 'Put a portal on the canvas', 'aria-label': `Put ${b.name} on the canvas`, onclick: () => w.host.addPortal(b, el.id) }, icon('pin', 14))))
@@ -181,7 +189,7 @@ const KINDS = {
           if (/kind/.test(String(e?.message))) { delete row.kind; return api.db.insert('blueprints', row); }
           throw e;
         });
-        go(`board/${row.id}`);
+        w.host.openBoard(row.id);
       } catch (e) { toast(friendlyError(e), { tone: 'error' }); }
     }
     load();
@@ -193,7 +201,7 @@ const KINDS = {
   portal(body, el, w) {
     const paint = (e) => {
       w.setTitle((e.name || 'Blueprint').toUpperCase());
-      body.replaceChildren(h('button', { class: 'portal', type: 'button', onclick: () => go(`board/${e.boardId}`), 'aria-label': `Open ${e.name || 'blueprint'}` },
+      body.replaceChildren(h('button', { class: 'portal', type: 'button', onclick: () => w.host.openBoard(e.boardId), 'aria-label': `Open ${e.name || 'blueprint'}` },
         h('span', { class: 'portal-pv' }, previewSvg(e.preview) || icon('frame', 28)),
         h('span', { class: 'portal-go' }, icon('external', 14), 'Open blueprint')));
     };
@@ -224,6 +232,23 @@ const KINDS = {
     paint(el);
     w.tools.append(h('button', { class: 'wg-btn', type: 'button', title: 'Edit widget', 'aria-label': 'Edit widget', onclick: () => editCustom(w) }, icon('edit', 14)));
     return { update: paint };
+  },
+
+  chat(body, el, w) {
+    w.setTitle('CHAT');
+    return mountChat(body, el, w);
+  },
+
+  tts(body, el, w) {
+    w.setTitle('VOICE CHAT');
+    const ctl = mountChat(body, el, w, { tts: true });
+    w.host.registerTts?.(el.id, ctl);
+    return { update: ctl.update, destroy: () => { w.host.registerTts?.(el.id, null); ctl.destroy(); } };
+  },
+
+  radio(body, el, w) {
+    w.setTitle('RADIO');
+    return mountRadio(body, el, w);
   },
 
   missing(body, el, w) {

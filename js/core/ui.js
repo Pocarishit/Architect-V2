@@ -112,11 +112,39 @@ function openFloating(panel, anchor, opts = {}) {
 export function menu(anchor, items, opts = {}) {
   if (justClosed(anchor)) return null;
   const panel = h('div', { class: 'menu', role: 'menu' });
-  for (const it of items) {
-    if (!it) continue;
-    if (it === '-') { panel.append(h('div', { class: 'menu-sep', role: 'separator' })); continue; }
-    if (it.header) { panel.append(h('div', { class: 'menu-head' }, it.header)); continue; }
-    panel.append(
+  const list = items.filter(Boolean);
+  // A section is a header plus the actions under it (up to the next separator or header).
+  // Sections with more than 5 actions fold: click the header to open or close; it's remembered.
+  let group = panel;
+  for (let i = 0; i < list.length; i++) {
+    const it = list[i];
+    if (it === '-') { group = panel; panel.append(h('div', { class: 'menu-sep', role: 'separator' })); continue; }
+    if (it.header) {
+      let n = 0;
+      for (let j = i + 1; j < list.length && list[j] !== '-' && !list[j].header; j++) n++;
+      if (n <= 5) { group = panel; panel.append(h('div', { class: 'menu-head' }, it.header)); continue; }
+      const key = `architect.menu.fold.${it.header}`;
+      let open = true;
+      try { open = localStorage.getItem(key) !== '0'; } catch {}
+      const body = h('div', { class: 'menu-group', hidden: !open });
+      const head = h('button', {
+        class: ['menu-head', 'is-fold', open && 'is-open'], type: 'button', 'aria-expanded': String(open),
+        onmousedown: (e) => e.preventDefault(),
+        onclick: (e) => {
+          e.stopPropagation();
+          open = !open;
+          body.hidden = !open;
+          head.classList.toggle('is-open', open);
+          head.setAttribute('aria-expanded', String(open));
+          try { localStorage.setItem(key, open ? '1' : '0'); } catch {}
+          floating?.panel === panel && place(panel, anchor, opts);
+        },
+      }, h('span', {}, it.header), h('span', { class: 'menu-fold-n' }, String(n)), icon('chevronRight', 12));
+      panel.append(head, body);
+      group = body;
+      continue;
+    }
+    group.append(
       h('button', {
         class: ['menu-item', it.danger && 'is-danger'],
         role: it.checked != null ? 'menuitemcheckbox' : 'menuitem',
@@ -136,7 +164,7 @@ export function menu(anchor, items, opts = {}) {
   panel.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     e.preventDefault();
-    const btns = [...panel.querySelectorAll('.menu-item:not(:disabled)')];
+    const btns = [...panel.querySelectorAll('.menu-item:not(:disabled), .menu-head.is-fold')].filter((b) => b.offsetParent);
     const i = btns.indexOf(document.activeElement);
     const n = e.key === 'ArrowDown' ? (i + 1) % btns.length : (i - 1 + btns.length) % btns.length;
     btns[n]?.focus();

@@ -260,6 +260,13 @@ kbd { font-family: var(--f-mono); font-size: 11px; color: var(--fg-3); }
 .menu-check { width: 14px; display: grid; place-items: center; }
 .menu-sep { height: 1px; background: var(--line); margin: 5px 4px; }
 .menu-head { padding: 8px 10px 6px; font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
+.menu-head.is-fold { width: 100%; display: flex; align-items: center; gap: 8px; border-radius: 8px; text-align: left; cursor: pointer; }
+.menu-head.is-fold:hover, .menu-head.is-fold:focus-visible { color: var(--fg); background: var(--s2); outline: none; }
+.menu-head.is-fold > span:first-child { flex: 1; }
+.menu-fold-n { font-family: var(--f-dot); font-weight: 800; font-size: 12px; letter-spacing: 0; color: var(--fg-4); }
+.menu-head.is-fold .ic { transition: transform .16s; }
+.menu-head.is-fold.is-open .ic { transform: rotate(90deg); }
+.menu-group[hidden] { display: none; }
 
 .popover { padding: 10px; }
 

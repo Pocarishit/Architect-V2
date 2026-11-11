@@ -3,6 +3,7 @@
 import { api } from '../data/api.js';
 import { getPref, loadPrefs } from '../data/prefs.js';
 import { toast } from './ui.js';
+import { pushRelease, rollback, releases } from '../data/releases.js';
 
 let ranJs = null;
 
@@ -17,14 +18,32 @@ export async function applyCustom({ rerunJs = false } = {}) {
   const js = safe ? '' : String(getPref('customJs', '') || '');
   if (!js.trim() || (js === ranJs && !rerunJs)) return;
   ranJs = js;
-  window.architect = { api, toast, version: 'space-1' };
+  window.architect = architectGlobal();
   try {
     // eslint-disable-next-line no-new-func
     new Function('architect', js)(window.architect);
   } catch (e) {
     console.error('[architect custom js]', e);
-    toast(`Your custom JS failed: ${e.message}. Open with ?safe to skip it.`, { tone: 'error', ms: 7000 });
+    // Something you pushed broke on load: one click puts the previous version back.
+    const { list, active } = await releases().catch(() => ({ list: [] }));
+    const prev = list.find((r) => r.v < (active ?? Infinity));
+    toast(`Your custom JS failed: ${e.message}.${prev ? '' : ' Open with ?safe to skip it.'}`, {
+      tone: 'error', ms: 12000,
+      action: prev ? { label: `Roll back to v${prev.v}`, onClick: async () => { await rollback(prev.v); location.reload(); } } : null,
+    });
   }
+}
+
+// What custom scripts get as `architect` (also handy from the browser console).
+function architectGlobal() {
+  return {
+    api, toast, version: 'space-2',
+    /** Push an update: { css?, js?, note? } — becomes the next version and applies on reload. */
+    update: async (u) => { const r = await pushRelease({ ...u, source: 'script' }); toast(`Pushed v${r.v} — reload to run it.`); return r; },
+    /** Roll back to a version (default: the previous one). */
+    rollback: async (v) => { const r = await rollback(v); toast(`Rolled back to v${r.v} — reloading.`); setTimeout(() => location.reload(), 600); return r; },
+    releases,
+  };
 }
 
 export function clearCustom() {

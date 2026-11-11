@@ -228,10 +228,23 @@ export function mountParasites(root, initialId = null, opts = {}) {
     const labels = allLabels();
     const shown = labelFilter ? list.filter((p) => (p.labels || []).includes(labelFilter)) : list;
     return h('div', { class: 'px-body' },
-      labels.length ? h('div', { class: 'tk-chips px-label-filter' },
-        h('button', { class: ['tk-chip', !labelFilter && 'is-on'], type: 'button', onclick: () => { labelFilter = null; render(); } }, 'All'),
-        labels.map((l) => h('button', { class: ['tk-chip', labelFilter === l && 'is-on'], type: 'button', onclick: () => { labelFilter = labelFilter === l ? null : l; render(); } }, h('i', { class: 'px-label-dot' }), l))) : null,
+      labels.length ? labelBar(labels) : null,
       layout === 'board' ? board(shown) : listView(shown));
+  }
+
+  // Categories fold away: collapsed shows just the active one and a count; open shows every chip.
+  function labelBar(labels) {
+    const open = !!store.get('architect.px.labelsOpen', false);
+    const toggle = () => { store.set('architect.px.labelsOpen', !open); render(); };
+    const chip = (l) => h('button', { class: ['tk-chip', labelFilter === l && 'is-on'], type: 'button', onclick: () => { labelFilter = labelFilter === l ? null : l; render(); } }, h('i', { class: 'px-label-dot' }), l);
+    return h('div', { class: ['px-label-filter', open && 'is-open'] },
+      h('button', { class: 'px-label-toggle', type: 'button', 'aria-expanded': String(open), onclick: toggle },
+        icon('chevronRight', 13),
+        h('span', {}, 'Categories'),
+        h('b', {}, String(labels.length))),
+      h('div', { class: 'tk-chips' },
+        h('button', { class: ['tk-chip', !labelFilter && 'is-on'], type: 'button', onclick: () => { labelFilter = null; render(); } }, 'All'),
+        open ? labels.map(chip) : labelFilter ? chip(labelFilter) : null));
   }
 
   /* Board: one column per status; drag a ticket to move it. */
@@ -253,7 +266,6 @@ export function mountParasites(root, initialId = null, opts = {}) {
       },
         h('header', { class: 'px-col-head', title: embedded ? (opts.only ? 'Drag onto the Ticket board to snap back' : 'Drag out of the widget to put it on the canvas') : null },
           h('span', { class: 'px-col-title' }, h('i', { class: 'px-status-dot' }), st.label),
-          h('span', { class: 'px-col-n' }, String(col.length)),
           embedded && !opts.only && opts.onDetach ? h('button', { class: 'icon-btn xs px-col-out', type: 'button', title: 'Detach to canvas', 'aria-label': `Detach ${st.label} to canvas`, onclick: () => opts.onDetach(st.id, null) }, icon('external', 13)) : null,
           embedded && opts.only && opts.onSnap ? h('button', { class: 'icon-btn xs px-col-out', type: 'button', title: 'Snap back', 'aria-label': 'Snap back into Ticket board', onclick: () => opts.onSnap() }, icon('collapse', 13)) : null),
         h('div', { class: 'px-col-list' },
@@ -287,12 +299,11 @@ export function mountParasites(root, initialId = null, opts = {}) {
       onkeydown: (e) => { if (e.key === 'Enter') openTicket(p.id); },
     },
       h('div', { class: 'px-tcard-top' },
-        h('span', { class: 'px-no' }, numberOf(p)),
+        h('div', { class: 'cd-avatars' }, people.slice(0, 4).map((id) => h('span', { class: ['tk-av', checked(p, id) && 'is-through'], title: `${nameOf(id)}${checked(p, id) ? ' · can do it' : ''}` }, nameOf(id).slice(0, 1).toUpperCase()))),
         h('span', { class: ['px-due', `is-${due.tone}`] }, due.text)),
-      h('h3', { class: 'px-tcard-title' }, p.title || 'Untitled problem'),
+      h('h3', { class: 'px-tcard-title', title: numberOf(p) }, p.title || 'Untitled problem'),
       (p.labels || []).length ? h('div', { class: 'px-labels' }, p.labels.map((l) => h('span', { class: 'px-label' }, l))) : null,
       h('div', { class: 'px-tcard-foot' },
-        h('div', { class: 'cd-avatars' }, people.slice(0, 4).map((id) => h('span', { class: ['tk-av', checked(p, id) && 'is-through'], title: `${nameOf(id)}${checked(p, id) ? ' · can do it' : ''}` }, nameOf(id).slice(0, 1).toUpperCase()))),
         h('span', { class: 'px-meta' }, icon('flask', 13), String(tries.length)),
         h('span', { class: ['px-meta', unread && 'is-unread'] }, icon('chat', 13), String(talk.length), unread ? h('b', { class: 'px-unread', 'aria-label': `${unread} unread` }, String(unread)) : null),
         h('span', { class: 'px-meta px-meta-wall' }, `${done}/${people.length}`)));

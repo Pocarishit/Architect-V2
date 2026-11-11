@@ -8,6 +8,7 @@ import {
   rectFromPoints, lineGeom, distToSeg, penPath, simplify, center, nearestSide, DIR_SIDE } from './geometry.js';
 import { css } from './palette.js';
 import { sanitize, hasRichMarkup } from './richtext.js';
+import { looksLikeUrl, extractUrl } from './embed.js';
 
 export const CLIP_MARK = 'ARCHITECT/BLUEPRINT/1\n';
 const MIN_Z = 0.05;
@@ -40,9 +41,23 @@ const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
 const isPdf = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
 
+// Which canvas the keyboard belongs to: the Space (null) or a Blueprint window on top of it.
+// A press anywhere decides; the window sets it when it opens.
+let activeSurface = null;
+export const getSurface = () => activeSurface;
+export function setSurface(id) { activeSurface = id || null; }
+if (typeof document !== 'undefined') {
+  document.addEventListener('pointerdown', (e) => {
+    if (!(e.target instanceof Element)) return;
+    if (e.target.closest('.menu, .popover, .dlg-overlay, .toasts')) return; // floating UI keeps the current surface
+    activeSurface = e.target.closest('[data-surface]')?.dataset.surface || null;
+  }, true);
+}
+
 export class Editor {
-  constructor(host, { elements = [], camera = null, mediaUrl = () => null, me = null, mountWidget = null } = {}) {
+  constructor(host, { elements = [], camera = null, mediaUrl = () => null, me = null, mountWidget = null, surface = null } = {}) {
     this.host = host;
+    this.surface = surface;           // null = the Space / a full page; an id = a Blueprint window
     this.mediaUrl = mediaUrl;
     this.me = me;                    // objects marked private to someone else are skipped entirely
     this.mountWidget = mountWidget;  // builds live modules (Paths, Tracker, Tickets…) inside 'widget' objects
@@ -55,7 +70,7 @@ export class Editor {
     this.opts = { shape: 'rect', line: 'arrow', pen: 'pen', penColor: 'auto', penWidth: 3, hlColor: '#F0B429', sticky: '#FFFFFF', ...store.get('architect.board.opts', {}) };
     this.lastStyle = store.get('architect.board.style', {});
     for (const t of Object.values(this.lastStyle)) if (t && typeof t === 'object') delete t.fontSize; // drop sizes saved by older versions
-    this.prefs = { grid: true, snap: false, ...store.get('architect.board.prefs', {}) };
+    this.prefs = { grid: true, snap: false, guides: true, ...store.get('architect.board.prefs', {}) };
     this.undoStack = [];
     this.redoStack = [];
     this.editingId = null;
@@ -347,6 +362,11 @@ export class Editor {
     const box = (r, cls) => h('div', { class: cls, style: { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` } });
     const g = this.g;
     if (g?.marquee) o.append(box(g.marquee, 'ov-marquee'));
+    for (const gl of this.guides || []) {
+      o.append(h('div', { class: ['ov-guide', gl.axis === 'x' ? 'is-v' : 'is-h'], style: gl.axis === 'x'
+        ? { left: `${gl.v}px`, top: `${gl.a}px`, height: `${gl.b - gl.a}px` }
+        : { top: `${gl.v}px`, left: `${gl.a}px`, width: `${gl.b - gl.a}px` } }));
+    }
     if (this.bindHover) {
       const t = this.byId.get(this.bindHover);
       if (t) o.append(box(rectOf(t, this.byId), 'ov-bind'));
@@ -1007,9 +1027,21 @@ export class Editor {
           const first = startPos.values().next().value;
           if (first && first.type !== 'line') { dx = snap(first.x + dx) - first.x; dy = snap(first.y + dy) - first.y; }
         }
+        // Objects snap to each other: edges touch, edges / centres line up. Hold Ctrl/⌘ to drop freely.
+        this.guides = null;
+        if (this.prefs.guides !== false && !(e.ctrlKey || e.metaKey)) {
+          g.snapBase ||= this.snapBase(startPos);
+          if (g.snapBase) {
+            const r = { ...g.snapBase.box, x: g.snapBase.box.x + dx, y: g.snapBase.box.y + dy };
+            const hit = this.snapRect(r, g.snapBase.targets, { x: !(e.shiftKey && dx === 0), y: !(e.shiftKey && dy === 0) });
+            dx += hit.dx; dy += hit.dy;
+            this.guides = hit.guides;
+          }
+        }
         this.setEls(this.els.map((el) => (startPos.has(el.id) ? moved(startPos.get(el.id), dx, dy) : el)), { commit: false });
       },
       onUp: (p, e, cancelled) => {
+        if (this.guides) { this.guides = null; this.renderOverlay(); }
         if (g.moved) this.commitFrom(before);
         else if (start.link) window.open(start.link, '_blank', 'noopener'); // click a link inside an already-selected item
         else if (!cancelled && !start.shift && !start.alt) this.clickToEdit(start);
@@ -1049,6 +1081,13 @@ export class Editor {
           if (dir.includes('w')) x = ob.x + ob.w - w;
           if (dir.includes('n')) y = ob.y + ob.h - hh;
         }
+        this.guides = null;
+        if (this.prefs.guides !== false && !keep && !(e.ctrlKey || e.metaKey)) {
+          g.targets ||= this.snapTargets(new Set(sel.map((x) => x.id)));
+          const hit = this.snapEdges({ x, y, w, h: hh }, dir, g.targets);
+          ({ x, y, w } = hit.r); hh = hit.r.h;
+          this.guides = hit.guides;
+        }
         if (this.prefs.snap && !keep) {
           if (dir.includes('e')) w = snap(x + w) - x;
           if (dir.includes('s')) hh = snap(y + hh) - y;
@@ -1066,9 +1105,94 @@ export class Editor {
           return resized(origin.get(el.id), nr, sx, sy, mapPt, single, corner);
         }), { commit: false });
       },
-      onUp: () => { this.commitFrom(before); this.emit('selection'); },
+      onUp: () => { this.guides = null; this.commitFrom(before); this.emit('selection'); },
     };
     this.startGesture(g);
+  }
+
+  /* ---- snapping objects to each other ---- */
+  // What can be snapped to: everything visible except what's moving, lines and pen strokes.
+  snapTargets(moving) {
+    const R = this.vp.getBoundingClientRect();
+    const a = this.toWorld(R.left, R.top), b = this.toWorld(R.right, R.bottom);
+    const view = { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y };
+    const pad = 400 / this.cam.z;
+    const out = [];
+    for (const el of this.els) {
+      if (moving.has(el.id) || el.type === 'line' || el.type === 'pen' || this.isHidden(el)) continue;
+      const r = rectOf(el, this.byId);
+      if (!r || !isFinite(r.x) || !(r.w > 0) || !(r.h > 0)) continue;
+      if (view && (r.x > view.x + view.w + pad || r.y > view.y + view.h + pad || r.x + r.w < view.x - pad || r.y + r.h < view.y - pad)) continue;
+      out.push(r);
+    }
+    return out.slice(0, 600);
+  }
+
+  snapBase(startPos) {
+    const list = [...startPos.values()].filter((el) => el.type !== 'line');
+    if (!list.length) return null;
+    return { box: unionRects(list.map((el) => rectOf(el, this.byId))), targets: this.snapTargets(new Set(startPos.keys())) };
+  }
+
+  // Finds the nearest edge/centre match on each axis within a few screen pixels.
+  snapRect(r, targets, axes = { x: true, y: true }) {
+    const thr = 7 / this.cam.z;
+    const GAP = 24;
+    let bx = null, by = null;
+    const tryAxis = (axis, mine, t, theirs, kinds) => {
+      for (const [mk, mv] of mine) for (const [tk, tv] of theirs) {
+        if (kinds && !kinds(mk, tk)) continue;
+        const d = tv - mv;
+        if (Math.abs(d) > thr) continue;
+        const cur = axis === 'x' ? bx : by;
+        if (!cur || Math.abs(d) < Math.abs(cur.d) - 0.01) {
+          const hit = { d, v: tv, t };
+          if (axis === 'x') bx = hit; else by = hit;
+        }
+      }
+    };
+    const mineX = [['l', r.x], ['c', r.x + r.w / 2], ['r', r.x + r.w]];
+    const mineY = [['t', r.y], ['c', r.y + r.h / 2], ['b', r.y + r.h]];
+    for (const t of targets) {
+      if (axes.x) {
+        tryAxis('x', mineX, t, [['l', t.x], ['c', t.x + t.w / 2], ['r', t.x + t.w]]);
+        // Side by side with a tidy gap.
+        tryAxis('x', mineX, t, [['gl', t.x - GAP], ['gr', t.x + t.w + GAP]], (m, k) => (k === 'gl' && m === 'r') || (k === 'gr' && m === 'l'));
+      }
+      if (axes.y) {
+        tryAxis('y', mineY, t, [['t', t.y], ['c', t.y + t.h / 2], ['b', t.y + t.h]]);
+        tryAxis('y', mineY, t, [['gt', t.y - GAP], ['gb', t.y + t.h + GAP]], (m, k) => (k === 'gt' && m === 'b') || (k === 'gb' && m === 't'));
+      }
+    }
+    const dx = bx ? bx.d : 0, dy = by ? by.d : 0;
+    const guides = [];
+    const fr = { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h };
+    if (bx) guides.push({ axis: 'x', v: bx.v, a: Math.min(fr.y, bx.t.y) - 12, b: Math.max(fr.y + fr.h, bx.t.y + bx.t.h) + 12 });
+    if (by) guides.push({ axis: 'y', v: by.v, a: Math.min(fr.x, by.t.x) - 12, b: Math.max(fr.x + fr.w, by.t.x + by.t.w) + 12 });
+    return { dx, dy, guides };
+  }
+
+  // Resizing: only the edges being dragged snap.
+  snapEdges(r, dir, targets) {
+    const thr = 7 / this.cam.z;
+    const out = { ...r };
+    const guides = [];
+    const edge = (axis, pos) => {
+      let best = null;
+      for (const t of targets) {
+        const vals = axis === 'x' ? [t.x, t.x + t.w / 2, t.x + t.w] : [t.y, t.y + t.h / 2, t.y + t.h];
+        for (const v of vals) { const d = v - pos; if (Math.abs(d) <= thr && (!best || Math.abs(d) < Math.abs(best.d))) best = { d, v, t }; }
+      }
+      return best;
+    };
+    const line = (axis, b) => guides.push(axis === 'x'
+      ? { axis, v: b.v, a: Math.min(out.y, b.t.y) - 12, b: Math.max(out.y + out.h, b.t.y + b.t.h) + 12 }
+      : { axis, v: b.v, a: Math.min(out.x, b.t.x) - 12, b: Math.max(out.x + out.w, b.t.x + b.t.w) + 12 });
+    if (dir.includes('e')) { const b = edge('x', out.x + out.w); if (b) { out.w += b.d; line('x', b); } }
+    if (dir.includes('w')) { const b = edge('x', out.x); if (b) { out.x += b.d; out.w -= b.d; line('x', b); } }
+    if (dir.includes('s')) { const b = edge('y', out.y + out.h); if (b) { out.h += b.d; line('y', b); } }
+    if (dir.includes('n')) { const b = edge('y', out.y); if (b) { out.y += b.d; out.h -= b.d; line('y', b); } }
+    return { r: out, guides };
   }
 
   beginEndpoint(start, which) {
@@ -1268,7 +1392,9 @@ export class Editor {
     if (e.target instanceof Element && e.target.closest('.is-live .el-media')) return;
     const zoom = e.ctrlKey || e.metaKey;
     // A widget only takes the wheel once you've clicked into it; hovering over one still moves the screen.
-    const inActive = e.target instanceof Element && this.activeWidget && this.activeWidget.contains(e.target) && !!e.target.closest('.wg-body');
+    // Lists marked data-wheel (chats) scroll on hover — no click needed.
+    const inActive = e.target instanceof Element && !!e.target.closest('.wg-body') &&
+      ((this.activeWidget && this.activeWidget.contains(e.target)) || !!e.target.closest('[data-wheel]'));
     if (inActive && !zoom) {
       const now = performance.now();
       if (scrollsInside(e.target, e.deltaY, e.deltaX)) { this._innerScroll = now + 400; return; }
@@ -1790,7 +1916,7 @@ export class Editor {
   }
 
   onCopy(e, cut) {
-    if (!this.vp.isConnected || isTypingTarget(e.target) || isTypingTarget(document.activeElement) || this.editingId || this.inWidget) return;
+    if (!this.vp.isConnected || this.offSurface || isTypingTarget(e.target) || isTypingTarget(document.activeElement) || this.editingId || this.inWidget) return;
     if (window.getSelection()?.toString()) return; // let normal text selection copy work
     const text = this.serializeSelection();
     if (!text) return;
@@ -1801,7 +1927,7 @@ export class Editor {
   }
 
   onPaste(e) {
-    if (!this.vp.isConnected || isTypingTarget(e.target) || this.editingId || this.presenting || this.inWidget) return;
+    if (!this.vp.isConnected || this.offSurface || isTypingTarget(e.target) || this.editingId || this.presenting || this.inWidget) return;
     if (document.querySelector('.dlg-overlay')) return;
     const dt = e.clipboardData;
     if (!dt) return;
@@ -1813,7 +1939,7 @@ export class Editor {
     e.preventDefault();
     if (text.startsWith(CLIP_MARK)) { this.pasteSerialized(text, at); return; }
     const t = text.trim();
-    if (/^https?:\/\/\S+$/i.test(t)) { this.emit('url', { url: t, at }); return; }
+    if (looksLikeUrl(t)) { this.emit('url', { url: extractUrl(t), at }); return; }
     const el = this.makeEl('text', null, at);
     el.text = t.slice(0, 5000);
     el.w = Math.min(520, Math.max(160, Math.min(t.length, 60) * 11));
@@ -2001,8 +2127,10 @@ export class Editor {
   }
 
   /* ================= keyboard ================= */
+  get offSurface() { return (this.surface || null) !== activeSurface; }
+
   onKeyDown(e) {
-    if (!this.vp.isConnected) return;
+    if (!this.vp.isConnected || this.offSurface) return;
     if (isTypingTarget(e.target) || document.querySelector('.dlg-overlay')) return;
     if (this.inWidget || (e.target instanceof Element && e.target.closest('.el-widget'))) return; // a widget is in use
     const mod = e.metaKey || e.ctrlKey;
@@ -2043,7 +2171,7 @@ export class Editor {
       else if (k === 'k' && this.sel.size) { e.preventDefault(); this.emit('command', 'link'); }
       else if (k === '=' || k === '+') { e.preventDefault(); this.zoomBy(1.25); }
       else if (k === '-' || k === '_') { e.preventDefault(); this.zoomBy(0.8); }
-      else if (k === '0') { e.preventDefault(); this.zoomTo(1); }
+      else if (k === '0') { this.zoomTo(1); } // no preventDefault: it also resets a zoomed browser
       else if (k === 'e') { e.preventDefault(); this.emit('command', 'export'); }
       else if (k === 'p') { e.preventDefault(); this.emit('command', 'export-pdf'); }
       return;

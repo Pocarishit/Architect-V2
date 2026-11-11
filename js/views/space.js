@@ -13,6 +13,12 @@ import { rectOf, unionRects } from '../board/geometry.js';
 import { createWidgetHost, WIDGETS, editCustom } from '../space/widgets.js';
 import { themeItems, changePassword } from './shell.js';
 import { openSettings } from './settings.js';
+import { openBoardWindow } from '../space/window.js';
+import { getSurface } from '../board/editor.js';
+import { onEscapeFull } from '../core/guard.js';
+import { go } from '../core/router.js';
+import { askSource } from '../space/radio.js';
+import { labelOf } from '../space/chat.js';
 
 export function mountSpace(root) {
   const me = api.auth.current()?.user;
@@ -31,6 +37,8 @@ export function mountSpace(root) {
   const editor = () => t?.editor || null;
   const pathCtl = new Map(); // Path widget id → its controls (New path…)
   const register = (id, ctl) => { if (ctl) pathCtl.set(id, ctl); else pathCtl.delete(id); };
+  const ttsCtl = new Map(); // Voice chat widget id → its controls (send)
+  const registerTts = (id, ctl) => { if (ctl) ttsCtl.set(id, ctl); else ttsCtl.delete(id); };
   // Two worlds: the shared Space (everyone you're with) and your personal one. Tab flips between them.
   let mode = 'shared';
   const ids = { shared: null, personal: null };
@@ -55,6 +63,7 @@ export function mountSpace(root) {
     const id = await idFor(m);
     if (destroyed) return;
     closeFloating();
+    bpWin?.close(); bpWin = null;
     board?.destroy();
     boardOffs.forEach((f) => { try { f(); } catch {} });
     boardOffs = [];
@@ -64,7 +73,7 @@ export function mountSpace(root) {
     page.dataset.mode = m;
     board = mountBoard(page, id, {
       space: true,
-      mountWidget: createWidgetHost({ editor, spaceId: id, me, snapBack, detach, detachTicketCol, snapTicketCol, popTicket, snapTicket, expandTicket, poppedTickets, openMenuFor, reveal, addPortal, register }),
+      mountWidget: createWidgetHost({ editor, spaceId: id, me, openBoard, snapBack, detach, detachTicketCol, snapTicketCol, popTicket, snapTicket, expandTicket, poppedTickets, openMenuFor, reveal, addPortal, register, registerTts }),
       extendMenu,
       onReady,
     });
@@ -166,6 +175,11 @@ export function mountSpace(root) {
     // Ticket cards come and go (dragged out, deleted, undone): keep the board's faded copies in step.
     let lastPop = [...poppedTickets()].sort().join();
     boardOffs.push(ed.on('change', () => { const sig = [...poppedTickets()].sort().join(); if (sig !== lastPop) { lastPop = sig; ticketsMoved(); } }));
+    mountDock();
+    // "Open as a window" from a full-page Blueprint lands back here with the window open.
+    let pending = null;
+    try { pending = sessionStorage.getItem('architect.openWin'); sessionStorage.removeItem('architect.openWin'); } catch {}
+    if (pending) openBoard(pending, { window: true });
     // Pull a detached column back home when you drop it on its Path.
     const vp = ed.vp;
     const onUp = () => setTimeout(checkSnap, 0);
@@ -256,6 +270,8 @@ export function mountSpace(root) {
     if (!el || !!el.open === !!open) return;
     const size = open ? OPEN : CARD;
     ed.updateEls([id], { open: !!open, w: size.w, h: size.h, cardW: open ? el.w : undefined, cardH: open ? el.h : undefined, ...(open ? {} : { w: el.cardW || CARD.w, h: el.cardH || CARD.h }) });
+    ticketEsc.get(id)?.(); ticketEsc.delete(id);
+    if (open) ticketEsc.set(id, onEscapeFull(() => { if (!editor()?.byId.get(id)?.open) return false; expandTicket(id, false); }));
     if (open) {
       const next = ed.byId.get(id);
       const r = ed.rect();
@@ -270,6 +286,7 @@ export function mountSpace(root) {
     }
   }
   const camBefore = new Map();
+  const ticketEsc = new Map(); // expanded ticket → its Ctrl+Esc handler
 
   function snapBack(colWidgetId) {
     const ed = editor();
@@ -279,6 +296,38 @@ export function mountSpace(root) {
       .filter((e) => e.id !== colWidgetId)
       .map((e) => (e.type === 'widget' && e.kind === 'path' && e.owner === col.owner ? { ...e, detached: (e.detached || []).filter((x) => x !== col.colId) } : e)));
     toast('Snapped back into your Path.', { ms: 1800 });
+  }
+
+  /* ---------------- phones & tablets: a dock instead of hunting for long-press ---------------- */
+  function mountDock() {
+    page.querySelector('.space-dock')?.remove();
+    const ed = editor();
+    const small = () => innerWidth < 720;
+    const widget = (kind, test = () => true) => ed.els.find((e) => e.type === 'widget' && e.kind === kind && !ed.isHidden(e) && test(e));
+    const fly = (el) => { if (!el) return false; ed.select([el.id]); ed.fitRect(el, { maxZ: 1, pad: small() ? 8 : 40 }); return true; };
+    const item = (ic, label, fn) => h('button', { class: 'sd-btn', type: 'button', 'aria-label': label, onclick: (e) => fn(e.currentTarget) }, icon(ic, 20), h('span', {}, label));
+    const dock = h('nav', { class: 'space-dock', 'aria-label': 'Space' },
+      item('more', 'Menu', (b) => { const r = b.getBoundingClientRect(); menu({ x: r.left, y: r.top - 8 }, spaceItems(ed.viewCenter()), { side: 'top' }); }),
+      item('toPaths', 'Path', () => { if (small()) go('paths'); else if (!fly(widget('path', (e) => e.owner === me.id))) addWidget('path'); }),
+      item('ticket', 'Tickets', () => { if (small()) go('parasites'); else if (!fly(widget('tickets'))) addWidget('tickets'); }),
+      item('calendar', 'Tracker', () => { if (!fly(widget('tracker'))) addWidget('tracker'); }),
+      item('frame', 'Blueprints', () => { if (small()) go('blueprint'); else if (!fly(widget('blueprints'))) addWidget('blueprints'); }),
+      item('plus', 'Add', (b) => { const r = b.getBoundingClientRect(); const all = spaceItems(ed.viewCenter()); menu({ x: r.right, y: r.top - 8 }, all.slice(0, all.indexOf('-')), { side: 'top', align: 'end' }); }));
+    page.append(dock);
+  }
+
+  /* ---------------- Blueprints: a window over the Space, or full screen ---------------- */
+  let bpWin = null;
+  function openBoard(boardId, { window: asWindow } = {}) {
+    if (!boardId) return;
+    const useWindow = asWindow ?? getPref('bpCompact', true) !== false;
+    if (!useWindow) { go(`board/${boardId}`); return; }
+    if (bpWin?.boardId === boardId) return;
+    bpWin?.close();
+    bpWin = openBoardWindow(page, boardId, {
+      onClose: () => { bpWin = null; },
+      onExpand: () => { bpWin = null; go(`board/${boardId}`); },
+    });
   }
 
   function reveal(id) {
@@ -327,6 +376,62 @@ export function mountSpace(root) {
     el.x = p.x - el.w / 2; el.y = p.y - el.h / 2;
     ed.addEls([el]);
     if (kind === 'custom') editCustom({ current: () => ed.byId.get(el.id) || el, patch: (x) => ed.updateEls([el.id], x) });
+    if (kind === 'radio') askSource().then((src) => {
+      if (src && ed.byId.get(el.id)) ed.updateEls([el.id], { src: src.url, list: src.list, vid0: src.vid, mode: 'stream', st: { by: me.id, name: me.username, index: 0, vid: src.vid, t: 0, playing: false, at: Date.now() } });
+    });
+    return el;
+  }
+
+  /* ---------------- chats connected to objects ---------------- */
+  function chatAbout(target) {
+    const ed = editor();
+    if (!ed || !target) return;
+    const existing = ed.els.find((e) => e.type === 'widget' && e.kind === 'chat' && e.about === target.id && !ed.isHidden(e));
+    if (existing) { ed.select([existing.id]); reveal(existing.id); return; }
+    const rc = rectOf(target, ed.byId);
+    const chat = widgetEl('chat', { about: target.id, messages: [] });
+    chat.x = rc.x + rc.w + 80; chat.y = rc.y;
+    ed.setEls([...ed.els, chat, connect(chat, target)]);
+    ed.select([chat.id]);
+    reveal(chat.id);
+  }
+  function connect(chat, target) {
+    const rc = rectOf(target, editor().byId);
+    return { ...editor().connectorFrom(chat, { id: target.id, x: rc.x + rc.w / 2, y: rc.y + rc.h / 2 }), route: 'curve', dash: 'dotted', startCap: 'none', endCap: 'dot', chatLink: true };
+  }
+  function attachChat(chat, target) {
+    const ed = editor();
+    const keep = ed.els.filter((e) => !(e.type === 'line' && e.chatLink && e.a?.id === chat.id));
+    ed.setEls([...keep.map((e) => (e.id === chat.id ? { ...e, about: target.id } : e)), connect({ ...chat, about: target.id }, target)]);
+    toast(`Chat connected to “${labelOf(target)}”.`, { ms: 2200 });
+  }
+
+  /* ---------------- Voice chat: say something out loud (Enter) ---------------- */
+  function sayBar() {
+    if (page.querySelector('.say-bar')) { page.querySelector('.say-bar input')?.focus(); return; }
+    const ed = editor();
+    const input = h('input', { class: 'say-input', maxlength: 600, placeholder: 'Say something — everyone hears it', 'aria-label': 'Say something out loud' });
+    const close = () => bar.remove();
+    const send = () => {
+      const t = input.value.trim();
+      if (!t) { close(); return; }
+      let ctl = [...ttsCtl.entries()].find(([id]) => ed.byId.get(id) && !ed.isHidden(ed.byId.get(id)))?.[1];
+      if (!ctl) {
+        const el = addWidget('tts', ed.viewCenter());
+        toast('Voice chat added to the Space.', { ms: 2200 });
+        setTimeout(() => ttsCtl.get(el.id)?.send(t), 80);
+      } else ctl.send(t);
+      input.value = '';
+    };
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); send(); }
+      else if (e.key === 'Escape') { e.preventDefault(); close(); }
+    });
+    input.addEventListener('blur', () => setTimeout(() => { if (!input.value.trim()) close(); }, 150));
+    const bar = h('div', { class: 'say-bar' }, icon('speaker', 16), input, h('kbd', {}, 'Enter'));
+    page.append(bar);
+    input.focus();
   }
 
   /* ---------------- menus ---------------- */
@@ -352,9 +457,20 @@ export function mountSpace(root) {
       }
       if (el.type === 'widget' && el.kind === 'ticketcol') extra.push({ label: 'Snap back into Ticket board', icon: 'collapse', onSelect: () => snapTicketCol(el.id) });
       if (el.type === 'widget' && el.kind === 'column' && el.owner === me.id) extra.push({ label: 'Snap back into Path', icon: 'collapse', onSelect: () => snapBack(el.id) });
-      if (el.type === 'widget' && el.kind === 'portal') extra.push({ label: 'Open blueprint', icon: 'external', onSelect: () => (location.hash = `#/board/${el.boardId}`) });
+      if (el.type === 'widget' && el.kind === 'portal') {
+        extra.push({ label: 'Open as a window', icon: 'layers', onSelect: () => openBoard(el.boardId, { window: true }) });
+        extra.push({ label: 'Open full screen', icon: 'expand', onSelect: () => openBoard(el.boardId, { window: false }) });
+      }
       if (el.type === 'widget' && el.kind === 'custom') extra.push({ label: 'Edit widget…', icon: 'code', onSelect: () => editCustom({ current: () => editor().byId.get(el.id) || el, patch: (x) => editor().updateEls([el.id], x) }) });
     }
+    const chats = sel.filter((e) => e.type === 'widget' && e.kind === 'chat');
+    const others = sel.filter((e) => e.type !== 'line' && !(e.type === 'widget' && (e.kind === 'chat' || e.kind === 'tts')));
+    if (chats.length === 1 && others.length === 1) extra.push({ label: 'Connect chat to this', icon: 'link', onSelect: () => attachChat(chats[0], others[0]) });
+    else if (sel.length === 1 && others.length === 1) extra.push({ label: 'Chat about this', icon: 'chat', onSelect: () => chatAbout(others[0]) });
+    if (sel.length === 1 && sel[0].type === 'widget' && sel[0].kind === 'chat' && sel[0].about) extra.push({ label: 'Disconnect chat', icon: 'close', onSelect: () => {
+      const c = sel[0];
+      editor().setEls(editor().els.filter((e) => !(e.type === 'line' && e.chatLink && e.a?.id === c.id)).map((e) => (e.id === c.id ? { ...e, about: null } : e)));
+    } });
     const convertible = sel.filter((e) => e.type !== 'widget');
     if (convertible.length) extra.push({ label: 'Convert to Blueprint…', icon: 'frame', onSelect: () => toBlueprint(convertible) });
     const at = items.findIndex((x) => x === '-');
@@ -378,12 +494,16 @@ export function mountSpace(root) {
       { label: 'Frame', icon: 'frame', kbd: 'F', onSelect: tool('frame') },
       { label: 'Image or video', icon: 'image', kbd: 'U', onSelect: () => t.pickFiles() },
       { label: 'Video or link', icon: 'video', kbd: 'K', onSelect: () => t.openEmbed() },
+      { label: 'Chat', icon: 'chat', onSelect: () => addWidget('chat', at) },
+      { label: 'Radio', icon: 'radio', onSelect: () => addWidget('radio', at) },
+      { label: 'Say something out loud', icon: 'speaker', kbd: 'Enter', onSelect: () => sayBar() },
       { label: 'Widget…', icon: 'widget', onSelect: () => widgetPicker(at) },
       '-',
       { header: 'Move around' },
       { label: 'Save this view…', icon: 'target', onSelect: () => saveCameraPoint() },
       { label: 'Camera points…', icon: 'target', onSelect: () => cameraDialog() },
       { label: 'Zoom to fit', icon: 'fit', kbd: '⇧1', onSelect: () => ed.zoomToFit() },
+      { label: 'Snap objects together', icon: 'magnet', checked: ed.prefs.guides !== false, onSelect: () => ed.setPref('guides', ed.prefs.guides === false) },
       '-',
       { header: mode === 'personal' ? 'Personal space' : 'Shared space' },
       { label: mode === 'personal' ? 'Switch to shared space' : 'Switch to personal space', icon: 'home', kbd: 'Tab', onSelect: toggleSpace },
@@ -402,13 +522,13 @@ export function mountSpace(root) {
 
   async function widgetPicker(at) {
     const choose = (kind) => { closeFloating(); addWidget(kind, at); };
-    const opts = ['path', 'tracker', 'tickets', 'blueprints', 'custom'];
+    const opts = ['path', 'tracker', 'tickets', 'blueprints', 'chat', 'tts', 'radio', 'custom'];
     dialog({
       title: 'Add a widget',
       width: 460,
       body: h('div', { class: 'wpick' }, opts.map((k) => h('button', { type: 'button', class: 'wpick-row', onclick: () => choose(k) },
         h('span', { class: 'wpick-ic' }, icon(WIDGETS[k].icon, 18)),
-        h('span', { class: 'wpick-text' }, h('b', {}, WIDGETS[k].label))))),
+        h('span', { class: 'wpick-text' }, h('b', {}, WIDGETS[k].label), WIDGETS[k].hint ? h('small', {}, WIDGETS[k].hint) : null)))),
       actions: [{ label: 'Cancel', value: null }],
     });
   }
@@ -507,7 +627,7 @@ export function mountSpace(root) {
     const ed = editor();
     const el = ed?.byId.get(id);
     if (!el || ed.isHidden(el)) return false;
-    if (el.type === 'widget' && el.kind === 'portal') { location.hash = `#/board/${el.boardId}`; return true; }
+    if (el.type === 'widget' && el.kind === 'portal') { openBoard(el.boardId); return true; }
     ed.select([id]);
     ed.fitRect(rectOf(el, ed.byId), { maxZ: el.type === 'widget' ? 1 : 1.5, pad: 60 });
     return true;
@@ -519,7 +639,7 @@ export function mountSpace(root) {
 
   const onKeyDown = (e) => {
     const ed = editor();
-    if (!ed || isTypingTarget(e.target) || document.querySelector('.dlg') || ed.editingId) return;
+    if (!ed || getSurface() || isTypingTarget(e.target) || document.querySelector('.dlg') || ed.editingId) return;
     if (e.target instanceof Element && e.target.closest('.wg-body')) return;
     if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); toggleSpace(); return; }
     const combo = comboOf(e);
@@ -527,6 +647,9 @@ export function mountSpace(root) {
     if (p) { e.preventDefault(); e.stopPropagation(); goTo(p); return; }
     const obj = Object.entries(objKeys()).find(([, k]) => k === combo);
     if (obj && openObject(obj[0])) { e.preventDefault(); e.stopPropagation(); return; }
+    if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !ed.sel.size) {
+      e.preventDefault(); e.stopPropagation(); sayBar(); return;
+    }
     if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault(); e.stopPropagation();
       const at = lastPointer || { x: innerWidth / 2, y: innerHeight / 2 };
@@ -574,6 +697,8 @@ export function mountSpace(root) {
   return {
     destroy() {
       destroyed = true;
+      bpWin?.close(); bpWin = null;
+      ticketEsc.forEach((off) => off()); ticketEsc.clear();
       offs.forEach((f) => { try { f(); } catch {} });
       boardOffs.forEach((f) => { try { f(); } catch {} });
       board?.destroy();

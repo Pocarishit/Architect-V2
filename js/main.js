@@ -11,6 +11,8 @@ import { resetPrefs } from './data/prefs.js';
 import { resetAvatars } from './data/profile.js';
 import { applyCustom, clearCustom } from './core/custom.js';
 import { mountBoard } from './board/board.js';
+import { installGuards, onEscapeFull } from './core/guard.js';
+import { go } from './core/router.js';
 
 const app = document.getElementById('app');
 let session = null;
@@ -18,10 +20,12 @@ let shell = null;
 let view = null;
 let login = null;
 let viewName = null;
+let escOff = null;
 
 function teardownView() {
   closeFloating();
   try { view?.destroy?.(); } catch (e) { console.error(e); }
+  escOff?.(); escOff = null;
   view = null;
   viewName = null;
 }
@@ -70,9 +74,12 @@ function route() {
   else if (r.view === 'parasites') view = mountParasites(shell.outlet, r.id);
   else if (r.view === 'blueprint') view = mountArchive(shell.outlet, r.id);
   else if (r.view === 'board') view = mountBoard(shell.outlet, r.id);
+  // Ctrl+Esc (or Esc twice) from any full-page view goes back to the Space.
+  if (r.view !== 'space') escOff = onEscapeFull(() => { go(''); });
 }
 
 async function boot() {
+  installGuards();
   try {
     session = await api.auth.init();
   } catch (e) {

@@ -294,7 +294,17 @@
 /* ---------- Parasites tracker: board, tickets, attempts ---------- */
 .px-head-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .px-layout.subtabs { margin: 0; align-self: auto; }
-.px-label-filter { margin-bottom: 16px; }
+.px-label-filter { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; min-width: 0; }
+.px-label-filter .tk-chips { margin: 0; min-width: 0; }
+.px-label-toggle {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px 0 8px; border-radius: var(--pill);
+  border: 1px solid var(--line-2); font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-2);
+}
+.px-label-toggle:hover { color: var(--fg); border-color: var(--fg-3); }
+.px-label-toggle .ic { transition: transform .16s; }
+.px-label-filter.is-open .px-label-toggle .ic { transform: rotate(90deg); }
+.px-label-toggle b { font-family: var(--f-dot); font-weight: 800; font-size: 12px; color: var(--fg-3); }
+.px-label-filter.is-open { align-items: flex-start; }
 .px-label-dot { display: inline-block; width: 5px; height: 5px; margin-right: 6px; border-radius: 1px; background: currentColor; vertical-align: middle; opacity: .7; }
 
 .px-board { display: grid; grid-template-columns: repeat(4, minmax(250px, 1fr)); gap: 12px; align-items: start; overflow-x: auto; padding-bottom: 8px; }
@@ -302,7 +312,6 @@
 .px-col.is-over { border-color: var(--fg); background: var(--s2); }
 .px-col-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px; }
 .px-col-title { display: inline-flex; align-items: center; gap: 8px; font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
-.px-col-n { font-family: var(--f-dot); font-weight: 800; font-size: 14px; color: var(--fg-3); }
 .px-col-list { display: grid; gap: 8px; }
 .px-col-empty { margin: 0; padding: 18px 8px; text-align: center; border: 1px dashed var(--line-2); border-radius: 14px; font-family: var(--f-mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-4); }
 
@@ -324,12 +333,11 @@
 .px-tcard:hover, .px-tcard:focus-visible { border-color: var(--fg-3); outline: none; }
 .px-tcard.is-dragging { opacity: .4; }
 .px-tcard.is-solved .px-tcard-title { color: var(--fg-3); text-decoration: line-through; text-decoration-thickness: 1px; }
-.px-tcard-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.px-tcard-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; }
+.px-tcard-top .tk-av { width: 22px; height: 22px; font-size: 10px; box-shadow: 0 0 0 2px var(--s2); }
 .px-no { font-family: var(--f-dot); font-weight: 800; font-size: 13px; color: var(--fg-3); }
 .px-tcard-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
-.px-tcard-foot { display: flex; align-items: center; gap: 10px; }
-.px-tcard-foot .cd-avatars { margin-right: auto; }
-.px-tcard-foot .tk-av { width: 22px; height: 22px; font-size: 10px; box-shadow: 0 0 0 2px var(--s2); }
+.px-tcard-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 .tk-av.is-through { background: var(--fg); color: var(--bg); }
 .px-meta { display: inline-flex; align-items: center; gap: 4px; font-family: var(--f-mono); font-size: 11px; color: var(--fg-3); }
 .px-meta-wall { font-family: var(--f-dot); font-weight: 800; font-size: 13px; color: var(--fg); }

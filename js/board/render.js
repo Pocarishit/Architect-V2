@@ -214,13 +214,17 @@ export function updateNode(node, el, ctx) {
     }
     case 'link': {
       place(node, el);
-      const sig = `${el.url}|${el.title}|${el.host}`;
+      const sig = `${el.url}|${el.title}|${el.host}|${el.desc}|${el.image}|${el.icon}`;
       if (node._sig !== sig) {
         node._sig = sig;
         const href = safeHref(el.url);
-        node.replaceChildren(h('div', { class: 'lk' },
-          h('div', { class: 'lk-top' }, icon('link', 14), h('span', { class: 'lk-host' }, el.host || '')),
-          h('div', { class: 'lk-title' }, el.title || el.url || ''),
+        const fav = el.icon && /^https:/.test(el.icon) ? h('img', { class: 'lk-fav', src: el.icon, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer', onerror: (e) => e.currentTarget.replaceWith(icon('link', 14)) }) : icon('link', 14);
+        const pic = el.image && /^https:/.test(el.image) ? h('div', { class: 'lk-pic' }, h('img', { src: el.image, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer', draggable: 'false', onerror: (e) => e.currentTarget.parentNode.remove() })) : null;
+        node.replaceChildren(h('div', { class: ['lk', pic && 'has-pic'] },
+          pic,
+          h('div', { class: 'lk-top' }, fav, h('span', { class: 'lk-host' }, el.site || el.host || '')),
+          h('div', { class: ['lk-title', el.desc && 'has-desc'] }, el.title || el.url || ''),
+          el.desc ? h('div', { class: 'lk-desc' }, el.desc) : null,
           href ? h('a', { class: 'lk-open', href, target: '_blank', rel: 'noopener noreferrer', 'data-noptr': '' }, 'Open', icon('external', 13)) : null));
       }
       break;

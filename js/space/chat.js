@@ -6,6 +6,8 @@
 // Messages live on the widget object itself, so they sync live with the rest of the Space.
 // Two people sending at the same moment can overwrite each other; each sender keeps its message
 // pending until it shows up in the shared copy and re-adds it if it was lost.
+// Order is arrival order (not each device's clock — a clock a minute behind used to file your
+// new messages above everyone else's). "… is typing" travels over the live channel only.
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { menu, toast } from '../core/ui.js';
@@ -82,7 +84,8 @@ export function mountChat(body, el, w, { tts = false } = {}) {
   const ed = () => w.host.editor();
   const mutedKey = `architect.tts.muted.${el.id}`;
   let muted = !!store.get(mutedKey, false);
-  const pending = new Map();
+  const mineSent = new Map();
+  const mineAfter = new Map(); // message id → the message it came after when you sent it // everything you sent while this is open: re-added if someone's copy overwrote it
   const known = new Set((el.messages || []).map((m) => m.id));
   (el.messages || []).forEach((m) => spoken.add(m.id)); // history isn't read out on load
   const mountedAt = Date.now();
@@ -92,14 +95,49 @@ export function mountChat(body, el, w, { tts = false } = {}) {
   const input = h('textarea', { class: 'ch-input', rows: 1, maxlength: 2000, placeholder: tts ? 'Type — it’s spoken out loud' : 'Message', 'aria-label': 'Message' });
   const sendBtn = h('button', { class: 'ch-send', type: 'button', 'aria-label': 'Send', onclick: () => send() }, icon(tts ? 'speaker' : 'send', 16));
   const about = h('button', { class: 'ch-about', type: 'button', hidden: true, onclick: () => goAbout() });
-  body.append(h('div', { class: ['ch', tts && 'is-tts'] }, about, list, h('div', { class: 'ch-compose' }, input, sendBtn)));
+  const typingRow = h('div', { class: 'ch-typing', 'aria-live': 'polite', hidden: true });
+  body.append(h('div', { class: ['ch', tts && 'is-tts'] }, about, list, typingRow, h('div', { class: 'ch-compose' }, input, sendBtn)));
+
+  /* "… is typing" — out over the live channel while you type, in from everyone else */
+  const typers = new Map(); // uid → { name, until }
+  let lastPing = 0, typingTimer = null;
+  const signal = (stop = false) => { try { ed()?.emit('signal', { kind: 'typing', chat: el.id, stop, uid: me.id, name: me.username }); } catch {} };
+  function pingTyping() {
+    const now = Date.now();
+    if (!input.value.trim()) { if (lastPing) { lastPing = 0; signal(true); } return; }
+    if (now - lastPing > 1500) { lastPing = now; signal(); }
+  }
+  function stopTyping() { if (lastPing) { lastPing = 0; signal(true); } }
+  function paintTyping() {
+    const now = Date.now();
+    for (const [id, t] of typers) if (t.until < now) typers.delete(id);
+    const names = [...typers.values()].map((t) => t.name || 'Someone');
+    typingRow.hidden = !names.length;
+    if (names.length) typingRow.replaceChildren(h('span', { class: 'ch-dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')),
+      h('span', {}, names.length === 1 ? `${names[0]} is typing` : names.length === 2 ? `${names[0]} and ${names[1]} are typing` : 'Several people are typing'));
+    clearTimeout(typingTimer);
+    if (names.length) typingTimer = setTimeout(paintTyping, 1000);
+  }
+  let offSignal = null;
+  const listen = () => {
+    const e = ed();
+    if (!e || offSignal) return;
+    offSignal = e.on('signal-in', (sig) => {
+      if (sig?.kind !== 'typing' || sig.chat !== el.id || sig.uid === me.id) return;
+      if (sig.stop) typers.delete(sig.uid); else typers.set(sig.uid, { name: sig.name, until: Date.now() + 4000 });
+      paintTyping();
+    });
+  };
+  listen();
+  setTimeout(listen, 0); // the editor may hand itself over a tick after the widget mounts
+  input.addEventListener('blur', stopTyping);
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     e.stopPropagation(); // typing here never drives canvas shortcuts
   });
   const grow = () => { input.style.height = 'auto'; input.style.height = `${Math.min(120, input.scrollHeight)}px`; };
-  input.addEventListener('input', grow);
+  input.addEventListener('input', () => { grow(); pingTyping(); });
 
   /* tools in the widget header */
   const muteBtn = tts ? h('button', { class: 'wg-btn', type: 'button', onclick: () => setMuted(!muted) }) : null;
@@ -140,9 +178,10 @@ export function mountChat(body, el, w, { tts = false } = {}) {
     const t = String(text || '').trim();
     if (!t) return;
     const m = { id: uid(), by: me.id, name: me.username || 'Me', text: t.slice(0, 2000), ts: Date.now() };
-    pending.set(m.id, m);
+    mineSent.set(m.id, m);
+    mineAfter.set(m.id, (w.current().messages || []).at(-1)?.id || null); // where it went, in case it has to be put back
     known.add(m.id);
-    if (text === input.value) { input.value = ''; grow(); }
+    if (text === input.value) { input.value = ''; grow(); stopTyping(); }
     commit();
     if (tts && !muted) speak(m);
     paint(true);
@@ -150,9 +189,20 @@ export function mountChat(body, el, w, { tts = false } = {}) {
   function commit() {
     const cur = w.current().messages || [];
     const have = new Set(cur.map((x) => x.id));
-    const add = [...pending.values()].filter((m) => !have.has(m.id));
+    const add = [...mineSent.values()].filter((m) => !have.has(m.id));
     if (!add.length) return;
-    const next = [...cur, ...add].sort((a, b) => a.ts - b.ts).slice(-MAX);
+    // Arrival order: a new message goes to the bottom; one lost in a race goes back where it was.
+    const next = [...cur];
+    for (const m of add) {
+      const after = mineAfter.get(m.id);
+      const i = after ? next.findIndex((x) => x.id === after) : mineAfter.has(m.id) ? -1 : -2; // -1: it was the very first message
+      if (i >= -1 && i < next.length - 1) {
+        let j = i + 1;
+        while (j < next.length && mineSent.has(next[j].id)) j++; // keep your own messages in the order you sent them
+        next.splice(j, 0, m);
+      } else next.push(m);
+    }
+    next.splice(0, Math.max(0, next.length - MAX));
     w.live({ messages: next });
   }
 
@@ -199,13 +249,14 @@ export function mountChat(body, el, w, { tts = false } = {}) {
       for (const m of msgs) {
         if (known.has(m.id)) continue;
         known.add(m.id);
+        if (typers.delete(m.by)) paintTyping();
         if (tts && !muted && m.by !== me.id && m.ts > mountedAt - 15_000) speak(m);
       }
-      for (const id of [...pending.keys()]) if (ids.has(id)) pending.delete(id);
-      if (pending.size) { clearTimeout(retry); retry = setTimeout(commit, 350); } // lost in a simultaneous send: add it back
+      // Lost in a simultaneous send (their copy didn't have yours yet): add it back.
+      if ([...mineSent.keys()].some((id) => !ids.has(id))) { clearTimeout(retry); retry = setTimeout(commit, 250 + Math.random() * 250); }
       paint();
     },
-    destroy() { clearTimeout(retry); },
+    destroy() { clearTimeout(retry); clearTimeout(typingTimer); stopTyping(); offSignal?.(); },
     send,
   };
 }

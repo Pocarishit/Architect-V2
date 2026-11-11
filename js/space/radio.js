@@ -36,7 +36,10 @@ export function parseSource(raw) {
   else if (u.pathname === '/watch') vid = u.searchParams.get('v');
   else if ((m = u.pathname.match(/^\/(shorts|embed|live|v)\/([\w-]{6,})/))) vid = m[2];
   if (!list && !vid) return null;
-  return { list: list || null, vid: vid && /^[\w-]{6,}$/.test(vid) ? vid : null, url: u.href };
+  const v = vid && /^[\w-]{6,}$/.test(vid) ? vid : null;
+  // Auto "Mix" lists (RD…) and your private Watch later / Liked lists can't play outside YouTube.
+  if (list && /^(RD|WL$|LL$|LM$)/.test(list)) return v ? { list: null, vid: v, url: u.href, note: 'YouTube Mixes and private lists can’t play here — playing just this video. Use a public or unlisted playlist for the full radio.' } : { error: 'That’s a YouTube Mix or a private list — those can’t play outside YouTube. Make a public or unlisted playlist and paste that.' };
+  return { list: list || null, vid: v, url: u.href };
 }
 
 const fmt = (s) => { s = Math.max(0, Math.floor(s || 0)); const m = Math.floor(s / 60); return `${m}:${String(s % 60).padStart(2, '0')}`; };
@@ -46,6 +49,8 @@ export async function askSource(current = '') {
   if (v == null) return null;
   const src = parseSource(v);
   if (!src) { toast('That isn’t a YouTube playlist or video link.', { tone: 'error', ms: 3500 }); return null; }
+  if (src.error) { toast(src.error, { tone: 'error', ms: 7000 }); return null; }
+  if (src.note) toast(src.note, { ms: 6000 });
   return src;
 }
 
@@ -53,6 +58,9 @@ export async function askSource(current = '') {
 export function mountRadio(body, el, w) {
   const me = w.me || {};
   let player = null, ready = false, tunedIn = false, destroyed = false;
+  let gen = 0;                  // each (re)build of the YouTube player; stale ones bail out
+  let wantPlay = false;         // Play pressed before the player was ready
+  let errors = 0;               // unplayable tracks skipped in a row
   let applying = false;         // true while we're moving the player to match the shared state
   let lastVid = null;
   const hideVideo = () => !!store.get(`architect.radio.hide.${el.id}`, false);
@@ -114,9 +122,10 @@ export function mountRadio(body, el, w) {
   }
   function togglePlay() {
     if (!w.current().src) { setSource(); return; }
-    if (!tunedIn) { tuneIn(true); return; }
-    const playing = player?.getPlayerState?.() === 1;
-    act({ playing: !playing, t: player?.getCurrentTime?.() || 0 });
+    tunedIn = true;
+    if (!ready) { wantPlay = true; title.textContent = 'Loading…'; return; }
+    const playing = player.getPlayerState?.() === 1;
+    act({ playing: !playing, t: player.getCurrentTime?.() || 0 });
   }
   function step(d) {
     if (!ready) return;
@@ -138,8 +147,10 @@ export function mountRadio(body, el, w) {
       const curIdx = player.getPlaylistIndex?.();
       const pos = expected(s);
       if (want != null && want !== curIdx && list.length) {
-        if (s.playing && tunedIn) player.playVideoAt(want); else player.cueVideoById?.(list[want], pos);
-        setTimeout(() => { try { player.seekTo(pos, true); if (!(s.playing && tunedIn)) player.pauseVideo(); } catch {} }, 600);
+        if (s.playing && tunedIn) {
+          player.playVideoAt(want);
+          if (pos > 2) setTimeout(() => { try { player.seekTo(expected(s), true); } catch {} }, 700);
+        } else player.cuePlaylist?.({ listType: 'playlist', list: w.current().list, index: want, startSeconds: pos });
       } else {
         if (Math.abs((player.getCurrentTime?.() || 0) - pos) > (fromMe ? 0.4 : 2.5)) player.seekTo(pos, true);
         if (s.playing && tunedIn) player.playVideo(); else player.pauseVideo();
@@ -149,20 +160,22 @@ export function mountRadio(body, el, w) {
     paint();
   }
 
-  function tuneIn(play = false) {
+  // "Tune in": join what's playing live.
+  function tuneIn() {
     tunedIn = true;
-    if (!ready) { paint(); return; }
+    if (!ready) { wantPlay = !streaming(); paint(); return; }
     if (streaming() && st().at) apply(st());
-    else if (play) act({ playing: true });
-    else { try { player.playVideo(); } catch {} }
+    else act({ playing: true });
     paint();
   }
 
   async function setSource() {
     const src = await askSource(w.current().src || '');
     if (!src) return;
+    tunedIn = true;
+    wantPlay = true; // you just picked it: start playing as soon as it's loaded
     w.live({ src: src.url, list: src.list, vid0: src.vid, st: { by: me.id, name: me.username, index: 0, vid: src.vid, t: 0, playing: false, at: Date.now() } });
-    build(true);
+    if (builtFor !== `${src.list}|${src.vid}`) build(true); // (the update above normally rebuilds it already)
   }
 
   /* ---- the YouTube player ---- */
@@ -172,33 +185,37 @@ export function mountRadio(body, el, w) {
     const key = `${cur.list}|${cur.vid0}`;
     if (!cur.src || (!force && builtFor === key)) { paint(); return; }
     builtFor = key;
+    const my = ++gen;
     ready = false;
+    errors = 0;
     paint();
     try { player?.destroy?.(); } catch {}
     player = null;
     holder.replaceChildren(h('div'));
     let YT;
-    try { YT = await loadYT(); } catch (e) { title.textContent = 'Couldn’t reach YouTube'; artist.textContent = e.message; return; }
-    if (destroyed) return;
+    try { YT = await loadYT(); } catch (e) { if (my === gen) { title.textContent = 'Couldn’t reach YouTube'; artist.textContent = e.message; } return; }
+    if (destroyed || my !== gen) return; // a newer link was set meanwhile
     const vars = { playsinline: 1, rel: 0, modestbranding: 1, controls: 0, disablekb: 1, iv_load_policy: 3, origin: location.origin };
     if (cur.list) { vars.listType = 'playlist'; vars.list = cur.list; }
     player = new YT.Player(holder.firstChild, {
       host: 'https://www.youtube-nocookie.com',
       width: '100%', height: '100%',
-      videoId: cur.list ? undefined : cur.vid0,
+      videoId: cur.vid0 || undefined,
       playerVars: vars,
       events: {
         onReady: () => {
-          if (destroyed) return;
+          if (destroyed || my !== gen) return;
           ready = true;
           player.setVolume?.(Number(vol.value));
-          if (streaming() && st().at) apply(st());
+          if (wantPlay) { wantPlay = false; act({ playing: true, t: 0 }); }
+          else if (streaming() && st().at) apply(st());
           paint();
         },
         onStateChange: (e) => {
-          if (destroyed) return;
+          if (destroyed || my !== gen) return;
           const vid = player.getVideoData?.()?.video_id || null;
           // The song changed on its own (end of track): whoever has the aux tells everyone.
+          if (e.data === 1) errors = 0;
           if (vid && vid !== lastVid) {
             const fromAuto = lastVid && !applying;
             lastVid = vid;
@@ -212,7 +229,15 @@ export function mountRadio(body, el, w) {
           }
           paint();
         },
-        onError: () => { if (!streaming() || iControl()) setTimeout(() => step(1), 800); }, // unplayable track: skip it
+        // Unplayable track (deleted, private, or embedding turned off): skip it — but not forever.
+        onError: (e) => {
+          if (destroyed || my !== gen) return;
+          errors++;
+          const n = (player.getPlaylist?.() || []).length;
+          if (n > 1 && errors < Math.min(n, 8) && (!streaming() || iControl())) { setTimeout(() => step(1), 800); return; }
+          title.textContent = 'Can’t play this here';
+          artist.textContent = { 2: 'The link looks broken.', 5: 'This video can’t play in a browser player.', 100: 'Video not found, or it’s private.', 101: 'The owner turned off playing on other sites.', 150: 'The owner turned off playing on other sites.' }[e?.data] || 'YouTube refused to play it.';
+        },
       },
     });
   }
@@ -274,7 +299,12 @@ export function mountRadio(body, el, w) {
   return {
     update(next) {
       const key = `${next.list}|${next.vid0}`;
-      if (next.src && key !== builtFor) { build(); return; }
+      if (next.src && key !== builtFor) {
+        // You just set this link (from the Add menu): play it as soon as it loads.
+        if (next.st?.by === me.id && Date.now() - (next.st.at || 0) < 30_000) { tunedIn = true; wantPlay = true; }
+        build();
+        return;
+      }
       if (streaming() && tunedIn && !iControl() && next.st?.at) apply(next.st);
       else paint();
     },

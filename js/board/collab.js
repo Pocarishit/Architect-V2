@@ -130,6 +130,9 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
     typeTimer = setTimeout(() => { typeTimer = null; if (pendingType && ch.live) send('type', pendingType); pendingType = null; }, TYPE_MS);
   }));
 
+  // Short-lived signals from widgets (e.g. "Hiru is typing…" in a chat): sent live, never saved.
+  offs.push(editor.on('signal', (sig) => { if (ch.live && sig) send('sig', { sig, uid: me.id, name: me.username }); }));
+
   /* ---------- incoming ---------- */
   function onMessage(event, p) {
     if (event === '__joined') { joined(); return; }
@@ -144,6 +147,8 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
       Object.assign(peer, { x: p.x, y: p.y, sel: p.sel || [], editing: p.editing || null, mbox: p.box || null });
       if (moved) peer.moved = Date.now();
       paintPeer(peer);
+    } else if (event === 'sig') {
+      editor.emit('signal-in', { uid: p.uid, name: p.name, ...p.sig });
     } else if (event === 'type') {
       editor.showRemoteText(p.id, p);
     } else if (event === 'hello') {

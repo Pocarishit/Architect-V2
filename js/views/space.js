@@ -27,13 +27,11 @@ export function mountSpace(root) {
   page.append(h('div', { class: 'bp-loading' }, h('span', { class: 'dots-loader' }, h('i'), h('i'), h('i'))));
   document.body.classList.add('is-board', 'is-space');
 
-  let board = null;     // mountBoard handle
-  let t = null;         // the board page's tools (editor, addFiles, …)
+  let t = null;         // the board page's tools (editor, addFiles, …) for the Space on screen
   let spaceId = null;
   let destroyed = false;
   let lastPointer = null;
   const offs = [];
-  let boardOffs = [];   // listeners tied to the canvas on screen
   const editor = () => t?.editor || null;
   const pathCtl = new Map(); // Path widget id → its controls (New path…)
   const register = (id, ctl) => { if (ctl) pathCtl.set(id, ctl); else pathCtl.delete(id); };
@@ -42,6 +40,8 @@ export function mountSpace(root) {
   // Two worlds: the shared Space (everyone you're with) and your personal one. Tab flips between them.
   let mode = 'shared';
   const ids = { shared: null, personal: null };
+  // Each Space stays mounted once opened; Tab just swaps which one is shown (no reload, no refetch).
+  const slots = { shared: null, personal: null }; // { el, board, t, offs }
   let switching = false;
 
   /* ---------------- find (or make) your Space ---------------- */
@@ -64,21 +64,40 @@ export function mountSpace(root) {
     if (destroyed) return;
     closeFloating();
     bpWin?.close(); bpWin = null;
-    board?.destroy();
-    boardOffs.forEach((f) => { try { f(); } catch {} });
-    boardOffs = [];
-    board = null; t = null;
+    page.querySelector(':scope > .bp-loading')?.remove();
+    page.querySelector('.say-bar')?.remove();
+    park(slots[mode]);
     mode = m; spaceId = id;
-    page.replaceChildren();
     page.dataset.mode = m;
-    board = mountBoard(page, id, {
-      space: true,
-      mountWidget: createWidgetHost({ editor, spaceId: id, me, openBoard, snapBack, detach, detachTicketCol, snapTicketCol, popTicket, snapTicket, expandTicket, poppedTickets, openMenuFor, reveal, addPortal, register, registerTts }),
-      extendMenu,
-      onReady,
-    });
+    let slot = slots[m];
+    if (slot) {
+      // Already loaded: just show it again.
+      slot.el.style.display = '';
+      if (slot.t) slot.t.editor.surface = null;
+      t = slot.t;
+      if (t) mountDock(); // the dock's buttons point at the canvas on screen
+    } else {
+      t = null;
+      slot = slots[m] = { el: null, board: null, t: null, offs: [] };
+      const before = page.lastElementChild;
+      slot.board = mountBoard(page, id, {
+        space: true,
+        mountWidget: createWidgetHost({ editor: () => slot.t?.editor || null, spaceId: id, me, openBoard, snapBack, detach, detachTicketCol, snapTicketCol, popTicket, snapTicket, expandTicket, poppedTickets, openMenuFor, reveal, addPortal, register, registerTts }),
+        extendMenu,
+        onReady: (tools) => onReady(tools, slot, m),
+      });
+      slot.el = page.lastElementChild !== before ? page.lastElementChild : null;
+      if (slot.el) page.prepend(slot.el); // keep the dock and overlays above every canvas
+    }
     if (!first) flash(m === 'personal' ? 'Personal space' : 'Shared space');
     if (getPref('spaceMode', 'shared') !== m) setPref('spaceMode', m).catch(() => {});
+  }
+
+  // Hide a Space without unloading it. 'parked' keeps its keyboard, copy and paste handlers asleep.
+  function park(slot) {
+    if (!slot?.el) return;
+    slot.el.style.display = 'none';
+    if (slot.t) slot.t.editor.surface = 'parked';
   }
 
   async function toggleSpace() {
@@ -153,10 +172,12 @@ export function mountSpace(root) {
   }
 
   /* ---------------- once the canvas is up ---------------- */
-  function onReady(tools) {
-    t = tools;
-    const ed = t.editor;
-    t.page.classList.toggle('show-chrome', !!getPref('spaceChrome', false));
+  function onReady(tools, slot, m) {
+    slot.t = tools;
+    const ed = tools.editor;
+    if (mode === m) t = tools;
+    else ed.surface = 'parked'; // you tabbed away while it was loading
+    tools.page.classList.toggle('show-chrome', !!getPref('spaceChrome', false));
     // Everyone gets their own Path on the shared canvas.
     if (!ed.els.some((e) => e.type === 'widget' && e.kind === 'path' && e.owner === me.id)) {
       const rc = ed.els.length ? unionRects(ed.els.map((e) => rectOf(e, ed.byId))) : { x: 0, y: 0, w: 0, h: 0 };
@@ -166,7 +187,7 @@ export function mountSpace(root) {
     }
     // Phones: start on your own Path instead of the whole Space.
     const mine = ed.els.find((e) => e.type === 'widget' && e.kind === 'path' && e.owner === me.id);
-    if (mine && innerWidth < 720 && !localStorage.getItem(`architect.cam.${spaceId}`)) ed.fitRect(mine, { maxZ: 1, pad: 12, animate: false });
+    if (mine && innerWidth < 720 && !localStorage.getItem(`architect.cam.${ids[m]}`)) ed.fitRect(mine, { maxZ: 1, pad: 12, animate: false });
     if (!getPref('spaceHinted', false)) {
       const touch = matchMedia('(hover: none)').matches;
       setTimeout(() => toast(touch ? 'Long-press the canvas for the menu.' : 'Right-click or press / for the menu.', { ms: 5000 }), 800);
@@ -174,8 +195,8 @@ export function mountSpace(root) {
     }
     // Ticket cards come and go (dragged out, deleted, undone): keep the board's faded copies in step.
     let lastPop = [...poppedTickets()].sort().join();
-    boardOffs.push(ed.on('change', () => { const sig = [...poppedTickets()].sort().join(); if (sig !== lastPop) { lastPop = sig; ticketsMoved(); } }));
-    mountDock();
+    slot.offs.push(ed.on('change', () => { const sig = [...poppedTickets()].sort().join(); if (sig !== lastPop) { lastPop = sig; ticketsMoved(); } }));
+    if (mode === m) mountDock();
     // "Open as a window" from a full-page Blueprint lands back here with the window open.
     let pending = null;
     try { pending = sessionStorage.getItem('architect.openWin'); sessionStorage.removeItem('architect.openWin'); } catch {}
@@ -184,7 +205,7 @@ export function mountSpace(root) {
     const vp = ed.vp;
     const onUp = () => setTimeout(checkSnap, 0);
     vp.addEventListener('pointerup', onUp);
-    boardOffs.push(() => vp.removeEventListener('pointerup', onUp));
+    slot.offs.push(() => vp.removeEventListener('pointerup', onUp));
   }
 
   function checkSnap() {
@@ -700,8 +721,11 @@ export function mountSpace(root) {
       bpWin?.close(); bpWin = null;
       ticketEsc.forEach((off) => off()); ticketEsc.clear();
       offs.forEach((f) => { try { f(); } catch {} });
-      boardOffs.forEach((f) => { try { f(); } catch {} });
-      board?.destroy();
+      for (const slot of Object.values(slots)) {
+        if (!slot) continue;
+        slot.offs.forEach((f) => { try { f(); } catch {} });
+        slot.board?.destroy();
+      }
       page.remove();
       document.body.classList.remove('is-space');
     },
@@ -722,4 +746,3 @@ export function comboOf(e) {
   const mods = [e.ctrlKey && 'Ctrl', e.metaKey && 'Cmd', e.altKey && 'Alt', e.shiftKey && 'Shift'].filter(Boolean);
   return [...mods, key].join('+');
 }
-

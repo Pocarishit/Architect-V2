@@ -439,6 +439,23 @@ export class Editor {
     const frames = this.frameLayer.cloneNode(true);
     const els = this.elLayer.cloneNode(true);
     world.append(frames, els);
+    // Objects the speed-ups skipped drawing (off screen, mid-pan) must still land on paper:
+    // un-hide every clone, and rebuild any object that isn't in the DOM at all right now.
+    const cloned = new Set();
+    world.querySelectorAll('[data-eid]').forEach((n) => {
+      cloned.add(n.dataset.eid);
+      n.removeAttribute('hidden');
+      for (const prop of ['display', 'visibility', 'content-visibility', 'opacity']) n.style.removeProperty(prop);
+    });
+    const ctx = { ...this.ctx(), mountWidget: null, editingId: null, activeId: null };
+    for (const el of this.els) {
+      if (cloned.has(el.id) || this.isHidden(el) || el.type === 'widget') continue;
+      try {
+        const n = createNode(el);
+        updateNode(n, el, ctx);
+        (el.type === 'frame' ? frames : els).append(n);
+      } catch {}
+    }
     world.querySelectorAll('.is-selected, .is-live').forEach((n) => n.classList.remove('is-selected', 'is-live'));
     world.querySelectorAll('[contenteditable]').forEach((n) => n.removeAttribute('contenteditable'));
     world.querySelectorAll('.el-shield').forEach((n) => n.remove());
@@ -1474,14 +1491,13 @@ export class Editor {
   }
 
   /* ================= editing ================= */
-  // One click on a note or text box starts typing right where you clicked.
-  // Shapes and frame titles need a second click, so a first click can still just select them.
+  // The first click only selects. Clicking an already-selected note, text box, shape or frame title
+  // (or double-clicking it) starts typing right where you clicked.
   clickToEdit(start) {
     const el = start.el && this.byId.get(start.el.id);
     if (!el || el.locked || this.presenting || this.sel.size !== 1 || !this.sel.has(el.id)) return;
-    const direct = el.type === 'text' || el.type === 'sticky';
-    const second = (el.type === 'shape' || el.type === 'frame') && start.wasSelected;
-    if (!direct && !second) return;
+    const editable = TEXTUAL.has(el.type) || el.type === 'shape' || el.type === 'frame';
+    if (!editable || !start.wasSelected) return;
     this.startEditing(el.id);
     this.placeCaret(start.cx, start.cy);
   }
@@ -2273,6 +2289,16 @@ function resized(el, nr, sx, sy, mapPt, single, corner) {
     if (single && corner) out.fontSize = scaleFont(el.fontSize || 22, sx);
     else if (!single) out.fontSize = scaleFont(el.fontSize || 22, Math.min(sx, sy));
     return out;
+  }
+  if (el.type === 'widget') {
+    // Live cards (chats, Paths, Tickets…) stay whole: whole pixels (fractional sizes blur and chop the
+    // rounded edges) and a floor big enough for the header and some content.
+    const minW = 220, minH = 120;
+    const w = Math.max(minW, Math.round(nr.w)), hh = Math.max(minH, Math.round(nr.h));
+    // If the left/top edge is the one being dragged, keep the opposite edge put when the floor kicks in.
+    const x = nr.x !== el.x ? nr.x + nr.w - w : nr.x;
+    const y = nr.y !== el.y ? nr.y + nr.h - hh : nr.y;
+    return { ...el, x: Math.round(x), y: Math.round(y), w, h: hh };
   }
   const out = { ...el, ...nr };
   if (!single && el.fontSize && (el.type === 'shape' || el.type === 'sticky')) out.fontSize = scaleFont(el.fontSize, Math.min(sx, sy));

@@ -9,6 +9,7 @@ export const THEMES = [
   { id: 'dark', name: 'Dark', meta: '#000000', dots: ['#000000', '#454545', '#ffffff'] },
   { id: 'light', name: 'Light', meta: '#f3f3f3', dots: ['#ffffff', '#b8b8b8', '#000000'] },
   { id: 'blueprint', name: 'Blueprint', meta: '#0A2550', dots: ['#0A2550', '#2060D0', '#DDEEFA'] },
+  { id: 'clyde', name: 'Clyde', meta: '#171717', dots: ['#171717', '#8fb4ff', '#dfdfdf'] },
 ];
 export function setTheme(t, { sync = true } = {}) {
   const th = THEMES.find((x) => x.id === t) || THEMES[0];

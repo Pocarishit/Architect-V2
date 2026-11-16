@@ -599,52 +599,171 @@ export function mountFleeting(root, el0, w) {
   let scrolledWeek = false;
   const weekDates = (start, n) => { const s = parseKey(start); const a = new Date(s.getFullYear(), s.getMonth(), s.getDate() + (n - 1) * 7); return [a, new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6)]; };
 
+  let showArchive = false;
+  const sel = new Set();   // selected task ids (Weekly)
+  let anchorId = null;     // for shift-click ranges
+
   function renderWeekly() {
     const p = weekly();
     const cur = Math.floor((Date.now() - parseKey(p.start).getTime()) / (7 * 86_400_000)) + 1;
     const anchor = weekDates(p.start, Math.min(8, Math.max(1, cur)))[0];
+    const all = [...Object.values(p.weeks).flat(), ...p.tray].map((x) => x.id);
+    for (const id of [...sel]) if (!all.includes(id)) sel.delete(id);
+    const past = Array.from({ length: 8 }, (_, i) => i + 1).filter((n) => n < cur);
+    const shown = Array.from({ length: 8 }, (_, i) => i + 1).filter((n) => n >= cur || showArchive);
     const keepX = stage.querySelector('.fi-wk-cols')?.scrollLeft;
     const goal = h('button', { class: 'fi-goal', type: 'button', title: 'Rename the goal', onclick: () => editGoal(goal, p.goal) }, `GOAL: ${p.goal}`.toUpperCase());
-    const cols = h('div', { class: 'fi-wk-cols' }, Array.from({ length: 8 }, (_, i) => {
-      const n = i + 1;
+    const cols = h('div', { class: 'fi-wk-cols' }, shown.map((n) => {
       const list = p.weeks[n] || [];
       const [a, b] = weekDates(p.start, n);
-      return h('section', { class: ['fi-wk', n === cur && 'is-now', n < cur && 'is-past'], 'data-wk': String(n), 'aria-label': `Week ${n}` },
+      return h('section', { class: ['fi-wk', n === cur && 'is-now', n < cur && 'is-past'], 'data-wk': String(n), 'aria-label': `Week ${n}${n === cur ? ', this week' : ''}` },
         h('header', { class: 'fi-wk-head', title: `${shortDate(a)} – ${shortDate(b)}` },
-          h('span', { class: 'fi-wk-n' }, `WK ${n}`),
+          h('span', { class: 'fi-wk-row' },
+            h('span', { class: 'fi-wk-n' }, `WK ${n}`),
+            n === cur ? h('span', { class: 'fi-wk-now' }, 'THIS WEEK') : h('span', { class: 'fi-wk-date' }, shortDate(a).toUpperCase())),
           h('span', { class: 'fi-wk-dots', 'aria-label': `${list.filter((x) => x.done).length} of ${list.length} done` }, list.map((x) => h('i', { class: x.done ? 'is-done' : null })))),
         h('div', { class: 'fi-wk-list' }, list.map((x) => taskRow(x, String(n)))),
-        adder(String(n)));
+        n < cur ? null : adder(String(n)));
     }));
     const tray = h('section', { class: 'fi-wk-tray', 'data-wk': 'tray', 'aria-label': 'Tasks without a week' },
       h('span', { class: 'fi-tray-label' }, 'NO WEEK YET'),
       h('div', { class: 'fi-wk-list is-tray' }, p.tray.map((x) => taskRow(x, 'tray'))),
       adder('tray'));
+    const pastDone = past.reduce((n, w) => n + (p.weeks[w] || []).length, 0);
+    const archiveBtn = past.length ? h('button', {
+      type: 'button', class: ['fi-archive', showArchive && 'is-open'], 'aria-expanded': String(showArchive),
+      onclick: () => { showArchive = !showArchive; scrolledWeek = false; renderWeekly(); },
+    }, icon(showArchive ? 'eyeOff' : 'history', 14), showArchive ? 'HIDE PAST WEEKS' : `ARCHIVE · ${past.length} WEEK${past.length === 1 ? '' : 'S'}${pastDone ? ` · ${pastDone} TASK${pastDone === 1 ? '' : 'S'}` : ''}`) : null;
     stage.replaceChildren(h('div', { class: 'fi-weekly' },
       h('div', { class: 'fi-wk-top' },
         h('div', {}, h('b', { class: 'fi-ms' }, 'MILESTONE'), h('span', { class: 'fi-ms-month' }, anchor.toLocaleDateString(undefined, { month: 'long' }))),
         goal),
-      cols, tray));
-    if (keepX != null) cols.scrollLeft = keepX;
-    else if (!scrolledWeek && cur > 2) requestAnimationFrame(() => { const c = cols.querySelector('.fi-wk.is-now'); if (c) cols.scrollLeft = c.offsetLeft - 8; });
+      archiveBtn ? h('div', { class: 'fi-wk-bar' }, archiveBtn) : null,
+      cols, tray, selBar(p)));
+    if (keepX != null && scrolledWeek) cols.scrollLeft = keepX;
+    else if (showArchive) requestAnimationFrame(() => { const c = cols.querySelector('.fi-wk.is-now'); if (c) cols.scrollLeft = Math.max(0, c.offsetLeft - 8); });
     scrolledWeek = true;
   }
 
   const listOf = (p, wk) => (wk === 'tray' ? p.tray : p.weeks[wk] || []);
   const withList = (p, wk, next) => (wk === 'tray' ? { tray: next } : { weeks: { ...p.weeks, [wk]: next } });
+  // Apply fn to every list: fn(list, wk) → new list.
+  const eachList = (p, fn) => {
+    const weeks = {};
+    for (const [k, v] of Object.entries(p.weeks)) weeks[k] = fn(v, k);
+    return { weeks, tray: fn(p.tray, 'tray') };
+  };
 
   function taskRow(x, wk) {
-    const row = h('div', { class: ['fi-task', x.done && 'is-done'], 'data-id': x.id },
+    const row = h('div', { class: ['fi-task', x.done && 'is-done', sel.has(x.id) && 'is-sel'], 'data-id': x.id, 'aria-selected': String(sel.has(x.id)) },
       h('button', {
         type: 'button', class: 'fi-check', role: 'checkbox', 'aria-checked': String(!!x.done), 'aria-label': x.done ? 'Mark not done' : 'Mark done',
         onclick: () => { const p = weekly(); setWeekly(withList(p, wk, listOf(p, wk).map((y) => (y.id === x.id ? { ...y, done: !y.done } : y)))); },
       }, icon('check', 12, { weight: 2.4 })),
-      h('span', { class: 'fi-task-text' }, x.text),
-      h('button', { type: 'button', class: 'fi-task-x', 'aria-label': 'Remove task', onclick: () => { const p = weekly(); setWeekly(withList(p, wk, listOf(p, wk).filter((y) => y.id !== x.id))); } }, icon('close', 12)));
-    row.querySelector('.fi-task-text').addEventListener('dblclick', (e) => editTask(e.currentTarget, x, wk));
+      h('span', { class: 'fi-task-text' }, x.text));
+    row.querySelector('.fi-task-text').addEventListener('dblclick', (e) => { sel.clear(); editTask(e.currentTarget, x, wk); });
     row.addEventListener('pointerdown', (e) => dragTask(e, row, x, wk));
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (!sel.has(x.id)) { sel.clear(); sel.add(x.id); anchorId = x.id; paintSel(); }
+      selMenu({ x: e.clientX, y: e.clientY });
+    });
     return row;
   }
+
+  /* ---- batch selection: click = one, Ctrl/⌘-click = toggle, Shift-click = range ---- */
+  function clickTask(ev, x, wk) {
+    stage.focus({ preventScroll: true });
+    if (ev.shiftKey && anchorId) {
+      const order = [...stage.querySelectorAll('.fi-task')].map((r) => r.dataset.id);
+      const a = order.indexOf(anchorId), b = order.indexOf(x.id);
+      if (a >= 0 && b >= 0) { const [i, j] = a < b ? [a, b] : [b, a]; order.slice(i, j + 1).forEach((id) => sel.add(id)); }
+    } else if (ev.ctrlKey || ev.metaKey) {
+      if (sel.has(x.id)) sel.delete(x.id); else sel.add(x.id);
+      anchorId = x.id;
+    } else {
+      const only = sel.size === 1 && sel.has(x.id);
+      sel.clear();
+      if (!only) sel.add(x.id);
+      anchorId = x.id;
+    }
+    paintSel();
+  }
+
+  function paintSel() {
+    stage.querySelectorAll('.fi-task').forEach((r) => { const on = sel.has(r.dataset.id); r.classList.toggle('is-sel', on); r.setAttribute('aria-selected', String(on)); });
+    const old = stage.querySelector('.fi-sel-bar');
+    const next = selBar(weekly());
+    if (old) old.replaceWith(next); else stage.querySelector('.fi-weekly')?.append(next);
+  }
+
+  function selBar(p) {
+    const n = sel.size;
+    if (!n) return h('div', { class: 'fi-sel-bar', hidden: true });
+    const items = [...Object.values(p.weeks).flat(), ...p.tray].filter((x) => sel.has(x.id));
+    const allDone = items.length && items.every((x) => x.done);
+    const btn = (ic, label, fn, danger) => h('button', { type: 'button', class: ['fi-sel-btn', danger && 'is-danger'], onclick: fn }, icon(ic, 14), h('span', {}, label));
+    return h('div', { class: 'fi-sel-bar', role: 'toolbar', 'aria-label': `${n} selected` },
+      h('span', { class: 'fi-sel-n' }, `${n} SELECTED`),
+      btn('check', allDone ? 'Not done' : 'Done', () => markSel(!allDone)),
+      btn('folderMove', 'Move to', (e) => moveMenu(e.currentTarget)),
+      btn('trash', 'Delete', deleteSel, true),
+      h('button', { type: 'button', class: 'fi-sel-x', 'aria-label': 'Clear selection', onclick: () => { sel.clear(); paintSel(); } }, icon('close', 14)));
+  }
+
+  function selMenu(anchor) {
+    const p = weekly();
+    const items = [...Object.values(p.weeks).flat(), ...p.tray].filter((x) => sel.has(x.id));
+    const allDone = items.length && items.every((x) => x.done);
+    menu(anchor, [
+      { header: `${sel.size} selected` },
+      { label: allDone ? 'Mark not done' : 'Mark done', icon: 'check', onSelect: () => markSel(!allDone) },
+      ...moveItems(),
+      '-',
+      { label: 'Delete', icon: 'trash', danger: true, kbd: 'Del', onSelect: deleteSel },
+    ]);
+  }
+
+  function moveItems() {
+    const p = weekly();
+    const cur = Math.floor((Date.now() - parseKey(p.start).getTime()) / (7 * 86_400_000)) + 1;
+    return [{ header: 'Move to' },
+      ...Array.from({ length: 8 }, (_, i) => i + 1).filter((n) => n >= cur).map((n) => ({ label: n === cur ? `Week ${n} · this week` : `Week ${n}`, icon: 'calendar', onSelect: () => moveSel(String(n)) })),
+      { label: 'No week yet', icon: 'folder', onSelect: () => moveSel('tray') }];
+  }
+  function moveMenu(anchor) { menu(anchor, moveItems(), { side: 'top' }); }
+
+  function markSel(done) { setWeekly(eachList(weekly(), (l) => l.map((y) => (sel.has(y.id) ? { ...y, done } : y)))); }
+  function deleteSel() {
+    const n = sel.size;
+    const p = weekly();
+    const before = { weeks: p.weeks, tray: p.tray };
+    setWeekly(eachList(p, (l) => l.filter((y) => !sel.has(y.id))));
+    sel.clear();
+    toast(`Deleted ${n} task${n === 1 ? '' : 's'}.`, { ms: 4000, action: { label: 'Undo', onClick: () => setWeekly(before) } });
+  }
+  function moveSel(to, before = null) {
+    const p = weekly();
+    const moving = [...Object.values(p.weeks).flat(), ...p.tray].filter((y) => sel.has(y.id));
+    const next = eachList(p, (l) => l.filter((y) => !sel.has(y.id)));
+    const dest = [...(to === 'tray' ? next.tray : next.weeks[to] || [])];
+    const i = before ? dest.findIndex((y) => y.id === before) : -1;
+    dest.splice(i < 0 ? dest.length : i, 0, ...moving);
+    if (to === 'tray') next.tray = dest; else next.weeks[to] = dest;
+    setWeekly(next);
+  }
+
+  stage.tabIndex = -1;
+  stage.addEventListener('keydown', (e) => {
+    if (tab !== 'weekly' || !sel.size || e.target.closest('input, textarea, [contenteditable="true"]')) return;
+    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); e.stopPropagation(); deleteSel(); }
+    else if (e.key === 'Escape') { e.stopPropagation(); sel.clear(); paintSel(); }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); e.stopPropagation(); stage.querySelectorAll('.fi-task').forEach((r) => sel.add(r.dataset.id)); paintSel(); }
+  });
+  // Click on empty space in Weekly clears the selection.
+  stage.addEventListener('pointerdown', (e) => {
+    if (tab === 'weekly' && sel.size && !e.target.closest('.fi-task, .fi-sel-bar, .menu')) { sel.clear(); paintSel(); }
+  });
 
   function adder(wk) {
     const inp = h('input', {
@@ -688,6 +807,7 @@ export function mountFleeting(root, el0, w) {
     if (e.button !== 0 || e.target.closest('button, [contenteditable="true"]')) return;
     const sx = e.clientX, sy = e.clientY;
     const r0 = row.getBoundingClientRect();
+    const group = sel.has(x.id) && sel.size > 1; // dragging one of several selected tasks moves them all
     let ghost = null, over = null, before = null;
     hold++;
     const targetAt = (cx, cy) => document.elementFromPoint(cx, cy)?.closest?.('[data-wk]');
@@ -696,9 +816,10 @@ export function mountFleeting(root, el0, w) {
       if (!ghost) {
         ghost = row.cloneNode(true);
         ghost.classList.add('fi-task-ghost');
+        if (group) ghost.append(h('span', { class: 'fi-ghost-n' }, String(sel.size)));
         Object.assign(ghost.style, { width: `${r0.width}px`, left: `${r0.left}px`, top: `${r0.top}px` });
         document.body.append(ghost);
-        row.classList.add('is-lifted');
+        (group ? stage.querySelectorAll('.fi-task.is-sel') : [row]).forEach((r) => r.classList.add('is-lifted'));
         document.body.classList.add('fi-dragging');
       }
       ghost.style.transform = `translate(${ev.clientX - sx}px, ${ev.clientY - sy}px) rotate(-1.5deg)`;
@@ -712,24 +833,18 @@ export function mountFleeting(root, el0, w) {
         }
       }
     };
-    const up = () => {
+    const up = (ev) => {
       row.removeEventListener('pointermove', move); row.removeEventListener('pointerup', up); row.removeEventListener('pointercancel', up);
       over?.classList.remove('is-over');
       document.body.classList.remove('fi-dragging');
       ghost?.remove();
-      row.classList.remove('is-lifted');
-      if (ghost && over) {
-        const to = over.dataset.wk;
-        const p = weekly();
-        let next = { ...p, weeks: { ...p.weeks } };
-        const from = listOf(p, wk).filter((y) => y.id !== x.id);
-        next = { ...next, ...withList(next, wk, from) };
-        const dest = (to === wk ? from : listOf(next, to)).filter((y) => y.id !== x.id);
-        const i = before ? dest.findIndex((y) => y.id === before) : -1;
-        dest.splice(i < 0 ? dest.length : i, 0, x);
-        next = { ...next, ...withList(next, to, dest) };
+      stage.querySelectorAll('.fi-task.is-lifted').forEach((r) => r.classList.remove('is-lifted'));
+      if (!ghost) { release(); if (ev.type === 'pointerup') clickTask(ev, x, wk); return; }
+      if (over) {
+        if (!group) { sel.clear(); sel.add(x.id); }
         hold = Math.max(0, hold - 1);
-        setWeekly({ weeks: next.weeks, tray: next.tray });
+        moveSel(over.dataset.wk, before);
+        if (!group) sel.clear();
         renderWeekly();
         return;
       }

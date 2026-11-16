@@ -22,6 +22,59 @@ const dayLabel = (ts) => {
   return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: d.getFullYear() === t.getFullYear() ? undefined : 'numeric' });
 };
 
+/* ---------------- importing the custom-widget Variables (v59) ---------------- */
+// Its HTML: <main> › <details> sections (nested <details> = sub-sections) › <button data-target> people.
+export function readVariablesHtml(html) {
+  const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  const mainEl = doc.querySelector('main');
+  if (!mainEl) return null;
+  const label = (d) => { const sm = d.querySelector(':scope > summary'); const t = sm && [...sm.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim()); return (t?.textContent || sm?.textContent || '').trim(); };
+  const people = (d) => [...d.querySelectorAll(':scope > button[data-target]')].map((b) => ({ name: (b.querySelector('span')?.textContent || '').trim(), img: b.querySelector('i img')?.getAttribute('src') || null, target: b.dataset.target })).filter((p) => p.name);
+  return [...mainEl.querySelectorAll(':scope > details')].map((top) => ({ name: label(top), people: people(top), subs: [...top.querySelectorAll(':scope > details')].map((x) => ({ name: label(x), people: people(x) })) }));
+}
+export const countPeople = (plan) => plan.reduce((n, t) => n + t.people.length + t.subs.reduce((m, x) => m + x.people.length, 0), 0);
+
+// A board-chat message → a Variables note.
+const toNote = (m) => ({
+  id: m.id || uid(), by: m.by || null, name: m.name || '', ts: Number(m.ts) || Date.parse(m.at || m.created_at) || Date.now(),
+  text: String(m.text || '').slice(0, 4000), files: Array.isArray(m.files) ? m.files.filter((f) => f?.path).map((f) => ({ kind: f.kind || 'photo', path: f.path, name: f.name || '' })) : [],
+  ...(m.edited ? { edited: true } : {}),
+});
+
+/** Merge a parsed v59 plan into { sections, entries }. chats: data-target → chat element (its messages become notes). */
+export async function mergeVariables(base, plan, { chats = {}, onStep } = {}) {
+  let secs = [...(base.sections || [])];
+  let list = [...(base.entries || [])];
+  const find = (name, parent) => secs.find((x) => (x.parent || null) === (parent || null) && x.name.toLowerCase() === name.toLowerCase());
+  const ensure = (name, parent) => { let x = find(name, parent); if (!x) { x = parent ? { id: uid(), name, parent } : { id: uid(), name }; secs.push(x); } return x; };
+  let done = 0, added = 0, notes = 0;
+  const take = async (secId, p) => {
+    onStep?.(++done);
+    let x = list.find((y) => y.section === secId && y.name.toLowerCase() === p.name.toLowerCase());
+    if (!x) { x = { id: uid(), section: secId, name: p.name.slice(0, 48), photo: null, notes: [], at: Date.now() }; list.push(x); added++; }
+    const patch = {};
+    if (!x.photo && p.img?.startsWith('data:image')) {
+      try {
+        const blob = await (await fetch(p.img)).blob();
+        patch.photo = (await uploadMedia(new File([blob], `${p.name}.jpg`, { type: blob.type || 'image/jpeg' }))).path;
+      } catch {}
+    }
+    const msgs = chats[p.target]?.messages;
+    if (Array.isArray(msgs) && msgs.length) {
+      const have = new Set((x.notes || []).map((n) => n.id));
+      const fresh = msgs.filter((m) => m && (m.text || m.files?.length) && !have.has(m.id)).map(toNote);
+      if (fresh.length) { notes += fresh.length; patch.notes = [...(x.notes || []), ...fresh].sort((a, b) => a.ts - b.ts).slice(-MAX_NOTES); }
+    }
+    if (Object.keys(patch).length) { const id = x.id; list = list.map((y) => (y.id === id ? { ...y, ...patch } : y)); }
+  };
+  for (const t of plan) {
+    const top = ensure(t.name || 'Imported', null);
+    for (const p of t.people) await take(top.id, p);
+    for (const sub of t.subs) { const child = ensure(sub.name || 'Imported', top.id); for (const p of sub.people) await take(child.id, p); }
+  }
+  return { sections: secs, entries: list, added, notes };
+}
+
 const hue = (t) => { let x = 0; for (const c of String(t).trim()) x = (x * 31 + c.charCodeAt(0)) % 360; return x; };
 const initials = (n) => String(n).trim().split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase() || '?';
 
@@ -123,7 +176,7 @@ export function mountVariables(root, el0, w) {
       ].filter(Boolean));
     });
     return h('div', { class: 'vr-home' }, tabs, ...body, gridEl,
-      !list.length && !cats.length ? h('p', { class: 'vr-hint' }, 'A teacher, a committee, your family, the office — every influence gets its own space. Right-click for more.') : null);
+      !list.length && !cats.length ? h('p', { class: 'vr-hint' }, 'A teacher, a committee, your family, the office — every influence gets its own space. Right-click here to add one.') : null);
   }
 
   function card(x) {
@@ -355,47 +408,17 @@ export function mountVariables(root, el0, w) {
   async function importFile() {
     const [f] = await pickMedia({ multiple: false, accept: '.html,.htm,text/html' });
     if (!f) return;
-    let doc;
-    try { doc = new DOMParser().parseFromString(await f.text(), 'text/html'); } catch { toast('Couldn’t read that file.', { tone: 'error' }); return; }
-    const mainEl = doc.querySelector('main');
-    if (!mainEl) { toast('That doesn’t look like a Variables export.', { tone: 'error' }); return; }
-    const label = (d) => { const sm = d.querySelector(':scope > summary'); const t = sm && [...sm.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim()); return (t?.textContent || sm?.textContent || '').trim(); };
-    const people = (d) => [...d.querySelectorAll(':scope > button[data-target]')].map((b) => ({ name: (b.querySelector('span')?.textContent || '').trim(), img: b.querySelector('i img')?.getAttribute('src') || null })).filter((p) => p.name);
-    const plan = [];
-    for (const top of mainEl.querySelectorAll(':scope > details')) {
-      const subs = [...top.querySelectorAll(':scope > details')];
-      plan.push({ name: label(top), people: people(top), subs: subs.map((s) => ({ name: label(s), people: people(s) })) });
-    }
-    const total = plan.reduce((n, t) => n + t.people.length + t.subs.reduce((m, s) => m + s.people.length, 0), 0);
+    let plan;
+    try { plan = readVariablesHtml(await f.text()); } catch { plan = null; }
+    if (!plan) { toast('That doesn’t look like a Variables export.', { tone: 'error' }); return; }
+    const total = countPeople(plan);
     if (!total) { toast('No variables found in that file.', { tone: 'error' }); return; }
     if (!(await confirmDialog('Import variables?', `${plan.length} section${plan.length === 1 ? '' : 's'} and ${total} entr${total === 1 ? 'y' : 'ies'}. Anything with the same name is kept, not duplicated.`, { ok: 'Import', danger: false }))) return;
-    let secs = [...sections()];
-    let list = [...entries()];
-    const find = (name, parent) => secs.find((s) => (s.parent || null) === (parent || null) && s.name.toLowerCase() === name.toLowerCase());
-    const ensure = (name, parent) => { let s = find(name, parent); if (!s) { s = parent ? { id: uid(), name, parent } : { id: uid(), name }; secs.push(s); } return s; };
     const progress = toast(`Importing… 0/${total}`, { ms: 0 });
-    let done = 0, added = 0;
-    const take = async (secId, p) => {
-      done++;
-      progress.update(`Importing… ${done}/${total}`);
-      let x = list.find((y) => y.section === secId && y.name.toLowerCase() === p.name.toLowerCase());
-      if (!x) { x = { id: uid(), section: secId, name: p.name.slice(0, 48), photo: null, notes: [], at: Date.now() }; list.push(x); added++; }
-      if (!x.photo && p.img?.startsWith('data:image')) {
-        try {
-          const blob = await (await fetch(p.img)).blob();
-          const up = await uploadMedia(new File([blob], `${p.name}.jpg`, { type: blob.type || 'image/jpeg' }));
-          list = list.map((y) => (y.id === x.id ? { ...y, photo: up.path } : y));
-        } catch {}
-      }
-    };
-    for (const t of plan) {
-      const top = ensure(t.name || 'Imported', null);
-      for (const p of t.people) await take(top.id, p);
-      for (const s of t.subs) { const child = ensure(s.name || 'Imported', top.id); for (const p of s.people) await take(child.id, p); }
-    }
+    const out = await mergeVariables({ sections: sections(), entries: entries() }, plan, { onStep: (n) => progress.update(`Importing… ${n}/${total}`) });
     progress.close();
-    save({ sections: secs, entries: list });
-    toast(`Imported ${added} new entr${added === 1 ? 'y' : 'ies'}.`, { ms: 3000 });
+    save({ sections: out.sections, entries: out.entries });
+    toast(`Imported ${out.added} new entr${out.added === 1 ? 'y' : 'ies'}.`, { ms: 3000 });
   }
 
   /* ---------------- an entry's notes ---------------- */

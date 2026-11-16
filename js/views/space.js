@@ -2,8 +2,8 @@
 // Everything (Paths, Tracker, Ticket board, Blueprints) lives on it as movable objects.
 // No chrome: right-click or press "/" for the menu. Invite-only: members invite by username.
 import { icon } from '../core/icons.js';
-import { menu, toast, dialog, promptDialog, closeFloating } from '../core/ui.js';
-import { uid } from '../core/util.js';
+import { menu, toast, dialog, promptDialog, confirmDialog, closeFloating } from '../core/ui.js';
+import { uid, store } from '../core/util.js';
 import { h, isTypingTarget } from '../core/dom.js';
 import { api, friendlyError } from '../data/api.js';
 import { loadPrefs, getPref, setPref } from '../data/prefs.js';
@@ -11,7 +11,7 @@ import { mountBoard } from '../board/board.js';
 import { makePreview } from '../board/preview.js';
 import { rectOf, unionRects } from '../board/geometry.js';
 import { createWidgetHost, WIDGETS, editCustom } from '../space/widgets.js';
-import { defaultVariables } from '../space/variables.js';
+import { defaultVariables, readVariablesHtml, countPeople, mergeVariables } from '../space/variables.js';
 import { themeItems, changePassword } from './shell.js';
 import { openSettings } from './settings.js';
 import { openBoardWindow } from '../space/window.js';
@@ -181,6 +181,44 @@ export function mountSpace(root) {
     toast('Ticket board and Tracker are now Fleeting Ideas.', { ms: 4000 });
   }
 
+  // The custom-code Variables widget (v59) keeps its people in HTML and its chats in `variableChats`.
+  // Offer once to bring both into the built-in Variables object; the old widget is left alone.
+  async function importCustomVariables(ed) {
+    const custom = ed.els.find((e) => e.type === 'widget' && e.kind === 'custom' && !e.nativeImported && /data-target=/.test(e.html || ''));
+    if (!custom) return;
+    const skip = `architect.vr.skipImport.${custom.id}`;
+    if (store.get(skip, false)) return;
+    const plan = readVariablesHtml(custom.html);
+    const people = plan ? countPeople(plan) : 0;
+    if (!people) return;
+    const chats = Object.fromEntries((Array.isArray(custom.variableChats) ? custom.variableChats : []).map((c) => [c.id, c]));
+    const notes = Object.values(chats).reduce((n, c) => n + (c.messages?.length || 0), 0);
+    await new Promise((r) => setTimeout(r, 900));
+    if (!ed.vp?.isConnected) return;
+    const yes = await confirmDialog('Move Variables into the built-in object?',
+      `${people} ${people === 1 ? 'person' : 'people'}${notes ? ` and ${notes} chat message${notes === 1 ? '' : 's'}` : ''} from your custom Variables widget go into Variables, with their pictures and sub-sections. The custom widget stays until you delete it.`,
+      { ok: 'Move them in', danger: false });
+    if (!yes) { store.set(skip, true); return; }
+    let target = ed.els.find((e) => e.type === 'widget' && e.kind === 'variables');
+    if (!target) {
+      target = widgetEl('variables', { x: custom.x + (custom.w || 460) + 60, y: custom.y, ...defaultVariables() });
+      ed.addEls([target], { select: false });
+    }
+    const progress = toast(`Moving Variables… 0/${people}`, { ms: 0 });
+    try {
+      const cur = ed.byId.get(target.id) || target;
+      const out = await mergeVariables({ sections: cur.sections, entries: cur.entries }, plan, { chats, onStep: (n) => progress.update(`Moving Variables… ${n}/${people}`) });
+      ed.updateEls([target.id], { sections: out.sections, entries: out.entries });
+      ed.updateEls([custom.id], { nativeImported: true });
+      progress.close();
+      toast(`Variables: ${out.added} new ${out.added === 1 ? 'entry' : 'entries'}${out.notes ? `, ${out.notes} notes` : ''}.`, { ms: 4000 });
+      ed.fitRect(ed.byId.get(target.id), { maxZ: 1, pad: 60 });
+    } catch (e) {
+      progress.close();
+      toast(friendlyError(e), { tone: 'error', ms: 5000 });
+    }
+  }
+
   function widgetEl(kind, extra = {}) {
     const d = WIDGETS[kind];
     return { id: uid(), type: 'widget', kind, w: d.w, h: d.h, x: 0, y: 0, ...extra };
@@ -200,6 +238,7 @@ export function mountSpace(root) {
     else ed.surface = 'parked'; // you tabbed away while it was loading
     tools.page.classList.toggle('show-chrome', !!getPref('spaceChrome', false));
     migrate(ed);
+    importCustomVariables(ed);
     // Everyone gets their own Path on the shared canvas.
     if (!ed.els.some((e) => e.type === 'widget' && e.kind === 'path' && e.owner === me.id)) {
       const rc = ed.els.length ? unionRects(ed.els.map((e) => rectOf(e, ed.byId))) : { x: 0, y: 0, w: 0, h: 0 };

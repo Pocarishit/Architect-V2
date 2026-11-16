@@ -116,6 +116,29 @@
 [data-theme="clyde"] ::selection { background: var(--accent-deep); color: #fff; }
 [data-theme="clyde"] :focus-visible { outline-color: var(--accent); }
 
+/* Graphite: the Architect v2 look — soft charcoal and light-grey ink, no accent colour. */
+[data-theme="graphite"] {
+  color-scheme: dark;
+  --bg: #171717;
+  --s1: #1a1a1a;
+  --s2: #202020;
+  --s3: #262626;
+  --line: #262626;
+  --line-2: #323232;
+  --fg: #dfdfdf;
+  --fg-2: #a8a8a8;
+  --fg-3: #787878;
+  --fg-4: #4d4d4d;
+  --ink: #dfdfdf;
+  --paper: #171717;
+  --canvas: #171717;
+  --grid-dot: #2c2c2c;
+  --sel: #dfdfdf;
+  --frame-bg: #171717;
+  --shadow: 0 18px 48px -12px rgba(0, 0, 0, .65), 0 0 0 1px rgba(223, 223, 223, .03);
+  --scrim: rgba(23, 23, 23, .76);
+}
+
 *, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {

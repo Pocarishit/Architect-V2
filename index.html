@@ -17,13 +17,15 @@
   <link rel="stylesheet" href="css/sections.css">
   <link rel="stylesheet" href="css/space.css">
   <link rel="stylesheet" href="css/fleeting.css">
+  <link rel="stylesheet" href="css/sidechat.css">
   <script>
     (function () {
       try {
         var t = localStorage.getItem('architect.theme');
         try { t = JSON.parse(t); } catch (e) {} // saved as JSON ("light"), older builds saved it raw
-        if (t === 'light' || t === 'dark' || t === 'blueprint' || t === 'clyde') document.documentElement.dataset.theme = t;
-        var c = { light: '#f3f3f3', blueprint: '#0A2550', clyde: '#171717' }[t];
+        if (!t && localStorage.getItem('architect.customTheme') === 'graphite') t = 'graphite'; // the old custom-code Graphite switch
+        if (t === 'light' || t === 'dark' || t === 'blueprint' || t === 'clyde' || t === 'graphite') document.documentElement.dataset.theme = t;
+        var c = { light: '#f3f3f3', blueprint: '#0A2550', clyde: '#171717', graphite: '#171717' }[t];
         if (c) document.querySelector('meta[name="theme-color"]').setAttribute('content', c);
       } catch (e) {}
     })();

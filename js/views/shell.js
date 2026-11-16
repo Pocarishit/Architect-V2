@@ -4,12 +4,14 @@ import { menu, dialog, toast } from '../core/ui.js';
 import { fmtClock, store } from '../core/util.js';
 import { api, configured, friendlyError } from '../data/api.js';
 import { loadPrefs, getPref, setPref } from '../data/prefs.js';
+import { mountSideChat } from '../space/sidechat.js';
 
 export const THEMES = [
   { id: 'dark', name: 'Dark', meta: '#000000', dots: ['#000000', '#454545', '#ffffff'] },
   { id: 'light', name: 'Light', meta: '#f3f3f3', dots: ['#ffffff', '#b8b8b8', '#000000'] },
   { id: 'blueprint', name: 'Blueprint', meta: '#0A2550', dots: ['#0A2550', '#2060D0', '#DDEEFA'] },
   { id: 'clyde', name: 'Clyde', meta: '#171717', dots: ['#171717', '#8fb4ff', '#dfdfdf'] },
+  { id: 'graphite', name: 'Graphite', meta: '#171717', dots: ['#171717', '#1a1a1a', '#dfdfdf'] },
 ];
 export function setTheme(t, { sync = true } = {}) {
   const th = THEMES.find((x) => x.id === t) || THEMES[0];
@@ -66,6 +68,8 @@ export function mountShell(root, { session }) {
 
   // Your account's saved theme wins over this browser's (e.g. picked on your phone).
   loadPrefs().then(() => {
+    // The old custom-code Graphite switch becomes the built-in Graphite theme, once.
+    if (localStorage.getItem('architect.customTheme') === 'graphite') { localStorage.removeItem('architect.customTheme'); setTheme('graphite'); return; }
     const t = getPref('theme', null);
     if (t && t !== currentTheme()) setTheme(t, { sync: false });
   }).catch(() => {});
@@ -83,6 +87,7 @@ export function mountShell(root, { session }) {
   root.append(el);
 
   const tick = setInterval(() => { clock.textContent = fmtClock(); }, 10_000);
+  const side = mountSideChat({ me: session.user });
 
   return {
     outlet,
@@ -95,7 +100,7 @@ export function mountShell(root, { session }) {
         if (on) navCur.textContent = sec.label;
       });
     },
-    destroy() { clearInterval(tick); el.remove(); },
+    destroy() { clearInterval(tick); side.destroy(); el.remove(); },
   };
 }
 

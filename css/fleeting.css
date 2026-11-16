@@ -347,6 +347,18 @@ body.fi-dragging, body.fi-dragging * { cursor: grabbing !important; }
 .vr-input::placeholder { color: var(--fg-3); }
 .vr-input:focus { border-color: var(--line-2); }
 
+/* Release v2 polish (from the custom code): adding lives in the right-click menus on a mouse;
+   touch screens keep the + buttons since they have no right-click. */
+.vr-chat-sec { display: none; }
+.vr-msgs { padding: 14px 18px 8px; }
+.vr-compose { padding: 10px 18px 16px; }
+.vr-input::-webkit-scrollbar { width: 8px; }
+.vr-input::-webkit-scrollbar-button { display: none; height: 0; }
+.vr-chat-head .vr-chat-name { margin-right: auto; }
+@media (hover: hover) and (pointer: fine) {
+  .vr-tab-add, .vr-card.vr-new { display: none; }
+}
+
 /* ---------------- small screens ---------------- */
 @media (max-width: 719px) {
   .fi-top { padding: 12px 12px 4px; flex-wrap: wrap; }

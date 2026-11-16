@@ -413,3 +413,81 @@ body.fi-dragging, body.fi-dragging * { cursor: grabbing !important; }
 .vr-card.is-drop-before { box-shadow: -4px 0 0 -1px var(--fg); }
 .vr-card.is-drop-after { box-shadow: 4px 0 0 -1px var(--fg); }
 .vr-ghost { position: fixed !important; z-index: 9999; pointer-events: none; opacity: .95; box-shadow: 0 0 0 1px var(--fg-3), 0 22px 40px -14px rgba(0, 0, 0, .7) !important; }
+
+/* Story — who wrote it: a head on every event */
+.fi-card { flex-wrap: wrap; }
+.fi-who { flex: 0 0 100%; display: flex; align-items: center; gap: 8px; margin: -2px 0 -4px; min-width: 0; }
+.fi-who-face {
+  flex: none; width: 20px; height: 20px; border-radius: 50%; overflow: hidden;
+  display: grid; place-items: center; background: var(--s3, #2a2a2a); border: 1px solid var(--line-2);
+  font-family: var(--f-mono); font-size: 10px; font-weight: 700; color: var(--fg-2);
+}
+.fi-who-face img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fi-who b { font-family: var(--f-mono); font-weight: 700; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fi-who.is-me b { color: var(--fg-2); }
+.fi-card.is-photo .fi-who, .fi-card.is-video .fi-who { margin-bottom: 0; }
+
+/* Weekly — your own background image and theme */
+.fi-swatch { width: 16px; height: 16px; border-radius: 5px; border: 1px solid var(--line-2); flex: none; }
+.fi-look-btn { flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: var(--fg-3); cursor: pointer; align-self: center; }
+.fi-look-btn:hover { color: var(--fg); background: var(--s2); }
+.fi-due-row { display: inline-flex; align-items: center; gap: 4px; }
+.fi-due { white-space: nowrap; }
+.fi-look-btn { width: 28px; height: 28px; }
+.fi-weekly { min-height: 100%; box-sizing: border-box; background: var(--wk-bg, transparent); color: var(--fg); position: relative; isolation: isolate; }
+.fi-weekly.has-bg { background: var(--wk-bg, #000) var(--wk-img) center / cover no-repeat; }
+.fi-weekly.has-bg::before { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(0,0,0,.45), rgba(0,0,0,.25) 40%, rgba(0,0,0,.55)); pointer-events: none; }
+.fi-weekly.has-bg .fi-wk, .fi-weekly.has-bg .fi-wk-tray { background: color-mix(in srgb, var(--s2) 72%, transparent); backdrop-filter: blur(14px) saturate(1.1); -webkit-backdrop-filter: blur(14px) saturate(1.1); }
+.fi-weekly.has-bg .fi-wk.is-now { background: color-mix(in srgb, var(--s3) 80%, transparent); }
+.fi-weekly.has-bg .fi-wk-title, .fi-weekly.has-bg .fi-wk-goalbox { text-shadow: 0 1px 12px rgba(0,0,0,.6); }
+.fi-weekly.has-bg .fi-look-btn { background: rgba(0,0,0,.35); color: #fff; }
+.fi-weekly[data-wk-theme="mono"]     { --wk-bg: #000; --s2: #0d0d0d; --s3: #161616; --line: #222; --line-2: #333; --fg: #fff; --fg-2: #d6d6d6; --fg-3: #8a8a8a; --fg-4: #5a5a5a; --bg: #000; }
+.fi-weekly[data-wk-theme="paper"]    { --wk-bg: #f3f2ef; --s2: #ffffff; --s3: #f7f6f2; --line: #e2e0da; --line-2: #cfccc4; --fg: #141414; --fg-2: #3a3a3a; --fg-3: #6b6b6b; --fg-4: #9a9a9a; --bg: #fff; color-scheme: light; }
+.fi-weekly[data-wk-theme="graphite"] { --wk-bg: #262626; --s2: #303030; --s3: #3a3a3a; --line: #424242; --line-2: #4e4e4e; --fg: #f2f2f2; --fg-2: #cfcfcf; --fg-3: #9b9b9b; --fg-4: #727272; --bg: #262626; }
+.fi-weekly[data-wk-theme="midnight"] { --wk-bg: #0b1426; --s2: #111d36; --s3: #172644; --line: #1f3156; --line-2: #2a3f6a; --fg: #eef3ff; --fg-2: #c3cfe9; --fg-3: #8394b8; --fg-4: #5b6b8f; --bg: #0b1426; }
+.fi-weekly[data-wk-theme="ember"]    { --wk-bg: #1a100b; --s2: #241610; --s3: #2e1c14; --line: #3a251a; --line-2: #4a3022; --fg: #fff1e8; --fg-2: #ead2c2; --fg-3: #b38f79; --fg-4: #82655a; --bg: #1a100b; }
+.fi-weekly[data-wk-theme="moss"]     { --wk-bg: #0e1710; --s2: #142017; --s3: #1a291d; --line: #233526; --line-2: #2e4532; --fg: #eef7ef; --fg-2: #c8dccb; --fg-3: #8aa58f; --fg-4: #61796a; --bg: #0e1710; }
+.fi-weekly[data-wk-theme="paper"] .fi-goal { color: #b8860b; }
+
+/* Fleeting Ideas — steady hold, icy drift: no corner dot, the dragged copy is pixel-identical */
+.fi-idea.is-parked::after { content: none; }
+.fi-idea.is-held { transition: none; z-index: 2; }
+.fi-ghost { left: 0; top: 0; display: block; margin: 0; }
+.fi-ghost[hidden] { display: none; }
+
+/* Variables — subsection cubes: a beveled surface that falls from light into dark, a glow in the
+   section's own accent in the upper corner, the name centred, the count in its corner, the edge bar kept */
+.vr-cat {
+  align-items: center; justify-content: center; text-align: center;
+  padding: 18px 18px 18px 22px;
+  background:
+    radial-gradient(120% 90% at 100% 0%, hsl(var(--h, 210) 70% 60% / .30), transparent 55%),
+    linear-gradient(160deg, color-mix(in srgb, var(--s3) 78%, #fff 14%) 0%, var(--s2) 46%, color-mix(in srgb, var(--s1) 70%, #000 30%) 100%);
+  border: 1px solid color-mix(in srgb, var(--line-2) 70%, #fff 8%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .12),
+    inset 1px 0 0 rgba(255, 255, 255, .05),
+    inset 0 -2px 0 rgba(0, 0, 0, .35),
+    inset -1px 0 0 rgba(0, 0, 0, .22),
+    0 10px 24px -16px rgba(0, 0, 0, .8);
+}
+.vr-cat::after {
+  content: ''; position: absolute; top: -26px; right: -26px; width: 90px; height: 90px; border-radius: 50%;
+  background: hsl(var(--h, 210) 75% 62%); opacity: .22; filter: blur(22px); pointer-events: none;
+}
+.vr-cat::before { z-index: 1; width: 3px; opacity: 1; }
+.vr-cat:hover {
+  background:
+    radial-gradient(120% 90% at 100% 0%, hsl(var(--h, 210) 70% 62% / .40), transparent 58%),
+    linear-gradient(160deg, color-mix(in srgb, var(--s3) 70%, #fff 20%) 0%, var(--s2) 46%, color-mix(in srgb, var(--s1) 70%, #000 30%) 100%);
+  border-color: color-mix(in srgb, var(--line-2) 60%, #fff 16%);
+}
+.vr-cat:active { transform: translateY(0); box-shadow: inset 0 2px 6px rgba(0, 0, 0, .45), inset 0 -1px 0 rgba(255, 255, 255, .06); }
+.vr-cat-name { position: relative; z-index: 1; text-shadow: 0 1px 0 rgba(0, 0, 0, .45); }
+.vr-cat small { position: absolute; z-index: 1; right: 12px; bottom: 10px; }
+[data-theme="light"] .vr-cat {
+  background:
+    radial-gradient(120% 90% at 100% 0%, hsl(var(--h, 210) 70% 60% / .22), transparent 55%),
+    linear-gradient(160deg, #ffffff 0%, var(--s2) 50%, color-mix(in srgb, var(--s2) 85%, #000 10%) 100%);
+}
+[data-theme="light"] .vr-cat-name { text-shadow: none; }

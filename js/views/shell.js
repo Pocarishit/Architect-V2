@@ -36,7 +36,6 @@ export function mountShell(root, { session }) {
   // The Space (#/) is home; these full pages stay reachable from it.
   const SECTIONS = [
     { id: 'space', label: 'Space', icon: 'home', href: '#/' },
-    { id: 'paths', label: 'Paths', icon: 'toPaths' },
     { id: 'blueprint', label: 'Archives', icon: 'frame', also: ['board'] },
   ];
   const links = SECTIONS.map((sec) => h('a', { href: sec.href || `#/${sec.id}` }, sec.label));

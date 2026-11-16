@@ -92,8 +92,8 @@ export function mountChat(body, el, w, { tts = false } = {}) {
   let retry = null;
 
   const list = h('div', { class: 'ch-list', 'data-wheel': '', role: 'log', 'aria-live': tts ? 'off' : 'polite' });
-  const input = h('textarea', { class: 'ch-input', rows: 1, maxlength: 2000, placeholder: tts ? 'Type — it’s spoken out loud' : 'Message', 'aria-label': 'Message' });
-  const sendBtn = h('button', { class: 'ch-send', type: 'button', 'aria-label': 'Send', onclick: () => send() }, icon(tts ? 'speaker' : 'send', 16));
+  const input = h('textarea', { class: 'ch-input', rows: 1, maxlength: 2000, placeholder: 'Message', 'aria-label': 'Message' });
+  const sendBtn = h('button', { class: 'ch-send', type: 'button', 'aria-label': 'Send', onclick: () => send() }, icon('send', 16));
   const about = h('button', { class: 'ch-about', type: 'button', hidden: true, onclick: () => goAbout() });
   const typingRow = h('div', { class: 'ch-typing', 'aria-live': 'polite', hidden: true });
   body.append(h('div', { class: ['ch', tts && 'is-tts'] }, about, list, typingRow, h('div', { class: 'ch-compose' }, input, sendBtn)));

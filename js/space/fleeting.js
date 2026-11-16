@@ -13,6 +13,28 @@ import { menu, toast, popover, closeFloating } from '../core/ui.js';
 import { uid, store, prefersReducedMotion } from '../core/util.js';
 import { api, friendlyError } from '../data/api.js';
 import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia, fmtDur } from './media.js';
+import { avatarsFor } from '../data/profile.js';
+import { getPref, setPref } from '../data/prefs.js';
+
+/* Who wrote a Story event: name + face, looked up once per person. */
+const whoNames = new Map(), whoFaces = new Map();
+let whoAsk = null;
+function lookupWho(ids, onDone) {
+  const want = [...new Set(ids.filter((id) => id && (!whoNames.has(id) || !whoFaces.has(id))))];
+  if (!want.length || whoAsk) return;
+  whoAsk = (async () => {
+    try {
+      if (api.mode !== 'local') {
+        const rows = await api.db.select('profiles', { columns: 'id,username', filters: { id: want } });
+        rows.forEach((r) => whoNames.set(r.id, r.username));
+      }
+    } catch {}
+    try { (await avatarsFor(want)).forEach((url, id) => whoFaces.set(id, url)); } catch {}
+    want.forEach((id) => { if (!whoNames.has(id)) whoNames.set(id, null); if (!whoFaces.has(id)) whoFaces.set(id, null); });
+    whoAsk = null;
+    onDone();
+  })();
+}
 
 /* ---------------- Set-Points: the story day runs 7AM → 7AM ---------------- */
 export const SETPOINTS = [
@@ -45,6 +67,16 @@ const fold = (v) => { v = ((v % 2) + 2) % 2; return v > 1 ? 2 - v : v; };
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const TABS = [['ideas', 'Ideas'], ['story', 'Story'], ['tracker', 'Tracker'], ['weekly', 'Weekly']];
 const DEFAULT_GOAL = 'Rona’s Apartment';
+// Weekly looks — yours alone (saved to your account prefs), so everyone can plan on their own backdrop.
+const WK_THEMES = [
+  ['default', 'Default', '#1c1c1c'],
+  ['mono', 'Mono', '#000000'],
+  ['paper', 'Paper', '#efefef'],
+  ['graphite', 'Graphite', '#3a3a3a'],
+  ['midnight', 'Midnight', '#14223f'],
+  ['ember', 'Ember', '#3b2116'],
+  ['moss', 'Moss', '#1f2e22'],
+];
 
 export function mountFleeting(root, el0, w) {
   let el = el0;
@@ -150,11 +182,11 @@ export function mountFleeting(root, el0, w) {
     if (!text) return;
     input.value = '';
     if (tab === 'story') { addFragment({ kind: 'text', text }); return; }
-    const sp = 0.006 + Math.random() * 0.008;
-    const a = Math.random() * Math.PI * 2;
+    // A new idea slides in from the bottom and settles somewhere on the ice.
+    const x = 0.1 + Math.random() * 0.8;
     setIdeas([...ideas(), {
-      id: uid(), text, by: me?.id || null, t0: Date.now(), parked: false,
-      x: 0.1 + Math.random() * 0.8, y: 0.1 + Math.random() * 0.8, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      id: uid(), text, by: me?.id || null, t0: Date.now(), parked: false, mv: me?.id || null,
+      x, y: 1, vx: (Math.random() - 0.5) * 0.4, vy: -(0.9 + Math.random() * 1.1),
     }]);
   }
 
@@ -193,8 +225,7 @@ export function mountFleeting(root, el0, w) {
         nodes.set(i.id, n);
       }
       if (n.node.textContent !== i.text) n.node.textContent = i.text;
-      n.node.classList.toggle('is-parked', !!i.parked);
-      n.node.title = i.parked ? 'Parked · drag to move, or drop on your Path' : 'Grab it to park it, or drop it on your Path';
+      n.node.title = 'Drag to move · flick to slide · drop on your Path to make it a task';
       n.w = n.node.offsetWidth; n.h = n.node.offsetHeight;
     }
     field.classList.toggle('is-empty', !list.length);
@@ -203,97 +234,182 @@ export function mountFleeting(root, el0, w) {
     place();
   }
 
-  function posOf(i, t) {
-    if (i.parked || prefersReducedMotion()) return { x: clamp01(i.x), y: clamp01(i.y) };
-    const s = (t - (i.t0 || 0)) / 1000;
-    return { x: fold(i.x + i.vx * s), y: fold(i.y + i.vy * s) };
+  /* Ice: an idea rests where you leave it and only glides when it's thrown or bumped.
+     Motion is a function of the clock (start + velocity, slowed by friction, bouncing off the edges),
+     so everyone sees the same glide. Positions are 0..1 of the room the idea has to move in. */
+  const ICE = 2.4;          // friction (1/s): a throw coasts for about a second and a half
+  const STILL = 0.0015;     // below this speed it counts as resting
+  function motion(i, t) {
+    if (i.parked || prefersReducedMotion() || (!i.vx && !i.vy)) return { x: clamp01(i.x), y: clamp01(i.y), vx: 0, vy: 0 };
+    const s = Math.max(0, (t - (i.t0 || 0)) / 1000);
+    const e = Math.exp(-ICE * s), d = (1 - e) / ICE;
+    const rx = (i.x || 0) + (i.vx || 0) * d, ry = (i.y || 0) + (i.vy || 0) * d;
+    const flip = (r) => ((((r % 2) + 2) % 2) > 1 ? -1 : 1); // bouncing off a wall turns it around
+    return { x: fold(rx), y: fold(ry), vx: (i.vx || 0) * e * flip(rx), vy: (i.vy || 0) * e * flip(ry) };
   }
+  const posOf = (i, t) => { const m = motion(i, t); return { x: m.x, y: m.y }; };
+  const moving = (m) => Math.hypot(m.vx, m.vy) > STILL;
 
+  const bumped = new Map(); // "a|b" → time, so one contact is one bump
   function place() {
     if (!field) return;
     const W = field.clientWidth, H = field.clientHeight;
     const t = Date.now();
-    for (const i of ideas()) {
+    const list = ideas();
+    const boxes = [];
+    for (const i of list) {
       const n = nodes.get(i.id);
-      if (!n || i.id === dragId) continue;
+      if (!n) continue;
       if (!n.w) { n.w = n.node.offsetWidth; n.h = n.node.offsetHeight; }
-      const p = posOf(i, t);
-      n.node.style.transform = `translate(${Math.round(p.x * Math.max(0, W - n.w))}px, ${Math.round(p.y * Math.max(0, H - n.h))}px)`;
+      if (i.id === dragId) continue;
+      const m = motion(i, t);
+      const px = Math.round(m.x * Math.max(0, W - n.w)), py = Math.round(m.y * Math.max(0, H - n.h));
+      n.node.style.transform = `translate(${px}px, ${py}px)`;
+      boxes.push({ i, m, n, px, py, rx: Math.max(1, W - n.w), ry: Math.max(1, H - n.h) });
     }
+    // Bumps: an idea you set moving knocks into the ones it touches (only the thrower's screen decides).
+    const mine = boxes.filter((b) => b.i.mv === me?.id && moving(b.m));
+    if (!mine.length) return;
+    let next = null;
+    for (const a of mine) {
+      for (const b of boxes) {
+        if (b === a) continue;
+        const key = a.i.id < b.i.id ? `${a.i.id}|${b.i.id}` : `${b.i.id}|${a.i.id}`;
+        const overlap = a.px < b.px + b.n.w && a.px + a.n.w > b.px && a.py < b.py + b.n.h && a.py + a.n.h > b.py;
+        if (!overlap) { bumped.delete(key); continue; }
+        if (bumped.has(key)) continue;
+        bumped.set(key, t);
+        // Push along the line between their centres, in pixels.
+        const avx = a.m.vx * a.rx, avy = a.m.vy * a.ry;
+        let nx = (b.px + b.n.w / 2) - (a.px + a.n.w / 2), ny = (b.py + b.n.h / 2) - (a.py + a.n.h / 2);
+        const len = Math.hypot(nx, ny) || 1; nx /= len; ny /= len;
+        const along = Math.max(0, avx * nx + avy * ny);
+        if (along < 8) continue;
+        const give = along * 0.9;
+        const bvx = (b.m.vx * b.rx) + nx * give, bvy = (b.m.vy * b.ry) + ny * give;
+        const keepX = (avx - nx * give * 0.75) * 0.6, keepY = (avy - ny * give * 0.75) * 0.6;
+        next ||= new Map();
+        next.set(a.i.id, { x: a.m.x, y: a.m.y, vx: keepX / a.rx, vy: keepY / a.ry, t0: t, parked: false, mv: me?.id || null });
+        next.set(b.i.id, { x: b.m.x, y: b.m.y, vx: bvx / b.rx, vy: bvy / b.ry, t0: t, parked: false, mv: me?.id || null });
+      }
+    }
+    if (next) setIdeas(ideas().map((q) => (next.has(q.id) ? { ...q, ...next.get(q.id) } : q)), true);
   }
 
   function bindIdea(node, id) {
     node.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0 || node.isContentEditable) return;
+      if (e.button !== 0 || node.isContentEditable || dragId) return;
       const idea = ideas().find((x) => x.id === id);
-      if (!idea) return;
+      if (!idea || !field) return;
       e.preventDefault();
+      e.stopPropagation();
       node.focus({ preventScroll: true });
-      const r0 = node.getBoundingClientRect();
-      const fr = field.getBoundingClientRect();
-      const scale = fr.width / (field.clientWidth || 1); // the canvas may be zoomed
-      const offX = e.clientX - r0.left, offY = e.clientY - r0.top;
+      const fr0 = field.getBoundingClientRect();
+      const scale = fr0.width / (field.clientWidth || 1); // the canvas may be zoomed
       const W = field.clientWidth, H = field.clientHeight;
-      const frozen = { x: clamp01((r0.left - fr.left) / scale / Math.max(1, W - r0.width / scale)), y: clamp01((r0.top - fr.top) / scale / Math.max(1, H - r0.height / scale)) };
+      const nw = node.offsetWidth, nh = node.offsetHeight;
+      const rx = Math.max(1, W - nw), ry = Math.max(1, H - nh);
+      // Freeze it exactly where it is on screen: grabbing stops the glide, the text doesn't move.
+      const at = motion(idea, Date.now());
+      let fx = at.x * rx, fy = at.y * ry;               // its top-left inside the field (unscaled px)
+      const offX = (e.clientX - fr0.left) / scale - fx, offY = (e.clientY - fr0.top) / scale - fy;
+      node.style.transform = `translate(${Math.round(fx)}px, ${Math.round(fy)}px)`;
       dragId = id; hold++;
       node.classList.add('is-held');
-      let ghost = null, over = null;
-      const t0 = Date.now();
+      let ghost = null, over = null, moved = false, done = false, frame = 0, last = null;
+      const samples = [];   // recent pointer positions, for the throw
       const sx = e.clientX, sy = e.clientY;
-      const move = (ev) => {
-        if (!ghost && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
-        if (!ghost) {
+
+      const showGhost = (on) => {
+        if (on && !ghost) {
           ghost = node.cloneNode(true);
           ghost.className = 'fi-idea fi-ghost';
-          Object.assign(ghost.style, { width: `${r0.width}px`, height: `${r0.height}px`, fontSize: `${parseFloat(getComputedStyle(node).fontSize) * scale}px`, transform: 'none' });
+          ghost.removeAttribute('tabindex');
+          Object.assign(ghost.style, { width: `${nw}px`, height: `${nh}px`, transformOrigin: '0 0' });
           document.body.append(ghost);
-          node.style.visibility = 'hidden';
-          document.body.classList.add('fi-dragging');
         }
-        ghost.style.left = `${ev.clientX - offX}px`;
-        ghost.style.top = `${ev.clientY - offY}px`;
-        const col = pathColAt(ev.clientX, ev.clientY);
-        if (col !== over) { over?.classList.remove('fi-drop-on'); over = col; over?.classList.add('fi-drop-on'); }
-        ghost.classList.toggle('is-to-path', !!col);
+        if (ghost) ghost.hidden = !on;
+        node.style.visibility = on ? 'hidden' : '';
       };
-      const up = (ev) => {
-        node.removeEventListener('pointermove', move);
-        node.removeEventListener('pointerup', up);
-        node.removeEventListener('pointercancel', up);
+      const step = () => {
+        frame = 0;
+        const ev = last;
+        if (!ev || done) return;
+        const fr = field.getBoundingClientRect();
+        const inside = ev.clientX >= fr.left && ev.clientX <= fr.right && ev.clientY >= fr.top && ev.clientY <= fr.bottom;
+        fx = Math.max(0, Math.min(rx, (ev.clientX - fr.left) / scale - offX));
+        fy = Math.max(0, Math.min(ry, (ev.clientY - fr.top) / scale - offY));
+        node.style.transform = `translate(${Math.round(fx)}px, ${Math.round(fy)}px)`;
+        // Outside its box it becomes a floating copy you can drop on your Path.
+        const col = inside ? null : pathColAt(ev.clientX, ev.clientY);
+        showGhost(!inside);
+        if (ghost && !inside) {
+          ghost.style.transform = `translate(${ev.clientX - offX * scale}px, ${ev.clientY - offY * scale}px) scale(${scale})`;
+          ghost.classList.toggle('is-to-path', !!col);
+        }
+        if (col !== over) { over?.classList.remove('fi-drop-on'); over = col; over?.classList.add('fi-drop-on'); }
+      };
+      const move = (ev) => {
+        if (done) return;
+        if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 3) return;
+        if (!moved) { moved = true; document.body.classList.add('fi-dragging'); }
+        samples.push({ x: ev.clientX, y: ev.clientY, t: performance.now() });
+        if (samples.length > 6) samples.shift();
+        last = ev;
+        if (!frame) frame = requestAnimationFrame(step);
+      };
+      const finish = (ev, how) => {
+        if (done) return;
+        done = true;
+        cancelAnimationFrame(frame);
+        window.removeEventListener('pointermove', move, true);
+        window.removeEventListener('pointerup', onUp, true);
+        window.removeEventListener('pointercancel', onCancel, true);
+        window.removeEventListener('blur', onCancel);
+        document.removeEventListener('visibilitychange', onHidden);
+        node.removeEventListener('lostpointercapture', onCancel);
         try { node.releasePointerCapture(e.pointerId); } catch {}
         over?.classList.remove('fi-drop-on');
         node.classList.remove('is-held');
         document.body.classList.remove('fi-dragging');
-        const finish = () => { ghost?.remove(); node.style.visibility = ''; dragId = null; release(); };
-        if (!ghost) {
-          // Held without moving: it picks up drifting from where you let go.
-          if (!idea.parked && Date.now() - t0 > 350) setIdeas(ideas().map((x) => (x.id === id ? { ...x, x: frozen.x, y: frozen.y, t0: Date.now() } : x)), true);
-          finish();
-          return;
-        }
-        if (ev.type === 'pointerup' && pathColAt(ev.clientX, ev.clientY)) {
+        const cleanup = () => { ghost?.remove(); ghost = null; node.style.visibility = ''; dragId = null; release(); };
+        const now = Date.now();
+        // Dropped on your Path: it becomes a task.
+        if (how === 'up' && moved && ev && pathColAt(ev.clientX, ev.clientY)) {
           const detail = { x: ev.clientX, y: ev.clientY, text: idea.text, handled: false, column: '' };
           window.dispatchEvent(new CustomEvent('architect:drop-task', { detail }));
           if (detail.handled) {
             setIdeas(ideas().filter((x) => x.id !== id));
             toast(`Pinned to ${detail.column || 'your Path'}.`, { ms: 2200 });
-            finish();
+            cleanup();
             return;
           }
         }
-        const gr = ghost.getBoundingClientRect();
-        const cx = gr.left + gr.width / 2, cy = gr.top + gr.height / 2;
-        if (ev.type === 'pointerup' && cx >= fr.left && cx <= fr.right && cy >= fr.top && cy <= fr.bottom) {
-          const x = clamp01((gr.left - fr.left) / scale / Math.max(1, W - r0.width / scale));
-          const y = clamp01((gr.top - fr.top) / scale / Math.max(1, H - r0.height / scale));
-          setIdeas(ideas().map((q) => (q.id === id ? { ...q, x, y, parked: true } : q)));
+        // Everywhere else it stays on the ice where you let go — thrown if you flicked it.
+        let vx = 0, vy = 0;
+        if (how === 'up' && moved && samples.length > 1) {
+          const a = samples[0], b = samples[samples.length - 1];
+          const dt = (b.t - a.t) / 1000;
+          if (dt > 0 && performance.now() - b.t < 90) {
+            const px = (b.x - a.x) / dt / scale, py = (b.y - a.y) / dt / scale;
+            const sp = Math.hypot(px, py);
+            if (sp > 90) { const k = Math.min(1, 2600 / sp); vx = (px * k) / rx; vy = (py * k) / ry; }
+          }
         }
-        finish();
+        const x = clamp01(fx / rx), y = clamp01(fy / ry);
+        setIdeas(ideas().map((q) => (q.id === id ? { ...q, x, y, vx, vy, t0: now, parked: false, mv: me?.id || null } : q)), !moved);
+        cleanup();
       };
-      node.setPointerCapture(e.pointerId);
-      node.addEventListener('pointermove', move);
-      node.addEventListener('pointerup', up);
-      node.addEventListener('pointercancel', up);
+      const onUp = (ev) => finish(ev, 'up');
+      const onCancel = () => finish(last, 'cancel');
+      const onHidden = () => { if (document.hidden) onCancel(); };
+      try { node.setPointerCapture(e.pointerId); } catch {}
+      window.addEventListener('pointermove', move, true);
+      window.addEventListener('pointerup', onUp, true);
+      window.addEventListener('pointercancel', onCancel, true);
+      window.addEventListener('blur', onCancel);
+      document.addEventListener('visibilitychange', onHidden);
+      node.addEventListener('lostpointercapture', onCancel);
     });
     node.addEventListener('dblclick', () => editIdea(node, id));
     node.addEventListener('keydown', (e) => {
@@ -307,9 +423,7 @@ export function mountFleeting(root, el0, w) {
       if (!i) return;
       menu({ x: e.clientX, y: e.clientY }, [
         { label: 'Edit', icon: 'edit', onSelect: () => editIdea(node, id) },
-        i.parked
-          ? { label: 'Let it drift', icon: 'curve', onSelect: () => setIdeas(ideas().map((x) => (x.id === id ? { ...x, parked: false, t0: Date.now() } : x))) }
-          : { label: 'Park here', icon: 'pin', onSelect: () => { const p = posOf(i, Date.now()); setIdeas(ideas().map((x) => (x.id === id ? { ...x, ...p, parked: true } : x))); } },
+        { label: 'Give it a nudge', icon: 'curve', onSelect: () => { const m = motion(i, Date.now()); const a = Math.random() * Math.PI * 2; setIdeas(ideas().map((x) => (x.id === id ? { ...x, x: m.x, y: m.y, vx: Math.cos(a) * 0.35, vy: Math.sin(a) * 0.35, t0: Date.now(), parked: false, mv: me?.id || null } : x))); } },
         { label: 'Add to today’s story', icon: 'note', onSelect: () => { addFragment({ kind: 'text', text: i.text }, storyKey()); setIdeas(ideas().filter((x) => x.id !== id)); toast('Added to today’s story.', { ms: 1800 }); } },
         '-',
         { label: 'Let it go', icon: 'trash', danger: true, onSelect: () => removeIdea(id) },
@@ -387,6 +501,7 @@ export function mountFleeting(root, el0, w) {
     if (day === storyKey()) { const now = storyMin(); tl.append(h('span', { class: 'fi-now', style: { top: `${yOf(now)}px`, '--sp': spOf(now).color }, title: `Now · ${clockOf(now)}` }, h('i'), h('b', {}, 'NOW'))); }
     if (!list.length) tl.append(h('p', { class: 'fi-story-empty' }, day === storyKey() ? 'Nothing told yet today.' : 'An untold day.', h('br'), 'Type below, or drop photos and videos anywhere on the line.'));
     for (const f of list) tl.append(fragment(f, yOf));
+    lookupWho(list.map((f) => f.by), () => { if (tab === 'story') refresh(); });
     stage.replaceChildren(tl);
     stage.scrollTop = keep;
     requestAnimationFrame(() => tl?.querySelectorAll('.fi-frag').forEach(connect));
@@ -405,10 +520,20 @@ export function mountFleeting(root, el0, w) {
         h('span', { class: 'fi-vid-meta' }, h('span', { class: 'fi-frag-text' }, f.text || (f.name || 'video').replace(/\.\w+$/, '')), f.dur ? h('small', {}, fmtDur(f.dur)) : null)];
     } else content = [h('span', { class: 'fi-frag-text' }, f.text)];
     const more = h('button', { class: 'fi-frag-more', type: 'button', 'aria-label': 'Fragment options', onclick: (e) => { e.stopPropagation(); fragMenu(e.currentTarget, f); } }, icon('more', 14));
-    const card = h('div', { class: ['fi-card', `is-${f.kind}`, f.uploading && 'is-uploading'], style: { '--sp': sp.color } }, label, ...content, f.uploading ? h('span', { class: 'dots-loader sm' }, h('i'), h('i'), h('i')) : more);
+    const card = h('div', { class: ['fi-card', `is-${f.kind}`, f.uploading && 'is-uploading'], style: { '--sp': sp.color } }, label, whoHead(f), ...content, f.uploading ? h('span', { class: 'dots-loader sm' }, h('i'), h('i'), h('i')) : more);
     const node = h('div', { class: 'fi-frag', 'data-id': f.id, style: { top: `${yOf(f.m)}px`, left: `${(f.x ?? 0.5) * 100}%` } }, card);
     if (!f.uploading) bindFrag(node, card, label, f);
     return node;
+  }
+
+  // The head of a Story event: whose it is, at a glance.
+  function whoHead(f) {
+    const id = f.by || (f.uploading ? me?.id : null);
+    const name = (id === me?.id ? me?.username : null) || f.byName || whoNames.get(id) || (id ? '…' : 'Someone');
+    const face = id ? whoFaces.get(id) : null;
+    return h('span', { class: ['fi-who', id === me?.id && 'is-me'], title: name },
+      h('span', { class: 'fi-who-face' }, face ? h('img', { src: face, alt: '', draggable: false }) : String(name || '?').replace(/[^\p{L}\p{N}]/gu, '').charAt(0).toUpperCase() || '?'),
+      h('b', {}, name));
   }
 
   // Dotted line from the card to the spine, with a dot where it lands.
@@ -524,7 +649,7 @@ export function mountFleeting(root, el0, w) {
   function addFragment(f, k = day, at = null) {
     const list = story(k);
     const spot = at || nextSpot(k, list);
-    const frag = { id: uid(), by: me?.id || null, at: Date.now(), ...spot, ...f };
+    const frag = { id: uid(), by: me?.id || null, byName: me?.username || null, at: Date.now(), ...spot, ...f };
     setStory(k, [...list, frag]);
     if (k !== day && tab === 'story') { day = k; paint(); }
     return frag;
@@ -665,15 +790,51 @@ export function mountFleeting(root, el0, w) {
       type: 'button', class: ['fi-archive', showArchive && 'is-open'], 'aria-expanded': String(showArchive),
       onclick: () => { showArchive = !showArchive; scrolledWeek = false; renderWeekly(); },
     }, icon(showArchive ? 'eyeOff' : 'history', 14), showArchive ? 'HIDE PAST WEEKS' : `ARCHIVE · ${past.length} WEEK${past.length === 1 ? '' : 'S'}${pastDone ? ` · ${pastDone} TASK${pastDone === 1 ? '' : 'S'}` : ''}`) : null;
-    stage.replaceChildren(h('div', { class: 'fi-weekly' },
+    const look = weeklyLook();
+    const bgUrl = look.bg ? urlOf(look.bg, () => tab === 'weekly' && refresh()) : null;
+    const lookBtn = h('button', { class: 'fi-look-btn', type: 'button', title: 'Background & theme', 'aria-label': 'Weekly background and theme', onclick: (e) => lookMenu(e.currentTarget) }, icon('image', 14));
+    stage.replaceChildren(h('div', {
+      class: ['fi-weekly', look.bg && 'has-bg'], 'data-wk-theme': look.theme || 'default',
+      style: bgUrl ? { '--wk-img': `url("${bgUrl}")` } : null,
+    },
       h('div', { class: 'fi-wk-top' },
-        h('div', {}, h('b', { class: 'fi-ms' }, 'MILESTONE'), h('span', { class: 'fi-ms-month' }, anchor.toLocaleDateString(undefined, { month: 'long' }))),
-        h('div', { class: 'fi-wk-goalbox' }, goal, due)),
+        h('div', { class: 'fi-wk-title' }, h('b', { class: 'fi-ms' }, 'MILESTONE'), h('span', { class: 'fi-ms-month' }, anchor.toLocaleDateString(undefined, { month: 'long' }))),
+        h('div', { class: 'fi-wk-goalbox' }, goal, h('span', { class: 'fi-due-row' }, due, lookBtn))),
       archiveBtn ? h('div', { class: 'fi-wk-bar' }, archiveBtn) : null,
       cols, tray, selBar(p)));
     if (keepX != null && scrolledWeek) cols.scrollLeft = keepX;
     else if (showArchive) requestAnimationFrame(() => { const c = cols.querySelector('.fi-wk.is-now'); if (c) cols.scrollLeft = Math.max(0, c.offsetLeft - 8); });
     scrolledWeek = true;
+  }
+
+  /* ---- Weekly look: your own background image and theme ---- */
+  function weeklyLook() { const v = getPref('weeklyLook', null); return v && typeof v === 'object' ? v : {}; }
+  async function setLook(p) {
+    await setPref('weeklyLook', { ...weeklyLook(), ...p });
+    if (tab === 'weekly') renderWeekly();
+  }
+  function lookMenu(anchor) {
+    const look = weeklyLook();
+    menu(anchor, [
+      { header: 'Theme' },
+      ...WK_THEMES.map(([id, label, c]) => ({
+        label, checked: (look.theme || 'default') === id,
+        iconEl: h('span', { class: 'fi-swatch', style: { background: c } }),
+        onSelect: () => setLook({ theme: id }),
+      })),
+      '-',
+      { header: 'Background' },
+      { label: look.bg ? 'Change background image…' : 'Set background image…', icon: 'image', onSelect: pickBg },
+      look.bg ? { label: 'Remove background', icon: 'close', onSelect: () => setLook({ bg: null }) } : null,
+    ].filter(Boolean), { align: 'end' });
+  }
+  async function pickBg() {
+    const [f] = await pickMedia({ multiple: false, accept: 'image/*' });
+    if (!f) return;
+    const wait = toast('Setting your background…', { ms: 0 });
+    try { const up = await uploadMedia(f); await setLook({ bg: up.path }); }
+    catch (e) { toast(e?.message || friendlyError(e), { tone: 'error', ms: 5000 }); }
+    finally { wait.close(); }
   }
 
   const listOf = (p, wk) => (wk === 'tray' ? p.tray : p.weeks[wk] || []);

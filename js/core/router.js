@@ -1,11 +1,12 @@
-// Hash router: #/ (the Space), #/paths, #/parasites (Ticket board), #/blueprint[/<folderId>], #/board/<boardId>
+// Hash router: #/ (the Space), #/blueprint[/<folderId>] (Archives), #/board/<boardId>. Old #/paths and #/parasites links land in the Space.
 export function parseRoute() {
   const parts = location.hash.replace(/^#\/?/, '').split('?')[0].split('/').filter(Boolean);
   const [view, id] = parts;
   if (!view || view === 'space') return { view: 'space' };
-  if (view === 'paths') return { view: 'paths', id: id || null };
+  // The old full-page Paths and Ticket board (the 2D, non-free-mode version) are retired:
+  // links to them open the Space and fly to your Path instead.
+  if (view === 'paths' || view === 'parasites' || view === 'tickets') return { view: 'space', redirect: true, focus: 'path' };
   if (view === 'blueprint') return { view: 'blueprint', id: id || null };
-  if (view === 'parasites' || view === 'tickets') return { view: 'parasites', id: id || null };
   if (view === 'board' && id) return { view: 'board', id };
   return { view: 'space', redirect: true };
 }

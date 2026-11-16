@@ -395,8 +395,9 @@ body.is-space .shell-head { display: none; }
 .ch-input:focus { outline: none; border-color: var(--fg-3); }
 .ch-send { flex: none; width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: var(--fg); color: var(--bg); }
 .ch-send:hover { opacity: .88; }
-.ch.is-tts .ch-bubble::before { content: ''; display: inline-block; width: 5px; height: 5px; margin: 0 7px 2px 0; border-radius: 50%; background: var(--red); vertical-align: middle; }
-.ch.is-tts .ch-msg.is-mine .ch-bubble::before { background: var(--red); }
+/* Voice chat = the chat object's look; its replay control just takes the bubble's colours */
+.ch.is-tts .ch-replay { background: var(--s2); border-color: var(--line); color: var(--fg-3); }
+.ch.is-tts .ch-replay:hover { color: var(--fg); border-color: var(--fg-3); }
 
 /* Say-something bar (Enter on the Space) */
 .say-bar {
@@ -496,3 +497,67 @@ body.is-space .shell-head { display: none; }
 .ch-dots i:nth-child(2) { animation-delay: .15s; }
 .ch-dots i:nth-child(3) { animation-delay: .3s; }
 @keyframes ch-dot { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+
+/* Radio — PLAYLIST menu: the queue you can add to, reorder and trim */
+.rd-probe { position: fixed; left: -9999px; top: 0; width: 200px; height: 120px; opacity: 0; pointer-events: none; }
+.rd-mode button { display: inline-flex; align-items: center; gap: 5px; }
+.rq-pop { padding: 0; }
+.rq { width: min(360px, calc(100vw - 24px)); display: flex; flex-direction: column; max-height: min(520px, 70vh); }
+.rq-head { display: flex; align-items: baseline; justify-content: space-between; padding: 12px 14px 8px; }
+.rq-head b { font-family: var(--f-dot); font-weight: 800; font-size: 14px; letter-spacing: .12em; }
+.rq-count { font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em; color: var(--fg-3); }
+.rq-row-add { display: flex; gap: 6px; padding: 0 10px 10px; border-bottom: 1px solid var(--line); }
+.rq .rq-input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; font-family: var(--f-mono); font-size: 11.5px; letter-spacing: 0; }
+.rq-add { flex: none; height: 34px; display: inline-flex; align-items: center; gap: 4px; }
+.rq-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; overscroll-behavior: contain; flex: 1; min-height: 60px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.rq-item { display: flex; align-items: center; gap: 2px; border-radius: 9px; }
+.rq-item:hover { background: var(--s2); }
+.rq-item.is-on { background: var(--s3); }
+.rq-item.is-drag { opacity: .55; outline: 1px dashed var(--fg-3); }
+.rq-grip { flex: none; width: 22px; height: 36px; display: grid; place-items: center; color: var(--fg-4); cursor: grab; touch-action: none; }
+.rq-grip:hover { color: var(--fg-2); }
+.rq-item.is-drag .rq-grip { cursor: grabbing; }
+.rq-play { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 6px 4px; text-align: left; cursor: pointer; color: var(--fg-2); }
+.rq-item.is-on .rq-play { color: var(--fg); }
+.rq-n { flex: none; width: 20px; text-align: right; font-family: var(--f-mono); font-size: 10.5px; color: var(--fg-4); display: grid; justify-items: end; }
+.rq-item.is-on .rq-n { color: var(--red); }
+.rq-text { min-width: 0; display: grid; }
+.rq-title { font-size: 13px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rq-text small { font-size: 11px; color: var(--fg-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rq-x { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--fg-4); opacity: 0; transition: opacity .12s; }
+.rq-item:hover .rq-x, .rq-x:focus-visible { opacity: 1; }
+.rq-x:hover { color: var(--fg); background: var(--s3); }
+@media (hover: none) { .rq-x { opacity: 1; } }
+.rq-empty { padding: 22px 16px; text-align: center; font-size: 12.5px; line-height: 1.5; color: var(--fg-3); }
+.rq-hint { margin: 0; padding: 8px 14px 10px; border-top: 1px solid var(--line); font-family: var(--f-mono); font-size: 10px; letter-spacing: .04em; color: var(--fg-4); }
+
+/* Path — text day tabs, in the Side Chat tab style: no pills, the day you're on is white on a subtle dark chip */
+.pdays { gap: 2px; }
+.pday {
+  border: 0; background: transparent; border-radius: 9px;
+  height: 28px; padding: 0 10px; color: var(--fg-3);
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+  transition: color .12s, background .12s;
+}
+.pday:hover { color: var(--fg-2); background: var(--s2); border: 0; }
+.pday.is-on { color: var(--fg); background: var(--s3); border: 0; }
+.pday.has-plan:not(.is-on) { color: var(--fg-3); }
+.pday.has-plan:not(.is-on):hover { color: var(--fg-2); }
+.pday b { font-family: var(--f-mono); font-weight: 700; font-size: 10px; color: var(--fg-4); }
+.pday.is-on b { color: var(--fg-2); }
+.pday.has-plan:not(.is-on)::before { content: none; }
+
+/* Navigation bar — customize (choose + reorder) */
+.dockc { display: grid; gap: 10px; }
+.dockc-count { font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em; color: var(--fg-3); }
+.dockc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: min(58vh, 460px); overflow-y: auto; overscroll-behavior: contain; }
+.dockc-item { display: flex; align-items: center; gap: 10px; padding: 4px 6px 4px 2px; border-radius: 12px; border: 1px solid var(--line); background: var(--s1); color: var(--fg-3); }
+.dockc-item.is-on { color: var(--fg); border-color: var(--line-2); background: var(--s2); }
+.dockc-item.is-drag { opacity: .6; outline: 1px dashed var(--fg-3); }
+.dockc-grip { flex: none; width: 30px; height: 40px; display: grid; place-items: center; color: var(--fg-4); cursor: grab; touch-action: none; }
+.dockc-ic { flex: none; display: grid; place-items: center; width: 22px; }
+.dockc-label { flex: 1; min-width: 0; font-family: var(--f-mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; }
+.dockc-switch { flex: none; position: relative; width: 38px; height: 22px; border-radius: 999px; background: var(--s3); border: 1px solid var(--line-2); cursor: pointer; transition: background .15s; }
+.dockc-switch i { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--fg-3); transition: transform .18s var(--ease), background .15s; }
+.dockc-switch.is-on { background: var(--fg); border-color: var(--fg); }
+.dockc-switch.is-on i { transform: translateX(16px); background: var(--bg); }

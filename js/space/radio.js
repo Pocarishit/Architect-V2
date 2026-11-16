@@ -5,8 +5,8 @@
 //                   the rest of the Space. Browsers block sound until you click once, hence "Tune in".
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { toast, promptDialog, menu } from '../core/ui.js';
-import { store } from '../core/util.js';
+import { toast, promptDialog, menu, popover, closeFloating } from '../core/ui.js';
+import { store, uid } from '../core/util.js';
 
 let ytLoading = null;
 function loadYT() {
@@ -43,6 +43,46 @@ export function parseSource(raw) {
 }
 
 const fmt = (s) => { s = Math.max(0, Math.floor(s || 0)); const m = Math.floor(s / 60); return `${m}:${String(s % 60).padStart(2, '0')}`; };
+
+/* ---- the queue: the Radio's own playlist (video ids + titles), editable from the PLAYLIST menu ---- */
+// Every video id in a YouTube playlist, read through a hidden player (no API key needed).
+export async function readYouTubeList(list, { timeout = 12000 } = {}) {
+  const YT = await loadYT();
+  const host = h('div', { class: 'rd-probe', 'aria-hidden': 'true' }, h('div'));
+  document.body.append(host);
+  try {
+    return await new Promise((resolve) => {
+      let done = false, p = null;
+      const finish = (ids) => { if (done) return; done = true; try { p?.destroy?.(); } catch {} resolve(ids || []); };
+      setTimeout(() => finish(p?.getPlaylist?.() || []), timeout);
+      p = new YT.Player(host.firstChild, {
+        host: 'https://www.youtube-nocookie.com', width: 200, height: 120,
+        playerVars: { listType: 'playlist', list, controls: 0, origin: location.origin },
+        events: {
+          onReady: () => {
+            let tries = 0;
+            const look = () => { const ids = p.getPlaylist?.() || []; if (ids.length || ++tries > 40) finish(ids); else setTimeout(look, 150); };
+            look();
+          },
+          onError: () => finish(p?.getPlaylist?.() || []),
+        },
+      });
+    });
+  } finally { host.remove(); }
+}
+
+// A video's title (no API key): YouTube's oEmbed, then noembed as a fallback.
+const titleCache = new Map();
+export async function videoTitle(vid) {
+  if (titleCache.has(vid)) return titleCache.get(vid);
+  const url = `https://www.youtube.com/watch?v=${vid}`;
+  let t = null;
+  for (const api of [`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`, `https://noembed.com/embed?url=${encodeURIComponent(url)}`]) {
+    try { const r = await fetch(api); if (r.ok) { const j = await r.json(); if (j?.title) { t = { title: j.title, author: j.author_name || '' }; break; } } } catch {}
+  }
+  titleCache.set(vid, t);
+  return t;
+}
 
 export async function askSource(current = '') {
   const v = await promptDialog('YouTube playlist', { value: current, placeholder: 'https://www.youtube.com/playlist?list=…', ok: 'Play', label: 'Playlist or video link' });
@@ -95,7 +135,8 @@ export function mountRadio(body, el, w) {
   // Header tools: change playlist, show/hide video.
   w.tools.append(
     h('button', { class: 'wg-btn', type: 'button', title: 'Radio options', 'aria-label': 'Radio options', onclick: (e) => menu(e.currentTarget, [
-      { label: 'Change playlist…', icon: 'music', onSelect: () => setSource() },
+      { label: 'Playlist & queue…', icon: 'list', onSelect: () => openQueue(w.tools) },
+      { label: 'Replace playlist…', icon: 'music', onSelect: () => setSource() },
       { label: 'Show video', icon: 'video', checked: !hideVideo(), onSelect: () => { store.set(`architect.radio.hide.${el.id}`, !hideVideo()); paint(); } },
       w.current().src ? { label: 'Open on YouTube', icon: 'external', onSelect: () => window.open(w.current().src, '_blank', 'noopener') } : null,
     ], { align: 'end' }) }, icon('settings', 14)));
@@ -104,6 +145,9 @@ export function mountRadio(body, el, w) {
   const mode = () => w.current().mode || 'stream';
   const streaming = () => mode() === 'stream';
   const iControl = () => st().by === me.id;
+  const queue = () => (Array.isArray(w.current().queue) ? w.current().queue : []);
+  const qVids = () => queue().map((q) => q.vid);
+  const qSig = () => qVids().join(',');
   const expected = (s = st()) => (s.playing ? (s.t || 0) + Math.max(0, Date.now() - (s.at || Date.now())) / 1000 : (s.t || 0));
 
   /* ---- state changes ---- */
@@ -150,7 +194,8 @@ export function mountRadio(body, el, w) {
         if (s.playing && tunedIn) {
           player.playVideoAt(want);
           if (pos > 2) setTimeout(() => { try { player.seekTo(expected(s), true); } catch {} }, 700);
-        } else player.cuePlaylist?.({ listType: 'playlist', list: w.current().list, index: want, startSeconds: pos });
+        } else if (queue().length) player.cuePlaylist?.(qVids(), want, pos);
+        else player.cuePlaylist?.({ listType: 'playlist', list: w.current().list, index: want, startSeconds: pos });
       } else {
         if (Math.abs((player.getCurrentTime?.() || 0) - pos) > (fromMe ? 0.4 : 2.5)) player.seekTo(pos, true);
         if (s.playing && tunedIn) player.playVideo(); else player.pauseVideo();
@@ -174,15 +219,198 @@ export function mountRadio(body, el, w) {
     if (!src) return;
     tunedIn = true;
     wantPlay = true; // you just picked it: start playing as soon as it's loaded
-    w.live({ src: src.url, list: src.list, vid0: src.vid, st: { by: me.id, name: me.username, index: 0, vid: src.vid, t: 0, playing: false, at: Date.now() } });
-    if (builtFor !== `${src.list}|${src.vid}`) build(true); // (the update above normally rebuilds it already)
+    const items = await itemsFor(src);
+    if (!items.length) { toast('That playlist came back empty. Is it public or unlisted?', { tone: 'error', ms: 5000 }); return; }
+    const wasQueue = builtFor === 'queue' && ready;
+    if (wasQueue) loadedSig = items.map((q) => q.vid).join(','); // loaded right below, not by update()
+    w.live({ src: src.url, list: src.list, vid0: items[0].vid, queue: items, st: { by: me.id, name: me.username, index: 0, vid: items[0].vid, t: 0, playing: false, at: Date.now() } });
+    if (wasQueue) {
+      wantPlay = false;
+      try { applying = true; player.loadPlaylist(qVids(), 0, 0); } catch {}
+      setTimeout(() => { applying = false; act({ playing: true, index: 0, vid: items[0].vid, t: 0 }); }, 700);
+    } else if (builtFor !== keyOf(w.current())) build(true); // (the update above normally rebuilds it already)
+    fillTitles();
+  }
+
+  // A link → queue items. Playlists come in whole; a single video is one item.
+  async function itemsFor(src) {
+    let vids = [];
+    if (src.list) {
+      const wait = toast('Pulling in the playlist…', { ms: 0 });
+      try { vids = await readYouTubeList(src.list); } catch (e) { toast(e.message, { tone: 'error' }); }
+      wait.close();
+      if (src.vid && !vids.length) vids = [src.vid];
+    } else if (src.vid) vids = [src.vid];
+    return vids.map((vid) => ({ id: uid(), vid, title: null }));
+  }
+
+  // Titles fill in after the fact, a few at a time, and ride on the widget so everyone sees them.
+  let filling = false;
+  async function fillTitles() {
+    if (filling) return;
+    filling = true;
+    try {
+      for (let round = 0; round < 50; round++) {
+        const missing = queue().filter((q) => !q.title && !q.noTitle).slice(0, 6);
+        if (!missing.length || destroyed) break;
+        const got = await Promise.all(missing.map(async (q) => [q.id, await videoTitle(q.vid)]));
+        const by = new Map(got);
+        w.live({ queue: queue().map((q) => (by.has(q.id) ? (by.get(q.id) ? { ...q, title: by.get(q.id).title, author: by.get(q.id).author } : { ...q, noTitle: true }) : q)) });
+        paintQueue();
+      }
+    } finally { filling = false; }
+  }
+
+  // The queue as it is now. A Radio from before the queue existed takes its list from the player once.
+  function ensureQueue() {
+    if (queue().length) return queue();
+    let vids = [];
+    try { vids = ready ? player.getPlaylist?.() || [] : []; } catch {}
+    if (!vids.length && w.current().vid0) vids = [w.current().vid0];
+    const items = vids.map((vid) => ({ id: uid(), vid, title: null }));
+    if (items.length) {
+      // The player already holds these songs: switch to the queue without rebuilding it.
+      if (ready) { builtFor = 'queue'; loadedSig = vids.join(','); }
+      w.live({ queue: items });
+      fillTitles();
+    }
+    return items;
+  }
+  function setQueue(items, { keepPlaying = true } = {}) {
+    const cur = keepPlaying ? currentPos() : {};
+    const vid = cur.vid || st().vid;
+    const idx = Math.max(0, items.findIndex((q) => q.vid === vid));
+    w.live({ queue: items, vid0: items[0]?.vid || null, ...(items.length ? { st: { ...st(), index: idx, vid: items[idx]?.vid || null } } : {}) });
+    syncQueue();
+    paintQueue();
+  }
+  async function addLink(raw) {
+    const src = parseSource(raw);
+    if (!src) { toast('That isn’t a YouTube video or playlist link.', { tone: 'error', ms: 3500 }); return false; }
+    if (src.error) { toast(src.error, { tone: 'error', ms: 6000 }); return false; }
+    const base = ensureQueue();
+    const items = await itemsFor(src);
+    if (!items.length) { toast('Nothing to add from that link.', { tone: 'error' }); return false; }
+    const fresh = !w.current().src;
+    if (fresh) {
+      tunedIn = true; wantPlay = true;
+      w.live({ src: src.url, list: null, vid0: items[0].vid, queue: items, st: { by: me.id, name: me.username, index: 0, vid: items[0].vid, t: 0, playing: false, at: Date.now() } });
+    } else setQueue([...queue().length ? queue() : base, ...items]);
+    toast(items.length > 1 ? `Added ${items.length} videos.` : 'Added to the queue.', { ms: 1800 });
+    fillTitles();
+    return true;
+  }
+  function playItem(i) {
+    if (!ready) return;
+    const q = queue()[i];
+    if (!q) return;
+    tunedIn = true;
+    act({ index: i, vid: q.vid, t: 0, playing: true });
+  }
+
+  // Load the queue into the player in place (no rebuild), keeping the song that's on.
+  let loadedSig = null;
+  function syncQueue() {
+    if (!ready || !queue().length) return;
+    const sig = qSig();
+    if (sig === loadedSig) return;
+    loadedSig = sig;
+    try {
+      const pos = currentPos();
+      const vids = qVids();
+      const i = Math.max(0, vids.indexOf(pos.vid || st().vid));
+      applying = true;
+      if (pos.playing) player.loadPlaylist(vids, i, vids[i] === pos.vid ? pos.t || 0 : 0);
+      else player.cuePlaylist(vids, i, vids[i] === pos.vid ? pos.t || 0 : 0);
+      setTimeout(() => { applying = false; }, 900);
+    } catch (e) { console.warn(e); }
+  }
+
+  /* ---- the PLAYLIST menu ---- */
+  let qPanel = null, qList = null;
+  function openQueue(anchor) {
+    ensureQueue();
+    const input = h('input', { class: 'input rq-input', placeholder: 'Paste a video or playlist link', spellcheck: false, 'aria-label': 'Video or playlist link' });
+    const addBtn = h('button', { class: 'btn sm rq-add', type: 'button' }, icon('plus', 14), 'Add');
+    const add = async () => {
+      const v = input.value.trim();
+      if (!v) { input.focus(); return; }
+      addBtn.disabled = true;
+      const ok = await addLink(v);
+      addBtn.disabled = false;
+      if (ok) input.value = '';
+      input.focus();
+    };
+    addBtn.addEventListener('click', add);
+    input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); add(); } if (e.key === 'Escape') closeFloating(); });
+    input.addEventListener('paste', () => setTimeout(() => { if (parseSource(input.value)) add(); }, 0));
+    qList = h('ol', { class: 'rq-list', role: 'list' });
+    const content = h('div', { class: 'rq' },
+      h('div', { class: 'rq-head' }, h('b', {}, 'PLAYLIST'), h('span', { class: 'rq-count' })),
+      h('div', { class: 'rq-row-add' }, input, addBtn),
+      qList,
+      h('p', { class: 'rq-hint' }, 'Drag ⠿ to reorder · click a song to play it'));
+    content.addEventListener('pointerdown', (e) => e.stopPropagation());
+    content.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+    qPanel = content;
+    popover(anchor, content, { class: 'rq-pop', side: 'bottom', align: 'end' });
+    paintQueue();
+    setTimeout(() => input.focus({ preventScroll: true }), 40);
+  }
+
+  function paintQueue() {
+    if (!qPanel?.isConnected || !qList) return;
+    const items = queue();
+    const on = currentPos().vid || st().vid;
+    qPanel.querySelector('.rq-count').textContent = items.length ? `${items.length} SONG${items.length === 1 ? '' : 'S'}` : '';
+    if (qList.dataset.dragging) return;
+    qList.replaceChildren(...(items.length ? items.map((q, i) => {
+      const grip = h('span', { class: 'rq-grip', 'aria-label': 'Drag to reorder', title: 'Drag to reorder' }, icon('grip', 14));
+      const li = h('li', { class: ['rq-item', q.vid === on && 'is-on'], 'data-id': q.id },
+        grip,
+        h('button', { class: 'rq-play', type: 'button', onclick: () => playItem(i), title: 'Play this' },
+          h('span', { class: 'rq-n' }, q.vid === on ? icon('music', 12) : String(i + 1)),
+          h('span', { class: 'rq-text' }, h('span', { class: 'rq-title' }, q.title || (q.noTitle ? q.vid : 'Loading…')), q.author ? h('small', {}, q.author) : null)),
+        h('button', { class: 'rq-x', type: 'button', 'aria-label': 'Remove from queue', title: 'Remove', onclick: () => setQueue(queue().filter((x) => x.id !== q.id)) }, icon('close', 13)));
+      grip.addEventListener('pointerdown', (e) => dragItem(e, li));
+      return li;
+    }) : [h('li', { class: 'rq-empty' }, 'The queue is empty. Paste a video or a whole playlist above.')]));
+  }
+
+  function dragItem(e, li) {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    // Window listeners, not pointer capture: moving the row in the list would drop the capture.
+    qList.dataset.dragging = '1';
+    li.classList.add('is-drag');
+    const move = (ev) => {
+      if (ev.pointerId !== e.pointerId) return;
+      const over = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.rq-item');
+      if (!over || over === li || over.parentNode !== qList) return;
+      const r = over.getBoundingClientRect();
+      qList.insertBefore(li, ev.clientY > r.top + r.height / 2 ? over.nextSibling : over);
+    };
+    const up = (ev) => {
+      if (ev.pointerId !== e.pointerId) return;
+      window.removeEventListener('pointermove', move, true); window.removeEventListener('pointerup', up, true); window.removeEventListener('pointercancel', up, true);
+      li.classList.remove('is-drag');
+      delete qList.dataset.dragging;
+      const order = [...qList.querySelectorAll('.rq-item')].map((n) => n.dataset.id);
+      const by = new Map(queue().map((q) => [q.id, q]));
+      const next = order.map((x) => by.get(x)).filter(Boolean);
+      if (next.length === queue().length && next.map((q) => q.id).join() !== queue().map((q) => q.id).join()) setQueue(next);
+      else paintQueue();
+    };
+    window.addEventListener('pointermove', move, true); window.addEventListener('pointerup', up, true); window.addEventListener('pointercancel', up, true);
   }
 
   /* ---- the YouTube player ---- */
   let builtFor = null;
+  // With a queue the player is built once and the queue is swapped in place; without one, by list/video.
+  const keyOf = (c) => (Array.isArray(c.queue) && c.queue.length ? 'queue' : `${c.list}|${c.vid0}`);
   async function build(force = false) {
     const cur = w.current();
-    const key = `${cur.list}|${cur.vid0}`;
+    const key = keyOf(cur);
     if (!cur.src || (!force && builtFor === key)) { paint(); return; }
     builtFor = key;
     const my = ++gen;
@@ -196,18 +424,36 @@ export function mountRadio(body, el, w) {
     try { YT = await loadYT(); } catch (e) { if (my === gen) { title.textContent = 'Couldn’t reach YouTube'; artist.textContent = e.message; } return; }
     if (destroyed || my !== gen) return; // a newer link was set meanwhile
     const vars = { playsinline: 1, rel: 0, modestbranding: 1, controls: 0, disablekb: 1, iv_load_policy: 3, origin: location.origin };
-    if (cur.list) { vars.listType = 'playlist'; vars.list = cur.list; }
+    const q = Array.isArray(cur.queue) ? cur.queue : [];
+    const startAt = q.length ? Math.max(0, Math.min(q.length - 1, q.findIndex((x) => x.vid === cur.st?.vid))) : 0;
+    if (q.length) vars.playlist = q.map((x) => x.vid).filter((_, i) => i !== startAt).join(',');
+    else if (cur.list) { vars.listType = 'playlist'; vars.list = cur.list; }
+    loadedSig = null;
     player = new YT.Player(holder.firstChild, {
       host: 'https://www.youtube-nocookie.com',
       width: '100%', height: '100%',
-      videoId: cur.vid0 || undefined,
+      videoId: q.length ? q[startAt].vid : cur.vid0 || undefined,
       playerVars: vars,
       events: {
         onReady: () => {
           if (destroyed || my !== gen) return;
           ready = true;
           player.setVolume?.(Number(vol.value));
-          if (wantPlay) { wantPlay = false; act({ playing: true, t: 0 }); }
+          if (queue().length) {
+            // Load the queue in its own order (the constructor can only start from one video).
+            const vids = qVids();
+            const i = Math.max(0, vids.indexOf(st().vid));
+            loadedSig = qSig();
+            applying = true;
+            try { if (wantPlay) player.loadPlaylist(vids, i, 0); else player.cuePlaylist(vids, i, streaming() ? expected() : 0); } catch {}
+            const play = wantPlay; wantPlay = false;
+            setTimeout(() => {
+              applying = false;
+              if (destroyed || my !== gen) return;
+              if (play) act({ playing: true, index: i, vid: vids[i], t: 0 });
+              else if (streaming() && st().at) apply(st());
+            }, 700);
+          } else if (wantPlay) { wantPlay = false; act({ playing: true, t: 0 }); }
           else if (streaming() && st().at) apply(st());
           paint();
         },
@@ -253,7 +499,7 @@ export function mountRadio(body, el, w) {
     const s = st();
     const data = ready ? (player.getVideoData?.() || {}) : {};
     title.textContent = data.title || (has ? 'Loading…' : 'Radio');
-    artist.textContent = data.author || (cur.list ? 'YouTube playlist' : 'YouTube');
+    artist.textContent = data.author || (queue().length > 1 ? `Playlist · ${queue().length} songs` : cur.list ? 'YouTube playlist' : 'YouTube');
     const playing = ready && player.getPlayerState?.() === 1;
     playBtn.replaceChildren(icon(playing ? 'pause' : 'play', 22));
     playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
@@ -262,8 +508,14 @@ export function mountRadio(body, el, w) {
     modeSeg.replaceChildren(...[['playlist', 'Playlist'], ['stream', 'Stream']].map(([id, label]) => h('button', {
       type: 'button', role: 'tab', class: mode() === id ? 'is-on' : null, 'aria-selected': String(mode() === id),
       title: id === 'stream' ? 'Everyone hears what the controller plays, in real time' : 'Everyone listens on their own',
-      onclick: () => { if (mode() === id) return; w.live({ mode: id, ...(id === 'stream' ? { st: { ...st(), ...currentPos(), by: me.id, name: me.username, at: Date.now() } } : {}) }); },
-    }, label)));
+      onclick: (e) => {
+        // PLAYLIST opens the playlist menu (switching to Playlist mode first if you were streaming).
+        const btn = e.currentTarget;
+        if (mode() !== id) w.live({ mode: id, ...(id === 'stream' ? { st: { ...st(), ...currentPos(), by: me.id, name: me.username, at: Date.now() } } : {}) });
+        if (id === 'playlist') openQueue(btn);
+      },
+    }, id === 'playlist' ? [icon('list', 12), label] : label)));
+    paintQueue();
     live.replaceChildren(...(streaming() ? [h('i', { class: ['rd-dot', s.playing && 'is-on'] }), h('span', {}, s.by ? (s.by === me.id ? 'You control it' : `${s.name || 'Someone'} controls`) : 'Live')] : []));
     tune.hidden = tunedIn || !has || !(streaming() && s.playing);
   }
@@ -298,13 +550,14 @@ export function mountRadio(body, el, w) {
 
   return {
     update(next) {
-      const key = `${next.list}|${next.vid0}`;
+      const key = keyOf(next);
       if (next.src && key !== builtFor) {
         // You just set this link (from the Add menu): play it as soon as it loads.
         if (next.st?.by === me.id && Date.now() - (next.st.at || 0) < 30_000) { tunedIn = true; wantPlay = true; }
         build();
         return;
       }
+      if (key === 'queue') syncQueue();
       if (streaming() && tunedIn && !iControl() && next.st?.at) apply(next.st);
       else paint();
     },

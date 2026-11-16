@@ -3,9 +3,7 @@ import { parseRoute } from './core/router.js';
 import { closeFloating } from './core/ui.js';
 import { mountLogin } from './views/login.js';
 import { mountShell } from './views/shell.js';
-import { mountPaths } from './views/paths.js';
 import { mountArchive } from './views/archive.js';
-import { mountParasites } from './views/parasites.js';
 import { mountSpace } from './views/space.js';
 import { resetPrefs } from './data/prefs.js';
 import { resetAvatars } from './data/profile.js';
@@ -59,6 +57,7 @@ function route() {
   if (!session || !shell) return;
   const r = parseRoute();
   if (r.redirect) history.replaceState(null, '', '#/');
+  if (r.focus) { try { sessionStorage.setItem('architect.focus', r.focus); } catch {} if (view?.focus && viewName === 'space') { view.focus(r.focus); return; } }
   // Same view, different sub-page (e.g. a path opened on mobile): update in place, no reload.
   if (view?.update && viewName === r.view) { view.update(r); return; }
   teardownView();
@@ -68,10 +67,8 @@ function route() {
   document.body.classList.toggle('is-board', r.view === 'board' || r.view === 'space');
   document.body.classList.toggle('is-space', r.view === 'space');
   window.scrollTo(0, 0);
-  // The Space is home. Paths and the Ticket board also open full-page (handy on phones).
+  // The Space is home; Archives and full-page Blueprints open on top of it.
   if (r.view === 'space') view = mountSpace(shell.outlet);
-  else if (r.view === 'paths') view = mountPaths(shell.outlet, r.id);
-  else if (r.view === 'parasites') view = mountParasites(shell.outlet, r.id);
   else if (r.view === 'blueprint') view = mountArchive(shell.outlet, r.id);
   else if (r.view === 'board') view = mountBoard(shell.outlet, r.id);
   // Ctrl+Esc (or Esc twice) from any full-page view goes back to the Space.

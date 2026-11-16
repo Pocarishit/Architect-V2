@@ -258,6 +258,8 @@ export function mountSpace(root) {
     let lastPop = [...poppedTickets()].sort().join();
     slot.offs.push(ed.on('change', () => { const sig = [...poppedTickets()].sort().join(); if (sig !== lastPop) { lastPop = sig; ticketsMoved(); } }));
     if (mode === m) mountDock();
+    // An old Paths / Ticket board link brought you here: fly to your Path.
+    try { const f = sessionStorage.getItem('architect.focus'); if (f && mode === m) { sessionStorage.removeItem('architect.focus'); setTimeout(() => focusKind(f), 60); } } catch {}
     // "Open as a window" from a full-page Blueprint lands back here with the window open.
     let pending = null;
     try { pending = sessionStorage.getItem('architect.openWin'); sessionStorage.removeItem('architect.openWin'); } catch {}
@@ -381,21 +383,123 @@ export function mountSpace(root) {
   }
 
   /* ---------------- phones & tablets: a dock instead of hunting for long-press ---------------- */
-  function mountDock() {
-    page.querySelector('.space-dock')?.remove();
-    const ed = editor();
+  // The dock is yours to arrange: pick which buttons sit in it and in what order (saved to your account).
+  const DOCK_DEFAULT = ['path', 'ideas', 'variables', 'blueprints', 'add'];
+  const DOCK_MAX = 6;
+  function dockCatalog(ed) {
     const small = () => innerWidth < 720;
     const widget = (kind, test = () => true) => ed.els.find((e) => e.type === 'widget' && e.kind === kind && !ed.isHidden(e) && test(e));
     const fly = (el) => { if (!el) return false; ed.select([el.id]); ed.fitRect(el, { maxZ: 1, pad: small() ? 8 : 40 }); return true; };
-    const item = (ic, label, fn) => h('button', { class: 'sd-btn', type: 'button', 'aria-label': label, onclick: (e) => fn(e.currentTarget) }, icon(ic, 20), h('span', {}, label));
-    const dock = h('nav', { class: 'space-dock', 'aria-label': 'Space' },
-      item('more', 'Menu', (b) => { const r = b.getBoundingClientRect(); menu({ x: r.left, y: r.top - 8 }, spaceItems(ed.viewCenter()), { side: 'top' }); }),
-      item('toPaths', 'Path', () => { if (small()) go('paths'); else if (!fly(widget('path', (e) => e.owner === me.id))) addWidget('path'); }),
-      item('spark', 'Ideas', () => { if (!fly(widget('fleeting'))) addWidget('fleeting'); }),
-      item('users', 'Variables', () => { if (!fly(widget('variables'))) addWidget('variables'); }),
-      item('frame', 'Blueprints', () => { if (small()) go('blueprint'); else if (!fly(widget('blueprints'))) addWidget('blueprints'); }),
-      item('plus', 'Add', (b) => { const r = b.getBoundingClientRect(); const all = spaceItems(ed.viewCenter()); menu({ x: r.right, y: r.top - 8 }, all.slice(0, all.indexOf('-')), { side: 'top', align: 'end' }); }));
+    const flyOrAdd = (kind, test) => () => { if (!fly(widget(kind, test))) addWidget(kind); };
+    return {
+      path: { icon: 'toPaths', label: 'Path', run: flyOrAdd('path', (e) => e.owner === me.id) },
+      ideas: { icon: 'spark', label: 'Ideas', run: flyOrAdd('fleeting') },
+      variables: { icon: 'users', label: 'Variables', run: flyOrAdd('variables') },
+      blueprints: { icon: 'frame', label: 'Blueprints', run: flyOrAdd('blueprints') },
+      chat: { icon: 'chat', label: 'Chat', run: flyOrAdd('chat') },
+      radio: { icon: 'radio', label: 'Radio', run: flyOrAdd('radio') },
+      voice: { icon: 'speaker', label: 'Voice', run: () => sayBar() },
+      archives: { icon: 'folder', label: 'Archives', run: () => go('blueprint') },
+      space: { icon: 'home', label: mode === 'personal' ? 'Shared' : 'Personal', run: () => toggleSpace() },
+      fit: { icon: 'fit', label: 'Fit all', run: () => ed.zoomToFit() },
+      views: { icon: 'target', label: 'Views', run: () => cameraDialog() },
+      add: { icon: 'plus', label: 'Add', run: (b) => { const r = b.getBoundingClientRect(); const all = spaceItems(ed.viewCenter()); menu({ x: r.right, y: r.top - 8 }, all.slice(0, all.indexOf('-')), { side: 'top', align: 'end' }); } },
+    };
+  }
+  const dockItems = (cat) => {
+    const saved = getPref('dockItems', null);
+    const list = (Array.isArray(saved) ? saved : DOCK_DEFAULT).filter((k) => cat[k]);
+    return [...new Set(list)].slice(0, DOCK_MAX);
+  };
+
+  function mountDock() {
+    page.querySelector('.space-dock')?.remove();
+    const ed = editor();
+    const cat = dockCatalog(ed);
+    let suppress = false; // a long-press opened the customizer: the release isn't a tap
+    const item = (ic, label, fn, extra = {}) => h('button', { class: 'sd-btn', type: 'button', 'aria-label': label, onclick: (e) => { if (suppress) { suppress = false; return; } fn(e.currentTarget); }, ...extra }, icon(ic, 20), h('span', {}, label));
+    const menuBtn = item('more', 'Menu', (b) => {
+      const r = b.getBoundingClientRect();
+      menu({ x: r.left, y: r.top - 8 }, [{ label: 'Customize navigation bar…', icon: 'settings', onSelect: customizeDock }, '-', ...spaceItems(ed.viewCenter())], { side: 'top' });
+    });
+    const dock = h('nav', { class: 'space-dock', 'aria-label': 'Space' }, menuBtn,
+      ...dockItems(cat).map((k) => item(cat[k].icon, cat[k].label, cat[k].run, { 'data-dock': k })));
+    // Hold the bar to rearrange it.
+    let hold = null;
+    dock.addEventListener('pointerdown', (e) => { clearTimeout(hold); const sx = e.clientX, sy = e.clientY; hold = setTimeout(() => { hold = null; suppress = true; setTimeout(() => { suppress = false; }, 900); navigator.vibrate?.(12); customizeDock(); }, 650); dock._hold = { sx, sy }; });
+    dock.addEventListener('pointermove', (e) => { if (hold && dock._hold && Math.hypot(e.clientX - dock._hold.sx, e.clientY - dock._hold.sy) > 8) { clearTimeout(hold); hold = null; } });
+    for (const t of ['pointerup', 'pointercancel', 'pointerleave']) dock.addEventListener(t, () => { clearTimeout(hold); hold = null; });
+    dock.addEventListener('contextmenu', (e) => { e.preventDefault(); clearTimeout(hold); hold = null; customizeDock(); });
     page.append(dock);
+  }
+
+  // Choose and order the dock's buttons. Drag ⠿ to reorder; the switch puts a button in the bar.
+  async function customizeDock() {
+    closeFloating();
+    const ed = editor();
+    if (!ed) return;
+    const cat = dockCatalog(ed);
+    const on = new Set(dockItems(cat));
+    let order = [...dockItems(cat), ...Object.keys(cat).filter((k) => !on.has(k))];
+    const list = h('ol', { class: 'dockc-list' });
+    const count = h('span', { class: 'dockc-count' });
+    const paint = () => {
+      count.textContent = `${on.size} / ${DOCK_MAX} IN THE BAR`;
+      list.replaceChildren(...order.map((k) => {
+        const grip = h('span', { class: 'dockc-grip', 'aria-label': 'Drag to reorder' }, icon('grip', 15));
+        const sw = h('button', {
+          type: 'button', role: 'switch', class: ['dockc-switch', on.has(k) && 'is-on'], 'aria-checked': String(on.has(k)), 'aria-label': `Show ${cat[k].label} in the bar`,
+          onclick: () => {
+            if (on.has(k)) on.delete(k);
+            else if (on.size >= DOCK_MAX) { toast(`The bar holds ${DOCK_MAX} buttons — turn one off first.`, { ms: 2600 }); return; }
+            else on.add(k);
+            paint();
+          },
+        }, h('i'));
+        const li = h('li', { class: ['dockc-item', on.has(k) && 'is-on'], 'data-k': k }, grip, h('span', { class: 'dockc-ic' }, icon(cat[k].icon, 17)), h('span', { class: 'dockc-label' }, cat[k].label), sw);
+        grip.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          li.classList.add('is-drag');
+          // Window listeners, not pointer capture: moving the row would drop the capture.
+          const move = (ev) => {
+            if (ev.pointerId !== e.pointerId) return;
+            ev.preventDefault();
+            const over = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.dockc-item');
+            if (!over || over === li || over.parentNode !== list) return;
+            const r = over.getBoundingClientRect();
+            list.insertBefore(li, ev.clientY > r.top + r.height / 2 ? over.nextSibling : over);
+          };
+          const up = (ev) => {
+            if (ev.pointerId !== e.pointerId) return;
+            window.removeEventListener('pointermove', move, true); window.removeEventListener('pointerup', up, true); window.removeEventListener('pointercancel', up, true);
+            li.classList.remove('is-drag');
+            order = [...list.querySelectorAll('.dockc-item')].map((n) => n.dataset.k);
+          };
+          window.addEventListener('pointermove', move, true); window.addEventListener('pointerup', up, true); window.addEventListener('pointercancel', up, true);
+        });
+        return li;
+      }));
+    };
+    paint();
+    const ok = await dialog({
+      title: 'Navigation bar',
+      width: 420,
+      className: 'dockc-dlg',
+      body: h('div', { class: 'dockc' }, h('p', { class: 'dlg-text' }, 'Pick what sits in the bar and drag ⠿ to put it in the order you use. Menu always stays first.'), count, list),
+      actions: [{ label: 'Reset', value: 'reset' }, { label: 'Cancel', value: null }, { label: 'Save', primary: true, value: 'save' }],
+    });
+    if (!ok) return;
+    const next = ok === 'reset' ? DOCK_DEFAULT : order.filter((k) => on.has(k));
+    await setPref('dockItems', next).catch(() => {});
+    mountDock();
+    toast(ok === 'reset' ? 'Navigation bar reset.' : 'Navigation bar saved.', { ms: 1800 });
+  }
+
+  function focusKind(kind) {
+    const ed = editor();
+    if (!ed) return;
+    const el = ed.els.find((e) => e.type === 'widget' && e.kind === kind && !ed.isHidden(e) && (kind !== 'path' || e.owner === me.id));
+    if (el) { ed.select([el.id]); ed.fitRect(el, { maxZ: 1, pad: innerWidth < 720 ? 8 : 40 }); }
   }
 
   /* ---------------- Blueprints: a window over the Space, or full screen ---------------- */
@@ -702,17 +806,42 @@ export function mountSpace(root) {
     const next = { ...objKeys() };
     for (const [id, k] of Object.entries(next)) if (k === chosen) delete next[id];
     if (chosen) next[el.id] = chosen; else delete next[el.id];
+    const modes = { ...keyModes() };
+    for (const id of Object.keys(modes)) if (!next[id]) delete modes[id];
+    if (chosen) modes[el.id] = mode;
     await setPref('objectKeys', next);
+    setPref('objectKeyModes', modes).catch(() => {});
     if (chosen) toast(`${chosen} now opens it.`);
   }
 
-  function openObject(id) {
-    const ed = editor();
+  // Shortcuts work from either Space: if the object lives in the other one, switch there first.
+  const keyModes = () => getPref('objectKeyModes', {}) || {};
+  function focusObject(ed, id) {
     const el = ed?.byId.get(id);
     if (!el || ed.isHidden(el)) return false;
     if (el.type === 'widget' && el.kind === 'portal') { openBoard(el.boardId); return true; }
     ed.select([id]);
     ed.fitRect(rectOf(el, ed.byId), { maxZ: el.type === 'widget' ? 1 : 1.5, pad: 60 });
+    return true;
+  }
+  function openObject(id) {
+    if (focusObject(editor(), id)) return true;
+    const other = mode === 'shared' ? 'personal' : 'shared';
+    const known = keyModes()[id];
+    if (known && known !== other) return false;
+    const there = slots[other]?.t?.editor;
+    if (there && !there.byId.get(id)) return false; // loaded, and it isn't there either
+    if (switching) return true;
+    switching = true;
+    (async () => {
+      try {
+        await openMode(other);
+        // A Space opened for the first time needs a moment to load its objects.
+        for (let i = 0; i < 40 && !slots[other]?.t; i++) await new Promise((r) => setTimeout(r, 100));
+        if (mode === other && !focusObject(editor(), id)) toast('That shortcut’s object is gone.', { ms: 2200 });
+      } catch (e) { toast(e?.message || friendlyError(e), { tone: 'error', ms: 5000 }); }
+      finally { switching = false; }
+    })();
     return true;
   }
 
@@ -778,6 +907,7 @@ export function mountSpace(root) {
   }
 
   return {
+    focus: (kind) => { try { sessionStorage.removeItem('architect.focus'); } catch {} focusKind(kind); },
     destroy() {
       destroyed = true;
       bpWin?.close(); bpWin = null;

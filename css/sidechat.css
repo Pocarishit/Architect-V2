@@ -240,3 +240,23 @@
   .sc-clock { animation: none; }
 }
 @media print { .sc-launch, .sc-panel { display: none !important; } }
+
+/* Cleaner composer: no scrollbar arrow buttons on the chat boxes (Side Chat, Architect chats, Variables) */
+.sc-input, .ch-input { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.sc-input::-webkit-scrollbar, .ch-input::-webkit-scrollbar { width: 6px; }
+.sc-input::-webkit-scrollbar-button, .ch-input::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+.sc-input::-webkit-scrollbar-thumb, .ch-input::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 6px; }
+.sc-input::-webkit-scrollbar-track, .ch-input::-webkit-scrollbar-track { background: transparent; }
+.sc-compose .sc-input { padding-right: 16px; }
+
+/* Someone else's message (Variables notes are shared): grey, on the left, with their name */
+.sc-msg.is-theirs { align-self: flex-start; justify-content: flex-start; }
+.sc-msg.is-theirs .sc-bubble { background: var(--s3); color: var(--fg); border-radius: 16px 16px 16px 6px; }
+.sc-msg.is-theirs.is-cont .sc-bubble { border-top-left-radius: 8px; border-top-right-radius: 16px; }
+.sc-who { font-family: var(--f-mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; opacity: .6; margin-bottom: -2px; }
+
+/* Variables notes, drawn with Side Chat's code */
+.vr-chat.is-sc .vr-msgs { gap: 0; padding: 10px 18px 12px; }
+.vr-chat.is-sc .vr-compose { gap: 8px; padding: 10px 14px 14px; border-top: 1px solid var(--line); }
+.vr-chat.is-sc .sc-input { max-height: 160px; background: var(--s2); }
+.vr-chat.is-sc .sc-plus.is-busy { cursor: progress; }

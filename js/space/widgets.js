@@ -85,7 +85,6 @@ const KINDS = {
       embedded: true, owner: el.owner, exclude: el.detached || [], daySlot: w.slot,
       onDetach: (colId, at) => w.host.detach(el.id, colId, at),
     });
-    w.tools.append(h('button', { class: 'wg-btn', type: 'button', title: 'Open full page', 'aria-label': 'Open full page', onclick: () => go('paths') }, icon('external', 14)));
     if (el.owner !== w.me?.id) w.tools.replaceChildren();
     else w.host.register?.(el.id, { addColumn: ctl.addColumn });
     return { update: (n) => ctl.setExclude(n.detached || []), destroy: () => { w.host.register?.(el.id, null); ctl.destroy(); } };
@@ -133,7 +132,6 @@ const KINDS = {
         return !ed || ed.visibleEls().find((e) => e.type === 'widget' && e.kind === 'tickets')?.id === el.id;
       },
     });
-    w.tools.append(h('button', { class: 'wg-btn', type: 'button', title: 'Open full page', 'aria-label': 'Open full page', onclick: () => go('parasites') }, icon('external', 14)));
     return { update: (n) => ctl.setExclude(n.detached || []), destroy: () => ctl.destroy() };
   },
 

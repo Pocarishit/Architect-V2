@@ -121,6 +121,14 @@ export class Editor {
     L(this.vp, 'pointerup', (e) => this.onUp(e));
     L(this.vp, 'pointercancel', (e) => this.onUp(e, true));
     L(this.vp, 'lostpointercapture', (e) => { if (this.g && this.g.pointerId === e.pointerId) this.onUp(e, true); });
+    // Objects that swallow pointer events (widgets, open media, panels) must never strand a finger:
+    // the canvas follows its own pointers at the window level, so a gesture always ends cleanly.
+    const mine = (e) => this.pointers.has(e.pointerId) || this.g?.pointerId === e.pointerId;
+    L(window, 'pointermove', (e) => { if (mine(e)) this.onMove(e); }, true);
+    L(window, 'pointerup', (e) => { if (mine(e)) this.onUp(e); }, true);
+    L(window, 'pointercancel', (e) => { if (mine(e)) this.onUp(e, true); }, true);
+    L(window, 'blur', () => this.resetPointers());
+    L(document, 'visibilitychange', () => { if (document.hidden) this.resetPointers(); });
     L(this.vp, 'dblclick', (e) => this.onDblClick(e));
     // Widgets (Ticket board, Paths…) drag their own things; the canvas leaves them alone.
     const inWidget = (e) => (e.target instanceof Element && e.target.closest('.wg-body'));
@@ -436,33 +444,34 @@ export class Editor {
     const b = unionRects(rects);
     if (!b) return null;
     const world = h('div', { class: 'bp-world', style: { transform: `translate(${pad - b.x}px, ${pad - b.y}px)` } });
-    const frames = this.frameLayer.cloneNode(true);
-    const els = this.elLayer.cloneNode(true);
+    // Draw every object fresh from the board as it is right now. Copying the live layers picked up
+    // stale or half-drawn nodes (the white-page exports); only widgets, which can't redraw off-canvas, are copied.
+    const frames = h('div', { class: 'bp-layer' });
+    const els = h('div', { class: 'bp-layer' });
     world.append(frames, els);
-    // Objects the speed-ups skipped drawing (off screen, mid-pan) must still land on paper:
-    // un-hide every clone, and rebuild any object that isn't in the DOM at all right now.
-    const cloned = new Set();
-    world.querySelectorAll('[data-eid]').forEach((n) => {
-      cloned.add(n.dataset.eid);
-      n.removeAttribute('hidden');
-      for (const prop of ['display', 'visibility', 'content-visibility', 'opacity']) n.style.removeProperty(prop);
-    });
     const ctx = { ...this.ctx(), mountWidget: null, editingId: null, activeId: null };
     for (const el of this.els) {
-      if (cloned.has(el.id) || this.isHidden(el) || el.type === 'widget') continue;
-      try {
-        const n = createNode(el);
-        updateNode(n, el, ctx);
-        (el.type === 'frame' ? frames : els).append(n);
-      } catch {}
+      if (this.isHidden(el)) continue;
+      let n = null;
+      if (el.type === 'widget' || el.type === 'pdf') { // PDF pages are drawn asynchronously: keep the drawn page
+        const live = this.nodes.get(el.id);
+        if (!live) continue;
+        n = live.cloneNode(true);
+      } else {
+        try { n = createNode(el); updateNode(n, el, ctx); } catch { n = this.nodes.get(el.id)?.cloneNode(true) || null; }
+      }
+      if (!n) continue;
+      n.removeAttribute('hidden');
+      for (const prop of ['display', 'visibility', 'content-visibility', 'opacity']) n.style.removeProperty(prop);
+      (el.type === 'frame' ? frames : els).append(n);
     }
     world.querySelectorAll('.is-selected, .is-live').forEach((n) => n.classList.remove('is-selected', 'is-live'));
     world.querySelectorAll('[contenteditable]').forEach((n) => n.removeAttribute('contenteditable'));
     world.querySelectorAll('.el-shield').forEach((n) => n.remove());
     // Videos: freeze the current frame when the browser allows it; embeds: a labelled card.
-    const liveVideos = [...this.elLayer.querySelectorAll('video')];
-    world.querySelectorAll('video').forEach((v, i) => {
-      const src = liveVideos[i];
+    world.querySelectorAll('video').forEach((v) => {
+      const eid = v.closest('[data-eid]')?.dataset.eid;
+      const src = eid ? this.nodes.get(eid)?.querySelector('video') : null;
       let still = null;
       try {
         if (src && src.readyState >= 2 && src.videoWidth) {
@@ -791,9 +800,23 @@ export class Editor {
     this.inWidget = !!e.target.closest('.wg-body');
     this.setActiveWidget(this.inWidget ? e.target.closest('.el-widget') : null);
     if (this.inWidget && this.sel.size) this.clearSel();
+    // Phones: a finger on a locked widget (a chat, a Path, any tile) pans the canvas once it moves;
+    // a plain tap still reaches the widget.
+    if (e.pointerType === 'touch' && e.button === 0 && this.tool === 'select' && this.lockedWidgetAt(e.target)) {
+      if (e.isPrimary && this.pointers.size) this.resetPointers();
+      this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      this.trackTap(e);
+      if (this.pointers.size === 2) { this.startPinch(); return; }
+      if (this.pointers.size > 1) return;
+      this.beginPan({ cx: e.clientX, cy: e.clientY, pointerId: e.pointerId, lazy: true });
+      return;
+    }
     if (e.target.closest('[data-noptr]')) return;
     if (e.target.closest('[contenteditable="true"]')) return;
     if (e.target.closest('.is-live .el-media')) return;
+    // The first finger down means no other finger is on the glass: forget any that never said goodbye
+    // (their up/cancel went to something else). Stale fingers were what made a one-finger pan zoom or stick.
+    if (e.pointerType === 'touch' && e.isPrimary && this.pointers.size) this.resetPointers();
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (e.pointerType === 'touch') this.trackTap(e);
     if (this.pointers.size === 2 && e.pointerType === 'touch') { this.startPinch(); return; }
@@ -839,6 +862,9 @@ export class Editor {
       return;
     }
     if (el) {
+      // Phones: a finger that lands on a locked object pans the canvas. Locked stays locked —
+      // it isn't selected, dragged or edited, it just doesn't block getting around.
+      if (start.touch && (el.locked || (el.group && this.els.some((x) => x.group === el.group && x.locked)))) { this.beginPan(start); return; }
       start.el = el;
       start.wasSelected = this.sel.size === 1 && this.sel.has(el.id);
       if (start.shift) {
@@ -914,7 +940,18 @@ export class Editor {
     this.endTap(e, cancelled);
     const g = this.g;
     if (!g) return;
-    if (g.type === 'pinch') { if (this.pointers.size < 2) { this.g = null; this.emit('gesture', false); } return; }
+    if (g.type === 'pinch') {
+      if (this.pointers.size < 2) {
+        this.g = null;
+        this.emit('gesture', false);
+        // One finger left on the glass: it carries on panning from where it is.
+        if (this.pointers.size === 1 && !cancelled) {
+          const [[id, pt]] = [...this.pointers.entries()];
+          this.beginPan({ cx: pt.x, cy: pt.y, pointerId: id });
+        }
+      }
+      return;
+    }
     if (g.pointerId !== e.pointerId) return;
     this.g = null;
     try { this.vp.releasePointerCapture(e.pointerId); } catch {}
@@ -930,6 +967,30 @@ export class Editor {
     this.emit('gesture', true);
   }
 
+  // The locked widget under this element, if any (its header, body or controls).
+  lockedWidgetAt(target) {
+    const n = target.closest?.('.el-widget[data-eid]');
+    if (!n || target.closest('input, textarea, select, [contenteditable="true"]')) return null;
+    const el = this.byId.get(n.dataset.eid);
+    return el?.locked ? el : null;
+  }
+
+  // Drop every tracked pointer and end whatever gesture they were driving.
+  resetPointers() {
+    const g = this.g;
+    for (const id of this.pointers.keys()) { try { this.vp.releasePointerCapture(id); } catch {} }
+    this.pointers.clear();
+    this._tap = null;
+    this.cancelLongPress();
+    if (!g) return;
+    this.g = null;
+    this.vp.classList.remove('is-panning');
+    document.body.classList.remove('bp-busy');
+    if (g.type !== 'pinch') { try { g.onUp?.(this.lastPointer || { x: 0, y: 0 }, {}, true); } catch {} }
+    this.renderOverlay();
+    this.emit('gesture', false);
+  }
+
   beginPan(start) {
     const cam0 = { ...this.cam };
     this.vp.classList.add('is-panning');
@@ -937,7 +998,11 @@ export class Editor {
     const g = {
       type: 'pan', pointerId: start.pointerId, right: !!start.right, panned: false, pendingMenu: null,
       onMove: (p, e) => {
-        if (!g.panned && Math.hypot(e.clientX - start.cx, e.clientY - start.cy) > 4) g.panned = true;
+        if (!g.panned && Math.hypot(e.clientX - start.cx, e.clientY - start.cy) > (start.lazy ? 8 : 4)) {
+          g.panned = true;
+          if (start.lazy) { try { this.vp.setPointerCapture(start.pointerId); } catch {} } // from here on it's a pan, not a tap
+        }
+        if (start.lazy && !g.panned) return;
         this.cam = { ...cam0, x: cam0.x + (e.clientX - start.cx), y: cam0.y + (e.clientY - start.cy) };
         this.applyCamera();
       },

@@ -157,12 +157,51 @@ function smiley() {
 }
 const clockSvg = () => { const s = icon('clock', 11); s.classList.add('sc-clock'); return s; };
 
+/** One chat message in the Side Chat style. Shared by Side Chat and Variables notes.
+ *  m: { id, text, files, at, pinned, edited, status, error, reply }. theirs → left-hand grey bubble with a name. */
+export function bubbleRow(m, { cont = false, theirs = false, who = '', onAsset, onQuote, onMenu, onDbl } = {}) {
+  const files = (m.files || []).map((f) => {
+    if (f.kind === 'anytype') return h('span', { class: 'sc-file is-any' }, icon('paperclip', 13), f.name || 'Attachment');
+    const url = f.path ? urlOf(f.path, () => onAsset?.()) : null;
+    return h('button', { type: 'button', class: ['sc-file', `is-${f.kind}`], 'aria-label': f.kind === 'video' ? 'Play video' : 'View photo', onclick: () => lightbox(f) },
+      f.kind === 'photo' ? (url ? h('img', { src: url, alt: '', loading: 'lazy' }) : h('span', { class: 'sc-file-ph' })) : h('span', { class: 'sc-file-vid' }, icon('play', 16), f.name || 'Video'));
+  });
+  const meta = h('span', { class: 'sc-meta', title: new Date(m.at).toLocaleString() },
+    m.pinned ? icon('pin', 10) : null,
+    m.edited ? h('span', {}, 'edited') : null,
+    m.status === 'failed' ? h('span', { class: 'sc-fail', title: m.error || 'Not sent' }, '!') : m.status === 'sending' ? clockSvg() : null,
+    h('time', {}, hhmm(m.at)));
+  return h('div', {
+    class: ['sc-msg', cont && 'is-cont', theirs && 'is-theirs', m.status && `is-${m.status}`, m.files?.length && !m.text && 'is-media'], 'data-id': m.id,
+    style: { '--meta-w': `${40 + (m.pinned ? 14 : 0) + (m.edited ? 42 : 0) + (m.status ? 16 : 0)}px` },
+    oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); onMenu?.(e); },
+    ondblclick: (e) => onDbl?.(e),
+  }, h('div', { class: 'sc-bubble' },
+    theirs && who && !cont ? h('span', { class: 'sc-who' }, who) : null,
+    m.reply ? h('button', { class: 'sc-quote', type: 'button', onclick: () => onQuote?.(m.reply.id) }, h('b', {}, m.reply.n > 1 ? `Reply to ${m.reply.n} messages` : 'Reply'), h('span', {}, m.reply.text)) : null,
+    ...files,
+    m.text ? h('span', { class: 'sc-text' }, m.text) : null,
+    meta));
+}
+/** A day separator in the Side Chat style. */
+export const dayRow = (t) => { const d = dayLabel(t); return h('div', { class: 'sc-day', 'data-day': d }, h('span', {}, d)); };
+export { dayLabel as chatDayLabel, GROUP_MS as CHAT_GROUP_MS };
+
 /* ============================================================ */
 export function mountSideChat({ me }) {
   const uidKey = me?.id || 'anon';
   const K = { geo: 'architect.sidechat.geo', launch: 'architect.sidechat.launch', open: `architect.sidechat.open.${uidKey}`, active: `architect.sidechat.active.${uidKey}` };
   const acct = accountStore(me || {});
-  const anyCfg = () => store.get(ANY_KEY(uidKey), null);
+  // The Anytype connection lives on this device. It's kept under your account key and a device-wide
+  // copy, so a refresh (or a session that loads before your account does) still finds it.
+  const ANY_DEVICE = 'architect.sidechat.anytype';
+  const anyCfg = () => store.get(ANY_KEY(uidKey), null) || store.get(ANY_DEVICE, null) || store.get(ANY_KEY('anon'), null);
+  const saveAny = (c) => {
+    store.set(ANY_KEY(uidKey), c);
+    store.set(ANY_DEVICE, c);
+    try { navigator.storage?.persist?.(); } catch {} // ask the phone not to clear it
+  };
+  { const c = anyCfg(); if (c && !store.get(ANY_KEY(uidKey), null)) saveAny(c); }
   let anySrc = null;
   const src = () => {
     const c = anyCfg();
@@ -211,7 +250,7 @@ export function mountSideChat({ me }) {
   const input = h('textarea', { class: 'sc-input', rows: 1, maxlength: MAX_TEXT, placeholder: 'Enter your message', 'aria-label': 'Message' });
   const plus = h('button', { class: 'sc-plus', type: 'button', 'aria-label': 'Add a photo or video', title: 'Add a photo or video', onclick: async () => { const fs = await pickMedia({}); if (fs.length) sendFiles(fs); } }, icon('plus', 18));
   const sendBtn = h('button', { class: 'sc-send', type: 'button', 'aria-label': 'Send', title: 'Send (Enter)', onclick: () => submit() }, icon('send', 15));
-  const compose = h('div', { class: 'sc-compose' }, plus, input, sendBtn);
+  const compose = h('div', { class: 'sc-compose' }, plus, input); // Enter sends — no send button
   const body = h('div', { class: 'sc-body' }, pinbar, list, chip, jump);
   const handles = ['w', 'e', 'sw', 'se'].map((d) => h('span', { class: `sc-rs sc-rs-${d}`, 'data-dir': d, 'aria-hidden': 'true' }));
   const panel = h('section', { class: 'sc-panel', role: 'dialog', 'aria-label': 'Side chat', 'data-noptr': '', hidden: true },
@@ -314,9 +353,13 @@ export function mountSideChat({ me }) {
       const lr = launch.getBoundingClientRect(), pr = panel.getBoundingClientRect();
       panel.style.setProperty('--ox', `${lr.left + lr.width / 2 - pr.left}px`);
       panel.style.setProperty('--oy', `${lr.top + lr.height / 2 - pr.top}px`);
+      panel.classList.remove('is-in');
       panel.hidden = false;
       launch.classList.add('is-away');
-      requestAnimationFrame(() => panel.classList.add('is-in'));
+      // Start from the launcher on every screen: commit the closed state first, then animate open
+      // (without this, desktop browsers merged both steps and the panel just appeared).
+      void panel.offsetWidth;
+      requestAnimationFrame(() => requestAnimationFrame(() => { if (open) panel.classList.add('is-in'); }));
       start();
       if (!matchMedia('(hover: none)').matches) setTimeout(() => input.focus({ preventScroll: true }), 60);
     } else {
@@ -458,7 +501,7 @@ export function mountSideChat({ me }) {
   /* ---------- Anytype connection ---------- */
   function useAnytype(on) {
     const c = anyCfg() || {};
-    store.set(ANY_KEY(uidKey), { ...c, on });
+    saveAny({ ...c, on });
     anySrc = null;
     cache.clear(); errors.clear(); pending.clear(); lastSig = '';
     undo.length = 0; redo.length = 0;
@@ -492,7 +535,7 @@ export function mountSideChat({ me }) {
       }],
     });
     if (!ok) return;
-    store.set(ANY_KEY(uidKey), { on: true, base: baseI.value.trim() || 'http://127.0.0.1:31009', key: keyI.value.trim(), space: spaceI.value.trim(), version: verI.value.trim() || '2025-11-08' });
+    saveAny({ on: true, base: baseI.value.trim() || 'http://127.0.0.1:31009', key: keyI.value.trim(), space: spaceI.value.trim(), version: verI.value.trim() || '2025-11-08' });
     for (const [x, inp] of links) {
       const v = inp.value.trim() || null;
       if (v !== (x.anytype_id || null)) { x.anytype_id = v; acct.patchChat(x.id, { anytype_id: v }).catch(() => {}); }
@@ -571,27 +614,13 @@ export function mountSideChat({ me }) {
     return h('p', { class: 'sc-empty' }, `Nothing in ${chat.name} yet. Write the first line.`);
   }
   function row(m, cont) {
-    const files = (m.files || []).map((f) => {
-      if (f.kind === 'anytype') return h('span', { class: 'sc-file is-any' }, icon('paperclip', 13), f.name || 'Attachment');
-      const url = f.path ? urlOf(f.path, () => { lastSig = ''; paint(); }) : null;
-      return h('button', { type: 'button', class: ['sc-file', `is-${f.kind}`], 'aria-label': f.kind === 'video' ? 'Play video' : 'View photo', onclick: () => lightbox(f) },
-        f.kind === 'photo' ? (url ? h('img', { src: url, alt: '', loading: 'lazy' }) : h('span', { class: 'sc-file-ph' })) : h('span', { class: 'sc-file-vid' }, icon('play', 16), f.name || 'Video'));
+    return bubbleRow(m, {
+      cont,
+      onAsset: () => { lastSig = ''; paint(); },
+      onQuote: (id) => reveal(id),
+      onMenu: (e) => msgMenu(e, m),
+      onDbl: (e) => { if (!e.target.closest('.sc-text') && src().canReply && !m.status) beginReply([m]); },
     });
-    const meta = h('span', { class: 'sc-meta', title: new Date(m.at).toLocaleString() },
-      m.pinned ? icon('pin', 10) : null,
-      m.edited ? h('span', {}, 'edited') : null,
-      m.status === 'failed' ? h('span', { class: 'sc-fail', title: m.error || 'Not sent' }, '!') : m.status === 'sending' ? clockSvg() : null,
-      h('time', {}, hhmm(m.at)));
-    return h('div', {
-      class: ['sc-msg', cont && 'is-cont', m.status && `is-${m.status}`, m.files?.length && !m.text && 'is-media'], 'data-id': m.id,
-      style: { '--meta-w': `${40 + (m.pinned ? 14 : 0) + (m.edited ? 42 : 0) + (m.status ? 16 : 0)}px` },
-      oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); msgMenu(e, m); },
-      ondblclick: (e) => { if (!e.target.closest('.sc-text') && src().canReply && !m.status) beginReply([m]); },
-    }, h('div', { class: 'sc-bubble' },
-      m.reply ? h('button', { class: 'sc-quote', type: 'button', onclick: () => reveal(m.reply.id) }, h('b', {}, m.reply.n > 1 ? `Reply to ${m.reply.n} messages` : 'Reply'), h('span', {}, m.reply.text)) : null,
-      ...files,
-      m.text ? h('span', { class: 'sc-text' }, m.text) : null,
-      meta));
   }
   function reveal(id) {
     const n = list.querySelector(`.sc-msg[data-id="${CSS.escape(id)}"]`);
@@ -908,7 +937,7 @@ export function mountSideChat({ me }) {
 
   // Warm up quietly so the first open is instant; come back open if it was open.
   const idle = window.requestIdleCallback || ((f) => setTimeout(f, 1500));
-  idle(() => { ensureChats().then(() => { if (store.get(K.open, false) && !sheet()) setOpen(true); else if (active) load(active, true); }); }, { timeout: 4000 });
+  idle(() => { ensureChats().then(() => { if (store.get(K.open, false)) setOpen(true); else if (active) load(active, true); }); }, { timeout: 4000 });
 
   return {
     open: () => setOpen(true),

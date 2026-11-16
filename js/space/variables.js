@@ -8,6 +8,7 @@ import { menu, toast, dialog, confirmDialog, promptDialog } from '../core/ui.js'
 import { uid, store } from '../core/util.js';
 import { api, friendlyError } from '../data/api.js';
 import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia } from './media.js';
+import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
 
 export const DEFAULT_SECTIONS = ['School', 'Family', 'Business', 'Friends'];
 export const defaultVariables = () => ({ sections: DEFAULT_SECTIONS.map((name) => ({ id: uid(), name })), entries: [] });
@@ -424,18 +425,19 @@ export function mountVariables(root, el0, w) {
   /* ---------------- an entry's notes ---------------- */
   function msgRows(x) {
     const rows = [];
-    let lastDay = '';
+    let lastDay = '', prev = null;
     for (const m of x.notes || []) {
-      const dl = dayLabel(m.ts);
-      if (dl !== lastDay) { rows.push(h('div', { class: 'vr-day' }, dl)); lastDay = dl; }
-      rows.push(bubble(x, m));
+      const dl = chatDayLabel(m.ts);
+      if (dl !== lastDay) { rows.push(dayRow(m.ts)); lastDay = dl; prev = null; }
+      rows.push(bubble(x, m, prev && prev.by === m.by && m.ts - prev.ts < CHAT_GROUP_MS));
+      prev = m;
     }
-    return rows.length ? rows : [h('p', { class: 'vr-hint is-chat' }, `Notes on ${x.name}. Reflect, keep track, see how things change.`)];
+    return rows.length ? rows : [h('p', { class: 'sc-empty' }, `Notes on ${x.name}. Reflect, keep track, see how things change.`)];
   }
 
   function chat(x) {
     const ta = h('textarea', {
-      class: 'vr-input', rows: 1, placeholder: 'Enter your message', maxlength: 4000, 'aria-label': 'Write a note', value: draft,
+      class: 'vr-input sc-input', rows: 1, placeholder: 'Enter your message', maxlength: 4000, 'aria-label': 'Write a note', value: draft,
       oninput: (e) => { draft = e.target.value; grow(e.target); },
       onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(x.id, e.target); } },
       onfocus: () => { busy = true; },
@@ -447,10 +449,10 @@ export function mountVariables(root, el0, w) {
       h('span', { class: 'vr-chat-name' }, x.name),
       h('span', { class: 'vr-chat-sec' }, pathOf(x.section)),
       h('button', { class: 'vr-card-more', type: 'button', 'aria-label': 'Options', onclick: (e) => entryMenu(e.currentTarget, x) }, icon('more', 14)));
-    const wrap = h('div', { class: 'vr-chat' }, head,
-      h('div', { class: 'vr-msgs' }, msgRows(x)),
-      h('div', { class: 'vr-compose' },
-        h('button', { class: ['vr-plus', sending && 'is-busy'], type: 'button', 'aria-label': 'Add a photo', disabled: sending, onclick: async () => { const fs = await pickMedia({ accept: 'image/*,video/*' }); if (fs.length) sendFiles(x.id, fs); } },
+    const wrap = h('div', { class: 'vr-chat is-sc' }, head,
+      h('div', { class: 'vr-msgs sc-list', role: 'log' }, msgRows(x)),
+      h('div', { class: 'vr-compose sc-compose' },
+        h('button', { class: ['sc-plus', sending && 'is-busy'], type: 'button', 'aria-label': 'Add a photo', disabled: sending, onclick: async () => { const fs = await pickMedia({ accept: 'image/*,video/*' }); if (fs.length) sendFiles(x.id, fs); } },
           sending ? h('span', { class: 'dots-loader sm' }, h('i'), h('i'), h('i')) : icon('plus', 18)),
         ta));
     wrap.addEventListener('paste', (e) => { const fs = mediaFiles(e.clipboardData); if (fs.length) { e.preventDefault(); sendFiles(x.id, fs); } });
@@ -461,21 +463,13 @@ export function mountVariables(root, el0, w) {
     return wrap;
   }
 
-  function bubble(x, m) {
+  function bubble(x, m, cont = false) {
     const mine = !m.by || m.by === me?.id;
-    const files = (m.files || []).map((f) => {
-      const url = urlOf(f.path, render);
-      return h('button', { type: 'button', class: ['vr-file', `is-${f.kind}`], onclick: () => lightbox(f), 'aria-label': f.kind === 'video' ? 'Play video' : 'View photo' },
-        f.kind === 'photo' ? (url ? h('img', { src: url, alt: '', loading: 'lazy' }) : h('span', { class: 'vr-file-ph' })) : h('span', { class: 'vr-file-vid' }, icon('play', 18), f.name || 'video'));
+    return bubbleRow({ id: m.id, text: m.text, files: m.files, at: m.ts, edited: m.edited }, {
+      cont, theirs: !mine, who: m.name || '',
+      onAsset: render,
+      onMenu: (e) => msgMenu({ x: e.clientX, y: e.clientY }, x, m),
     });
-    return h('div', {
-      class: ['vr-msg', mine ? 'is-mine' : 'is-theirs'],
-      oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); msgMenu({ x: e.clientX, y: e.clientY }, x, m); },
-    },
-      !mine && m.name ? h('span', { class: 'vr-msg-who' }, m.name) : null,
-      ...files,
-      m.text ? h('span', { class: 'vr-msg-text' }, m.text) : null,
-      h('span', { class: 'vr-msg-time', title: new Date(m.ts).toLocaleString() }, m.edited ? `edited · ${hhmm(m.ts)}` : hhmm(m.ts)));
   }
 
   function msgMenu(anchor, x, m) {
@@ -510,7 +504,7 @@ export function mountVariables(root, el0, w) {
     render();
   }
 
-  function grow(ta) { ta.style.height = 'auto'; ta.style.height = `${Math.min(140, ta.scrollHeight)}px`; }
+  function grow(ta) { ta.style.height = 'auto'; ta.style.height = `${Math.min(160, ta.scrollHeight)}px`; }
 
   render();
 

@@ -43,7 +43,7 @@ const strip = (t) => String(t || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' 
 export function labelOf(el) {
   if (!el) return 'Deleted object';
   if (el.type === 'widget') {
-    const names = { path: `${el.ownerName || ''} Path`.trim(), tracker: 'Tracker', tickets: 'Ticket board', blueprints: 'Blueprints', portal: el.name || 'Blueprint', custom: el.title || 'Widget', ticket: 'Ticket', column: 'Path column', ticketcol: 'Ticket column', radio: 'Radio', chat: 'Chat', tts: 'Voice chat' };
+    const names = { path: `${el.ownerName || ''} Path`.trim(), fleeting: 'Fleeting Ideas', variables: 'Variables', tracker: 'Tracker', tickets: 'Ticket board', blueprints: 'Blueprints', portal: el.name || 'Blueprint', custom: el.title || 'Widget', ticket: 'Ticket', column: 'Path column', ticketcol: 'Ticket column', radio: 'Radio', chat: 'Chat', tts: 'Voice chat' };
     return names[el.kind] || 'Widget';
   }
   if (el.type === 'frame') return el.title || 'Frame';

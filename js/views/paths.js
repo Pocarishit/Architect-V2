@@ -1252,6 +1252,20 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   if (embedded) window.addEventListener('architect:paths-changed', onChanged);
   const livePoll = embedded ? setInterval(() => { if (!document.hidden && !loading) reloadSoon(); }, readOnly ? 15_000 : 30_000) : 0;
 
+  // An idea dragged out of Fleeting Ideas and dropped on one of your columns becomes a task there.
+  const onDropTask = (e) => {
+    const d = e.detail;
+    if (readOnly || !d || d.handled || !d.text) return;
+    const target = document.elementFromPoint(d.x, d.y)?.closest?.('[data-col]');
+    if (!target || !el.contains(target)) return;
+    const col = columns.find((c) => c.id === target.dataset.col);
+    if (!col) return;
+    d.handled = true;
+    d.column = col.title;
+    addTask(col.id, d.text);
+  };
+  window.addEventListener('architect:drop-task', onDropTask);
+
   render();
   load();
 
@@ -1273,6 +1287,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     destroy() {
       clearInterval(livePoll); clearTimeout(reloadT);
       window.removeEventListener('architect:paths-changed', onChanged);
+      window.removeEventListener('architect:drop-task', onDropTask);
       document.removeEventListener('pointerdown', onActive, true);
       mq.removeEventListener?.('change', onMq);
       clearInterval(nowTimer);

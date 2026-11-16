@@ -11,6 +11,7 @@ import { mountBoard } from '../board/board.js';
 import { makePreview } from '../board/preview.js';
 import { rectOf, unionRects } from '../board/geometry.js';
 import { createWidgetHost, WIDGETS, editCustom } from '../space/widgets.js';
+import { defaultVariables } from '../space/variables.js';
 import { themeItems, changePassword } from './shell.js';
 import { openSettings } from './settings.js';
 import { openBoardWindow } from '../space/window.js';
@@ -150,14 +151,34 @@ export function mountSpace(root) {
     return id;
   }
 
-  // First layout: your Path on top, Tracker / Ticket board / Blueprints below it.
+  // First layout: your Path on top, Fleeting Ideas / Variables / Blueprints below it.
   function starter() {
     return [
       widgetEl('path', { x: -730, y: -420, owner: me.id, ownerName: me.username, detached: [] }),
-      widgetEl('tracker', { x: -730, y: 160, goal: 'Rona’s Apartment', start: mondayKey(), weeks: {} }),
-      widgetEl('tickets', { x: -230, y: 160 }),
-      widgetEl('blueprints', { x: 790, y: 160 }),
+      widgetEl('fleeting', { x: -730, y: 160, ...fleetingData() }),
+      widgetEl('variables', { x: 90, y: 160, ...defaultVariables() }),
+      widgetEl('blueprints', { x: 610, y: 160 }),
     ];
+  }
+  const fleetingData = (old) => ({ ideas: [], story: {}, weekly: { goal: old?.goal || 'Rona’s Apartment', start: old?.start || mondayKey(), weeks: old?.weeks || {}, tray: [] } });
+
+  // Nov 16 update: the Ticket board and Tracker & Weekly became tabs of Fleeting Ideas.
+  // Old objects come off the canvas once; the weekly plan carries over. Ticket data stays in the database.
+  function migrate(ed) {
+    const OLD = ['tickets', 'tracker', 'ticketcol', 'ticket'];
+    const old = ed.els.filter((e) => e.type === 'widget' && OLD.includes(e.kind));
+    if (!old.length) return;
+    const tracker = old.find((e) => e.kind === 'tracker');
+    const spot = old.find((e) => e.kind === 'tickets') || tracker || old[0];
+    const next = ed.els.filter((e) => !old.includes(e));
+    const add = [];
+    if (!next.some((e) => e.type === 'widget' && e.kind === 'fleeting')) add.push(widgetEl('fleeting', { x: spot.x, y: spot.y, ...fleetingData(tracker) }));
+    if (!next.some((e) => e.type === 'widget' && e.kind === 'variables')) {
+      const f = add[0] || spot;
+      add.push(widgetEl('variables', { x: f.x + (WIDGETS.fleeting.w) + 60, y: f.y, ...defaultVariables() }));
+    }
+    ed.setEls([...next, ...add], { commit: false });
+    toast('Ticket board and Tracker are now Fleeting Ideas.', { ms: 4000 });
   }
 
   function widgetEl(kind, extra = {}) {
@@ -178,6 +199,7 @@ export function mountSpace(root) {
     if (mode === m) t = tools;
     else ed.surface = 'parked'; // you tabbed away while it was loading
     tools.page.classList.toggle('show-chrome', !!getPref('spaceChrome', false));
+    migrate(ed);
     // Everyone gets their own Path on the shared canvas.
     if (!ed.els.some((e) => e.type === 'widget' && e.kind === 'path' && e.owner === me.id)) {
       const rc = ed.els.length ? unionRects(ed.els.map((e) => rectOf(e, ed.byId))) : { x: 0, y: 0, w: 0, h: 0 };
@@ -330,8 +352,8 @@ export function mountSpace(root) {
     const dock = h('nav', { class: 'space-dock', 'aria-label': 'Space' },
       item('more', 'Menu', (b) => { const r = b.getBoundingClientRect(); menu({ x: r.left, y: r.top - 8 }, spaceItems(ed.viewCenter()), { side: 'top' }); }),
       item('toPaths', 'Path', () => { if (small()) go('paths'); else if (!fly(widget('path', (e) => e.owner === me.id))) addWidget('path'); }),
-      item('ticket', 'Tickets', () => { if (small()) go('parasites'); else if (!fly(widget('tickets'))) addWidget('tickets'); }),
-      item('calendar', 'Tracker', () => { if (!fly(widget('tracker'))) addWidget('tracker'); }),
+      item('spark', 'Ideas', () => { if (!fly(widget('fleeting'))) addWidget('fleeting'); }),
+      item('users', 'Variables', () => { if (!fly(widget('variables'))) addWidget('variables'); }),
       item('frame', 'Blueprints', () => { if (small()) go('blueprint'); else if (!fly(widget('blueprints'))) addWidget('blueprints'); }),
       item('plus', 'Add', (b) => { const r = b.getBoundingClientRect(); const all = spaceItems(ed.viewCenter()); menu({ x: r.right, y: r.top - 8 }, all.slice(0, all.indexOf('-')), { side: 'top', align: 'end' }); }));
     page.append(dock);
@@ -390,7 +412,8 @@ export function mountSpace(root) {
       return;
     }
     const extra = kind === 'path' ? { owner: me.id, ownerName: me.username, detached: [] }
-      : kind === 'tracker' ? { goal: 'Rona’s Apartment', start: mondayKey(), weeks: {} }
+      : kind === 'fleeting' ? fleetingData()
+      : kind === 'variables' ? defaultVariables()
         : kind === 'custom' ? { title: 'Widget', html: '<h3 style="margin:0 0 6px;font-family:Space Mono,monospace">Hello</h3>\n<p>Edit me from the widget’s ✎ button.</p>' } : {};
     const el = widgetEl(kind, extra);
     const p = at || ed.viewCenter();
@@ -543,7 +566,7 @@ export function mountSpace(root) {
 
   async function widgetPicker(at) {
     const choose = (kind) => { closeFloating(); addWidget(kind, at); };
-    const opts = ['path', 'tracker', 'tickets', 'blueprints', 'chat', 'tts', 'radio', 'custom'];
+    const opts = ['path', 'fleeting', 'variables', 'blueprints', 'chat', 'tts', 'radio', 'custom'];
     dialog({
       title: 'Add a widget',
       width: 460,

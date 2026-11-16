@@ -13,10 +13,14 @@ import { previewSvg } from '../board/preview.js';
 import { mountTrackerWidget } from './tracker.js';
 import { mountChat } from './chat.js';
 import { mountRadio } from './radio.js';
+import { mountFleeting } from './fleeting.js';
+import { mountVariables } from './variables.js';
 
 export const WIDGETS = {
   path: { label: 'Path', icon: 'toPaths', w: 1490, h: 520 },
   column: { label: 'Path column', icon: 'toPaths', w: 330, h: 520 },
+  fleeting: { label: 'Fleeting Ideas', icon: 'spark', w: 760, h: 620, hint: 'Ideas, Story, Tracker and Weekly in one object' },
+  variables: { label: 'Variables', icon: 'users', w: 460, h: 540, hint: 'The people and commitments that shape your life' },
   tracker: { label: 'Tracker & Weekly', icon: 'calendar', w: 460, h: 690 },
   tickets: { label: 'Ticket board', icon: 'ticket', w: 980, h: 640 },
   ticketcol: { label: 'Ticket column', icon: 'ticket', w: 300, h: 520 },
@@ -93,6 +97,20 @@ const KINDS = {
     const ctl = mountPaths(body, null, { embedded: true, owner: el.owner, only: el.colId, onSnap: mine ? () => w.host.snapBack(el.id) : null });
     if (mine) w.tools.append(h('button', { class: 'wg-btn', type: 'button', title: 'Snap back into Path', 'aria-label': 'Snap back into Path', onclick: () => w.host.snapBack(el.id) }, icon('collapse', 14)));
     return { destroy: () => ctl.destroy() };
+  },
+
+  fleeting(body, el, w) {
+    w.setTitle('FLEETING IDEAS');
+    w.tools.append(h('button', {
+      class: 'wg-btn', type: 'button', title: 'Fill the screen', 'aria-label': 'Fill the screen',
+      onclick: () => { const ed = w.host.editor(); if (ed) { ed.select([el.id]); ed.fitRect(w.current(), { maxZ: 2.5, pad: 24 }); } },
+    }, icon('external', 14)));
+    return mountFleeting(body, el, w);
+  },
+
+  variables(body, el, w) {
+    w.setTitle('VARIABLES');
+    return mountVariables(body, el, w);
   },
 
   tracker(body, el, w) {

@@ -35,7 +35,6 @@ export function mountShell(root, { session }) {
   const SECTIONS = [
     { id: 'space', label: 'Space', icon: 'home', href: '#/' },
     { id: 'paths', label: 'Paths', icon: 'toPaths' },
-    { id: 'parasites', label: 'Tickets', icon: 'ticket' },
     { id: 'blueprint', label: 'Archives', icon: 'frame', also: ['board'] },
   ];
   const links = SECTIONS.map((sec) => h('a', { href: sec.href || `#/${sec.id}` }, sec.label));

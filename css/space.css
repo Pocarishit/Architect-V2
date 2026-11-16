@@ -563,48 +563,65 @@ body.is-space .shell-head { display: none; }
 .dockc-switch.is-on i { transform: translateX(16px); background: var(--bg); }
 
 /* ---------------- Emergency Room (E + R) ---------------- */
+/* Entry: red seeps in from the edges, then drains to pitch dark and only the room's outline keeps the glow. */
 .er { position: fixed; inset: 0; z-index: 870; overflow: hidden; }
-.er-wash { position: absolute; inset: 0; background: #060000; opacity: 0; }
+.er-wash { position: absolute; inset: 0; background: #000; opacity: 0; }
 .er-wash::before { content: ''; position: absolute; inset: 0; box-shadow: inset 0 0 0 0 rgba(170, 10, 14, 0); }
-.er.in .er-wash { animation: er-dim .55s var(--ease) forwards; }
-.er.in .er-wash::before { animation: er-seep 1.15s cubic-bezier(.3, .6, .2, 1) forwards; }
-@keyframes er-dim { to { opacity: .94; } }
+.er.in .er-wash { animation: er-dim .5s var(--ease) forwards; }
+.er.in .er-wash::before { animation: er-seep 1.25s cubic-bezier(.3, .6, .2, 1) forwards; }
+@keyframes er-dim { to { opacity: .985; } }
 @keyframes er-seep {
   0%   { box-shadow: inset 0 0 0 0 rgba(170, 10, 14, 0); }
-  45%  { box-shadow: inset 0 0 24vmax 6vmax rgba(175, 10, 16, .85); }
-  100% { box-shadow: inset 0 0 13vmax 0 rgba(120, 6, 12, .62); }
+  42%  { box-shadow: inset 0 0 24vmax 6vmax rgba(175, 10, 16, .85); }
+  100% { box-shadow: inset 0 0 0 0 rgba(120, 6, 12, 0); }
 }
 .er-room {
-  position: absolute; inset: 9vh 9vw 8vh; display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
-  border: 1.5px solid rgba(255, 255, 255, .5); border-radius: 18px; overflow: hidden; background: var(--canvas);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, .5), 0 0 90px -10px rgba(170, 10, 16, .45), 0 40px 120px -40px rgba(0, 0, 0, .9);
-  opacity: 0; transform: scale(1.045);
+  --er-glow: 0 0 0 1px rgba(0, 0, 0, .6), 0 0 18px 1px rgba(225, 28, 38, .55), 0 0 60px 4px rgba(190, 12, 22, .28);
+  position: absolute; inset: 7vh 7vw; display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  border: 1.5px solid rgba(235, 45, 52, .85); border-radius: 18px; overflow: hidden; background: var(--canvas);
+  box-shadow: var(--er-glow); opacity: 0; transform: scale(1.045);
+  transition: grid-template-columns .22s var(--ease);
 }
-.er.in .er-room { animation: er-lock .46s var(--ease) .36s forwards; }
+.er.in .er-room { animation: er-lock .5s var(--ease) .4s forwards; }
 @keyframes er-lock {
-  0%   { opacity: 0; transform: scale(1.045); border-color: rgba(215, 25, 33, .9); }
-  70%  { opacity: 1; border-color: rgba(215, 25, 33, .7); }
-  100% { opacity: 1; transform: none; border-color: rgba(255, 255, 255, .5); }
+  0%   { opacity: 0; transform: scale(1.045); box-shadow: 0 0 0 1px rgba(0,0,0,.6), 0 0 60px 20px rgba(225, 28, 38, .7); }
+  100% { opacity: 1; transform: none; box-shadow: var(--er-glow); }
 }
 .er.out { opacity: 0; transition: opacity .24s var(--ease); }
-.er.is-still .er-wash { opacity: .94; animation: none !important; }
-.er.is-still .er-wash::before { box-shadow: inset 0 0 13vmax 0 rgba(120, 6, 12, .62); animation: none !important; }
+.er.is-still .er-wash { opacity: .985; animation: none !important; }
+.er.is-still .er-wash::before { animation: none !important; }
 .er.is-still .er-room { opacity: 1; transform: none; animation: none !important; }
 
-.er-chat { position: relative; min-height: 0; display: flex; flex-direction: column; background: var(--s1); border-right: 1px solid var(--line-2); }
+.er-chat { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--s1); border-right: 1px solid var(--line-2); }
 .er-chat.is-drop::after { content: 'Drop to send'; position: absolute; inset: 60px 10px 10px; z-index: 30; border: 1.5px dashed var(--fg-3); border-radius: 14px; display: grid; place-items: center; font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-2); background: color-mix(in srgb, var(--s1) 75%, transparent); pointer-events: none; }
-.er-head { flex: none; display: flex; align-items: center; gap: 8px; height: 54px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); }
+.er-head { flex: none; display: flex; align-items: center; gap: 6px; height: 54px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); }
 .er-name {
   flex: 1; min-width: 0; text-align: left; font-family: var(--f-mono); font-size: 13px; letter-spacing: .08em; color: var(--fg);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; padding: 6px 0;
 }
 .er-drop { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--fg-2); background: var(--s2); border: 1px solid var(--line-2); cursor: pointer; transition: color .12s, border-color .12s; }
-.er-drop:hover, .er-drop[aria-expanded="true"] { color: var(--fg); border-color: var(--fg-3); }
+.er-drop:hover { color: var(--fg); border-color: var(--fg-3); }
+.er-hbtn { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--fg-3); cursor: pointer; transition: color .12s, background .12s; }
+.er-hbtn:hover { color: var(--fg); background: var(--s2); }
+.er-hbtn.is-on { color: var(--bg); background: var(--fg); }
 .er-list { padding: 8px 14px 10px; }
 .er-loading { margin: auto; }
 .er-compose { flex: none; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
 .er-compose .sc-plus.is-busy { cursor: progress; opacity: .6; }
 .er-compose .sc-plus:disabled, .er-compose .sc-input:disabled { opacity: .4; cursor: default; }
+.er-mic[hidden] { display: none; }
+.er-mic.is-live { background: var(--red); color: #fff; animation: er-pulse 1.2s ease-in-out infinite; }
+@keyframes er-pulse { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--red) 25%, transparent); } }
+
+/* Chat hidden: the board takes the room; a thin rail brings the chat back. */
+.er-rail { display: none; }
+.er-room.is-chat-hidden { grid-template-columns: 44px minmax(0, 1fr); }
+.er-room.is-chat-hidden .er-chat > :not(.er-rail) { display: none; }
+.er-room.is-chat-hidden .er-rail {
+  display: flex; flex-direction: column; align-items: center; gap: 14px; flex: 1; padding: 16px 0; color: var(--fg-3); cursor: pointer;
+}
+.er-rail:hover { color: var(--fg); background: var(--s2); }
+.er-rail-name { writing-mode: vertical-rl; font-family: var(--f-mono); font-size: 11px; letter-spacing: .12em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: 70%; }
 
 .er-board { position: relative; min-width: 0; min-height: 0; }
 .er-board .bp-top { justify-content: flex-end; }
@@ -618,21 +635,11 @@ body.is-space .shell-head { display: none; }
 .er-new-input::placeholder { color: var(--fg-4); }
 .er-empty span { font-family: var(--f-mono); font-size: 10px; letter-spacing: .1em; color: var(--fg-4); }
 
-.er-leave {
-  position: absolute; top: calc(9vh - 34px); right: 9vw; display: inline-flex; align-items: center; gap: 10px; height: 26px; padding: 0 4px;
-  font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em; color: rgba(255, 255, 255, .6); cursor: pointer; opacity: 0;
-  transition: color .15s;
-}
-.er-leave span { color: rgba(255, 255, 255, .32); }
-.er-leave:hover { color: #fff; }
-.er.in .er-leave { animation: er-dim-btn .3s var(--ease) .8s forwards; }
-.er.is-still .er-leave { opacity: 1; animation: none; }
-@keyframes er-dim-btn { to { opacity: 1; } }
-
 @media (max-width: 720px) {
-  .er-room { inset: calc(44px + env(safe-area-inset-top)) 8px calc(8px + env(safe-area-inset-bottom)); grid-template-columns: 1fr; grid-template-rows: minmax(0, 42%) minmax(0, 1fr); }
+  .er-room { inset: calc(10px + env(safe-area-inset-top)) 8px calc(8px + env(safe-area-inset-bottom)); grid-template-columns: 1fr; grid-template-rows: minmax(0, 42%) minmax(0, 1fr); transition: none; }
+  .er-room.is-chat-hidden { grid-template-columns: 1fr; grid-template-rows: 40px minmax(0, 1fr); }
+  .er-room.is-chat-hidden .er-rail { flex-direction: row; padding: 0 14px; }
+  .er-rail-name { writing-mode: horizontal-tb; max-height: none; }
   .er-chat { border-right: 0; border-bottom: 1px solid var(--line-2); }
-  .er-leave { top: calc(10px + env(safe-area-inset-top)); right: 12px; }
-  .er-leave span { display: none; }
   .er-new-input { font-size: 19px; }
 }

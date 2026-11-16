@@ -849,7 +849,6 @@ export function mountSpace(root) {
 
   /* ---------------- Emergency Room (E + R) ---------------- */
   let er = null;
-  let erTool = null;
   const erCombo = comboWatcher();
   function openER() {
     if (er?.open || !editor()) return;
@@ -869,9 +868,8 @@ export function mountSpace(root) {
     if (!ed || getSurface() || isTypingTarget(e.target) || document.querySelector('.dlg') || ed.editingId) return;
     if (e.target instanceof Element && e.target.closest('.wg-body')) return;
     if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); toggleSpace(); return; }
-    // E then R (or both together): walk into the Emergency Room. E alone still picks the eraser.
-    if (e.code === 'KeyE' && !e.repeat) erTool = ed.tool;
-    if (erCombo.test(e)) { e.preventDefault(); e.stopPropagation(); if (erTool) ed.setTool(erTool); openER(); return; }
+    // E then R (or both together): walk into the Emergency Room.
+    if (erCombo.test(e)) { e.preventDefault(); e.stopPropagation(); openER(); return; }
     const combo = comboOf(e);
     const p = points().find((x) => x.key && x.key === combo);
     if (p) { e.preventDefault(); e.stopPropagation(); goTo(p); return; }

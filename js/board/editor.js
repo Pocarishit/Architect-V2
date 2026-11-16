@@ -2299,7 +2299,7 @@ export class Editor {
     if (e.key === '?' || (e.shiftKey && e.code === 'Slash')) { e.preventDefault(); this.emit('command', 'shortcuts'); return; }
     if (e.key === ']') { this.bringToFront(); return; }
     if (e.key === '[') { this.sendToBack(); return; }
-    const tools = { v: 'select', h: 'hand', n: 'sticky', t: 'text', s: 'shape', l: 'line', p: 'pen', e: 'eraser', f: 'frame' };
+    const tools = { v: 'select', h: 'hand', n: 'sticky', t: 'text', s: 'shape', l: 'line', p: 'pen', f: 'frame' }; // E is kept free for E + R (Emergency Room)
     if (tools[k] && !e.shiftKey) {
       if (k === 'p') this.setOpt('pen', 'pen');
       this.setTool(tools[k]);

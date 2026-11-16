@@ -798,7 +798,7 @@ export function mountFleeting(root, el0, w) {
         type: 'button', class: ['fi-wk-arrow', d < 0 ? 'is-prev' : 'is-next'], disabled: !to,
         'aria-label': label, title: to ? `${label} · ${shortDate(parseKey(to))}` : label,
         'data-wk': to || null, onclick: () => stepWeek(d),
-      }, icon(d < 0 ? 'chevronLeft' : 'chevronRight', 18));
+      }, icon(d < 0 ? 'chevronLeft' : 'chevronRight', 24));
     };
     const card = h('section', {
       class: ['fi-wk', 'fi-wk-card', k === now && 'is-now', k < now && 'is-past', k > lastWk && 'is-after'],

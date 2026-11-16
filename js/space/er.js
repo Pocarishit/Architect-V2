@@ -17,16 +17,19 @@ import { onEscapeFull } from '../core/guard.js';
 import { go } from '../core/router.js';
 import { uploadMedia, mediaFiles, pickMedia } from './media.js';
 import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
+import { speak, ttsSupported } from './chat.js';
 
 export const ER_KINDS = ['er', 'er-chat'];
 const SURFACE = 'er-room';
 const LAST = 'architect.er.last';
 const POLL_MS = 3500;
 const MAX_MSGS = 2000;
+const VOICE = 'architect.er.voice';
+const CHAT_OPEN = 'architect.er.chatOpen';
+const Recognition = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 
 /* ---------------- E + R: press them together, or E then R ---------------- */
-// Returns true when this keydown completes the combo. E still picks the eraser on its own;
-// the caller puts the previous tool back when the combo fires.
+// Returns true when this keydown completes the combo. E has no tool of its own any more.
 export function comboWatcher() {
   let eAt = 0, eHeld = false;
   const up = (e) => { if (e.code === 'KeyE') eHeld = false; };
@@ -42,6 +45,13 @@ export function comboWatcher() {
     },
     off() { window.removeEventListener('keyup', up, true); },
   };
+}
+
+function micIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '17'); svg.setAttribute('height', '17'); svg.setAttribute('aria-hidden', 'true');
+  svg.innerHTML = '<rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
+  return svg;
 }
 
 /* ---------------- data ---------------- */
@@ -83,14 +93,68 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
     onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } },
   });
   const plus = h('button', { class: 'sc-plus', type: 'button', 'aria-label': 'Add a photo or video', onclick: async () => { const fs = await pickMedia(); if (fs.length) sendFiles(fs); } }, icon('plus', 18));
+  // Voice mode (this device): every message is read out loud, and the mic turns speech into messages.
+  let voice = !!store.get(VOICE, false);
+  let rec = null;
+  const openedAt = Date.now();
+  let heard = new Set();
+  const voiceBtn = h('button', { class: 'er-hbtn', type: 'button', onclick: () => setVoice(!voice) });
+  const mic = h('button', { class: 'sc-plus er-mic', type: 'button', 'aria-label': 'Talk', title: 'Talk — your words become a message', onclick: () => (rec ? stopMic() : startMic()) }, micIcon());
+  const hideBtn = h('button', { class: 'er-hbtn', type: 'button', 'aria-label': 'Hide chat', title: 'Hide chat', onclick: () => setChatOpen(false) }, icon('chevronLeft', 15));
+  const showBtn = h('button', { class: 'er-rail', type: 'button', 'aria-label': 'Show chat', title: 'Show chat', onclick: () => setChatOpen(true) }, icon('chevronRight', 15), h('span', { class: 'er-rail-name' }));
   const chat = h('aside', { class: 'er-chat' },
-    h('header', { class: 'er-head' }, nameEl, drop),
+    h('header', { class: 'er-head' }, nameEl, drop, voiceBtn, hideBtn),
     list,
-    h('div', { class: 'sc-compose er-compose' }, plus, ta));
+    h('div', { class: 'sc-compose er-compose' }, plus, ta, mic),
+    showBtn);
   const boardHost = h('div', { class: 'er-board' });
   const room = h('div', { class: 'er-room', role: 'dialog', 'aria-label': 'Emergency Room' }, chat, boardHost);
-  const leave = h('button', { class: 'er-leave', type: 'button', onclick: () => close() }, 'LEAVE', h('span', {}, 'ESC ESC'));
-  const node = h('div', { class: 'er', 'data-surface': SURFACE }, h('div', { class: 'er-wash', 'aria-hidden': 'true' }), room, leave);
+  const node = h('div', { class: 'er', 'data-surface': SURFACE }, h('div', { class: 'er-wash', 'aria-hidden': 'true' }), room);
+  function paintVoice() {
+    voiceBtn.replaceChildren(icon(voice ? 'speaker' : 'mute', 15));
+    voiceBtn.classList.toggle('is-on', voice);
+    voiceBtn.title = voice ? 'Voice mode on — messages are read out loud' : 'Voice mode off';
+    voiceBtn.setAttribute('aria-label', voice ? 'Turn voice mode off' : 'Turn voice mode on');
+    voiceBtn.setAttribute('aria-pressed', String(voice));
+    mic.hidden = !voice || !Recognition;
+  }
+  function setVoice(on) {
+    if (on && !ttsSupported()) { toast('This browser can’t read messages out loud.', { tone: 'error' }); return; }
+    voice = on; store.set(VOICE, on);
+    if (!on) { stopMic(); try { window.speechSynthesis.cancel(); } catch {} }
+    paintVoice();
+    if (on) toast('Voice mode on — messages are read out loud.', { ms: 2000 });
+  }
+  function setChatOpen(open) {
+    store.set(CHAT_OPEN, open);
+    room.classList.toggle('is-chat-hidden', !open);
+    if (open) requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+  }
+  paintVoice();
+  setChatOpen(store.get(CHAT_OPEN, true) !== false);
+
+  // Mic: free browser speech recognition. Talk, pause, and what you said is sent.
+  function startMic() {
+    if (!Recognition || rec || !cur) return;
+    try {
+      rec = new Recognition();
+      rec.lang = navigator.language || 'en-US';
+      rec.interimResults = true;
+      rec.continuous = false;
+      const before = ta.value ? `${ta.value.trim()} ` : '';
+      rec.onresult = (e) => {
+        let text = '';
+        for (const r of e.results) text += r[0].transcript;
+        ta.value = before + text; grow(ta);
+        if (e.results[e.results.length - 1].isFinal) send();
+      };
+      rec.onerror = (e) => { if (e.error === 'not-allowed') toast('Allow the microphone to talk here.', { tone: 'error' }); };
+      rec.onend = () => { rec = null; mic.classList.remove('is-live'); };
+      rec.start();
+      mic.classList.add('is-live');
+    } catch { rec = null; mic.classList.remove('is-live'); }
+  }
+  function stopMic() { try { rec?.stop(); } catch {} rec = null; mic.classList.remove('is-live'); }
   if (prefersReducedMotion?.()) node.classList.add('is-still');
   root.append(node);
   setSurface(SURFACE);
@@ -101,16 +165,10 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
   chat.addEventListener('dragleave', (e) => { if (!chat.contains(e.relatedTarget)) chat.classList.remove('is-drop'); });
   chat.addEventListener('drop', (e) => { chat.classList.remove('is-drop'); const fs = mediaFiles(e.dataTransfer); if (fs.length) { e.preventDefault(); e.stopPropagation(); sendFiles(fs); } });
 
-  // E + R again walks you out. E alone still picks the eraser on the board — put the old tool back.
-  let toolBefore = null;
+  // E + R again walks you out.
   const onKey = (e) => {
     if (closed || isTypingTarget(e.target) || document.querySelector('.dlg-overlay')) return;
-    if (e.code === 'KeyE' && !e.repeat) toolBefore = board?.editor?.tool || null;
-    if (combo.test(e)) {
-      e.preventDefault(); e.stopPropagation();
-      if (toolBefore && board?.editor) board.editor.setTool(toolBefore);
-      close();
-    }
+    if (combo.test(e)) { e.preventDefault(); e.stopPropagation(); close(); }
   };
   window.addEventListener('keydown', onKey, true);
   const escOff = onEscapeFull(() => { close(); });
@@ -148,6 +206,8 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
     cur = p;
     store.set(LAST, p.id);
     nameEl.textContent = (p.name || 'Problem').toUpperCase();
+    showBtn.lastChild.textContent = nameEl.textContent;
+    stopMic();
     ta.disabled = false; plus.disabled = false;
     ta.value = ''; draft = '';
     // The board: the whole right side.
@@ -182,6 +242,9 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
     const s = JSON.stringify(next);
     if (!first && s === sig) return;
     sig = s; msgs = next;
+    if (first) heard = new Set(next.map((m) => m.id));
+    else if (voice) for (const m of next) if (!heard.has(m.id) && m.by !== me?.id && m.ts > openedAt - 15_000) speak(m);
+    next.forEach((m) => heard.add(m.id));
     paint(first);
   }
 
@@ -221,6 +284,7 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
       shareWithSpace([id], spaceId(), me);
     }
     if (cur !== p) return;
+    next.forEach((m) => heard.add(m.id));
     msgs = next; sig = JSON.stringify(next);
     paint(true);
   }
@@ -240,7 +304,9 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
     const text = ta.value.trim();
     if (!text || !cur) return;
     ta.value = ''; draft = ''; grow(ta);
-    push(note({ text }));
+    const m = note({ text });
+    if (voice) speak(m);
+    push(m);
   }
   async function sendFiles(fs) {
     if (sending || !cur) return;
@@ -322,6 +388,8 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
     if (closed) return;
     closed = true;
     clearInterval(poll);
+    stopMic();
+    try { if (voice) window.speechSynthesis.cancel(); } catch {}
     escOff();
     combo.off();
     window.removeEventListener('keydown', onKey, true);

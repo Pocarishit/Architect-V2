@@ -9,7 +9,7 @@
 // Drift is computed from the clock (start point + speed × time), so everyone sees the same motion.
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { menu, toast } from '../core/ui.js';
+import { menu, toast, popover, closeFloating } from '../core/ui.js';
 import { uid, store, prefersReducedMotion } from '../core/util.js';
 import { api, friendlyError } from '../data/api.js';
 import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia, fmtDur } from './media.js';
@@ -32,6 +32,15 @@ export const spOf = (m) => [...SETPOINTS].reverse().find((s) => m >= s.from) || 
 const clockOf = (m) => { const t = (m + DAY_START) % 1440; return `${pad(Math.floor(t / 60))}:${pad(t % 60)}`; };
 const mondayOf = (d) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
 const shortDate = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const addWeeks = (key, n) => { const d = parseKey(key); return keyOf(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n * 7)); };
+/** Every Monday from start's week through deadline's week, plus any week that still holds tasks. */
+const planWeeks = (p) => {
+  const first = keyOf(mondayOf(parseKey(p.start))), last = keyOf(mondayOf(parseKey(p.deadline)));
+  const out = new Set();
+  for (let k = first, i = 0; k <= last && i < 260; k = addWeeks(k, 1), i++) out.add(k);
+  for (const [k, v] of Object.entries(p.weeks)) if (v?.length) out.add(k);
+  return [...out].sort();
+};
 const fold = (v) => { v = ((v % 2) + 2) % 2; return v > 1 ? 2 - v : v; };
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const TABS = [['ideas', 'Ideas'], ['story', 'Story'], ['tracker', 'Tracker'], ['weekly', 'Weekly']];
@@ -74,13 +83,22 @@ export function mountFleeting(root, el0, w) {
   /* ---------------- shared state ---------------- */
   const ideas = () => el.ideas || [];
   const story = (k = day) => el.story?.[k] || [];
+  // Weekly plan. Weeks are keyed by their Monday (YYYY-MM-DD) and run from start to the deadline,
+  // so the columns generate themselves. Older plans keyed weeks 1..8 — those convert on read.
   const weekly = () => {
     const wk = el.weekly || {};
-    return { goal: wk.goal || DEFAULT_GOAL, start: wk.start || keyOf(mondayOf(new Date())), weeks: wk.weeks || {}, tray: wk.tray || [] };
+    const start = wk.start || keyOf(mondayOf(new Date()));
+    const weeks = {};
+    for (const [k, v] of Object.entries(wk.weeks || {})) {
+      const key = /^\d{1,2}$/.test(k) ? addWeeks(start, Number(k) - 1) : k;
+      weeks[key] = [...(weeks[key] || []), ...(v || [])];
+    }
+    const deadline = wk.deadline || keyOf(new Date(parseKey(start).getTime() + 55 * 86_400_000)); // default: 8 weeks
+    return { goal: wk.goal || DEFAULT_GOAL, start, deadline, weeks, tray: wk.tray || [] };
   };
   const setIdeas = (list, live = false) => (live ? w.live : w.patch)({ ideas: list });
   const setStory = (k, list) => w.patch({ story: { ...(w.current().story || {}), [k]: list } });
-  const setWeekly = (p) => { const cur = weekly(); w.patch({ weekly: { ...cur, ...p, start: cur.start } }); };
+  const setWeekly = (p) => { const cur = weekly(); w.patch({ weekly: { ...cur, ...p } }); };
 
   /* ---------------- shell ---------------- */
   function setTab(id) {
@@ -605,31 +623,44 @@ export function mountFleeting(root, el0, w) {
 
   function renderWeekly() {
     const p = weekly();
-    const cur = Math.floor((Date.now() - parseKey(p.start).getTime()) / (7 * 86_400_000)) + 1;
-    const anchor = weekDates(p.start, Math.min(8, Math.max(1, cur)))[0];
+    const now = keyOf(mondayOf(new Date()));
+    const keys = planWeeks(p);
+    const first = keyOf(mondayOf(parseKey(p.start))), lastWk = keyOf(mondayOf(parseKey(p.deadline)));
+    const numOf = (k) => Math.round((parseKey(k) - parseKey(first)) / (7 * 86_400_000)) + 1;
     const all = [...Object.values(p.weeks).flat(), ...p.tray].map((x) => x.id);
     for (const id of [...sel]) if (!all.includes(id)) sel.delete(id);
-    const past = Array.from({ length: 8 }, (_, i) => i + 1).filter((n) => n < cur);
-    const shown = Array.from({ length: 8 }, (_, i) => i + 1).filter((n) => n >= cur || showArchive);
+    const past = keys.filter((k) => k < now);
+    const shown = keys.filter((k) => k >= now || showArchive);
+    const left = keys.filter((k) => k >= now && k <= lastWk).length;
+    const daysLeft = Math.ceil((parseKey(p.deadline) - new Date(new Date().toDateString())) / 86_400_000);
     const keepX = stage.querySelector('.fi-wk-cols')?.scrollLeft;
     const goal = h('button', { class: 'fi-goal', type: 'button', title: 'Rename the goal', onclick: () => editGoal(goal, p.goal) }, `GOAL: ${p.goal}`.toUpperCase());
-    const cols = h('div', { class: 'fi-wk-cols' }, shown.map((n) => {
-      const list = p.weeks[n] || [];
-      const [a, b] = weekDates(p.start, n);
-      return h('section', { class: ['fi-wk', n === cur && 'is-now', n < cur && 'is-past'], 'data-wk': String(n), 'aria-label': `Week ${n}${n === cur ? ', this week' : ''}` },
+    const due = h('button', { class: ['fi-due', daysLeft < 0 && 'is-over'], type: 'button', title: 'Set the start and deadline', onclick: (e) => datesPop(e.currentTarget, p) },
+      icon('hourglass', 13),
+      `DUE ${shortDate(parseKey(p.deadline)).toUpperCase()} · `,
+      h('b', {}, daysLeft < 0 ? 'PAST DEADLINE' : left === 1 ? 'LAST WEEK' : `${left} WEEKS LEFT`));
+    const cols = h('div', { class: 'fi-wk-cols' }, shown.map((k) => {
+      const list = p.weeks[k] || [];
+      const a = parseKey(k), b = new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6);
+      const n = numOf(k);
+      const after = k > lastWk, before = k < first;
+      return h('section', { class: ['fi-wk', k === now && 'is-now', k < now && 'is-past', after && 'is-after'], 'data-wk': k, 'aria-label': `Week ${n}${k === now ? ', this week' : ''}` },
         h('header', { class: 'fi-wk-head', title: `${shortDate(a)} – ${shortDate(b)}` },
           h('span', { class: 'fi-wk-row' },
-            h('span', { class: 'fi-wk-n' }, `WK ${n}`),
-            n === cur ? h('span', { class: 'fi-wk-now' }, 'THIS WEEK') : h('span', { class: 'fi-wk-date' }, shortDate(a).toUpperCase())),
+            h('span', { class: 'fi-wk-n' }, before ? 'BEFORE' : `WK ${n}`),
+            k === now ? h('span', { class: 'fi-wk-now' }, 'THIS WEEK')
+              : h('span', { class: 'fi-wk-date' }, after ? 'AFTER DEADLINE' : k === lastWk ? `DUE · ${shortDate(a).toUpperCase()}` : shortDate(a).toUpperCase())),
           h('span', { class: 'fi-wk-dots', 'aria-label': `${list.filter((x) => x.done).length} of ${list.length} done` }, list.map((x) => h('i', { class: x.done ? 'is-done' : null })))),
-        h('div', { class: 'fi-wk-list' }, list.map((x) => taskRow(x, String(n)))),
-        n < cur ? null : adder(String(n)));
+        h('div', { class: 'fi-wk-list' }, list.map((x) => taskRow(x, k))),
+        k < now ? null : adder(k));
     }));
+    if (!shown.length) cols.append(h('p', { class: 'fi-wk-none' }, 'The deadline has passed. Set a new one to plan the next stretch.'));
+    const anchor = parseKey(keys.find((k) => k >= now) || lastWk);
     const tray = h('section', { class: 'fi-wk-tray', 'data-wk': 'tray', 'aria-label': 'Tasks without a week' },
       h('span', { class: 'fi-tray-label' }, 'NO WEEK YET'),
       h('div', { class: 'fi-wk-list is-tray' }, p.tray.map((x) => taskRow(x, 'tray'))),
       adder('tray'));
-    const pastDone = past.reduce((n, w) => n + (p.weeks[w] || []).length, 0);
+    const pastDone = past.reduce((n, k) => n + (p.weeks[k] || []).length, 0);
     const archiveBtn = past.length ? h('button', {
       type: 'button', class: ['fi-archive', showArchive && 'is-open'], 'aria-expanded': String(showArchive),
       onclick: () => { showArchive = !showArchive; scrolledWeek = false; renderWeekly(); },
@@ -637,7 +668,7 @@ export function mountFleeting(root, el0, w) {
     stage.replaceChildren(h('div', { class: 'fi-weekly' },
       h('div', { class: 'fi-wk-top' },
         h('div', {}, h('b', { class: 'fi-ms' }, 'MILESTONE'), h('span', { class: 'fi-ms-month' }, anchor.toLocaleDateString(undefined, { month: 'long' }))),
-        goal),
+        h('div', { class: 'fi-wk-goalbox' }, goal, due)),
       archiveBtn ? h('div', { class: 'fi-wk-bar' }, archiveBtn) : null,
       cols, tray, selBar(p)));
     if (keepX != null && scrolledWeek) cols.scrollLeft = keepX;
@@ -726,9 +757,11 @@ export function mountFleeting(root, el0, w) {
 
   function moveItems() {
     const p = weekly();
-    const cur = Math.floor((Date.now() - parseKey(p.start).getTime()) / (7 * 86_400_000)) + 1;
+    const now = keyOf(mondayOf(new Date()));
+    const first = keyOf(mondayOf(parseKey(p.start)));
+    const n = (k) => Math.round((parseKey(k) - parseKey(first)) / (7 * 86_400_000)) + 1;
     return [{ header: 'Move to' },
-      ...Array.from({ length: 8 }, (_, i) => i + 1).filter((n) => n >= cur).map((n) => ({ label: n === cur ? `Week ${n} · this week` : `Week ${n}`, icon: 'calendar', onSelect: () => moveSel(String(n)) })),
+      ...planWeeks(p).filter((k) => k >= now).map((k) => ({ label: `${k === now ? 'This week' : `Week ${n(k)}`} · ${shortDate(parseKey(k))}`, icon: 'calendar', onSelect: () => moveSel(k) })),
       { label: 'No week yet', icon: 'folder', onSelect: () => moveSel('tray') }];
   }
   function moveMenu(anchor) { menu(anchor, moveItems(), { side: 'top' }); }
@@ -852,6 +885,33 @@ export function mountFleeting(root, el0, w) {
     };
     row.setPointerCapture(e.pointerId);
     row.addEventListener('pointermove', move); row.addEventListener('pointerup', up); row.addEventListener('pointercancel', up);
+  }
+
+  function datesPop(anchor, p) {
+    const startIn = h('input', { type: 'date', class: 'input sm', value: p.start, 'aria-label': 'Plan starts' });
+    const dueIn = h('input', { type: 'date', class: 'input sm', value: p.deadline, 'aria-label': 'Deadline' });
+    const preview = h('span', { class: 'fi-dates-left' });
+    const calc = () => {
+      const a = startIn.value || p.start, b = dueIn.value || p.deadline;
+      const total = Math.max(0, Math.round((mondayOf(parseKey(b)) - mondayOf(parseKey(a))) / (7 * 86_400_000)) + 1);
+      const left = Math.max(0, Math.round((mondayOf(parseKey(b)) - mondayOf(new Date())) / (7 * 86_400_000)) + 1);
+      preview.textContent = b < a ? 'Deadline is before the start.' : `${total} week${total === 1 ? '' : 's'} in the plan · ${left} left`;
+    };
+    startIn.oninput = calc; dueIn.oninput = calc; calc();
+    const save = () => {
+      const a = startIn.value || p.start, b = dueIn.value || p.deadline;
+      if (b < a) { toast('The deadline has to come after the start.', { tone: 'error' }); return; }
+      closeFloating();
+      setWeekly({ start: a, deadline: b });
+      renderWeekly();
+    };
+    popover(anchor, h('div', { class: 'pop fi-dates' },
+      h('div', { class: 'pop-label' }, 'Plan dates'),
+      h('label', { class: 'fi-dates-row' }, h('span', {}, 'Starts'), startIn),
+      h('label', { class: 'fi-dates-row' }, h('span', {}, 'Deadline'), dueIn),
+      preview,
+      h('button', { class: 'btn btn-primary sm', type: 'button', onclick: save }, 'Save')), { side: 'bottom', align: 'end', gap: 8 });
+    requestAnimationFrame(() => dueIn.focus());
   }
 
   function editGoal(btn, current) {

@@ -22,29 +22,42 @@ const dayLabel = (ts) => {
   return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: d.getFullYear() === t.getFullYear() ? undefined : 'numeric' });
 };
 
+const hue = (t) => { let x = 0; for (const c of String(t).trim()) x = (x * 31 + c.charCodeAt(0)) % 360; return x; };
+const initials = (n) => String(n).trim().split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase() || '?';
+
 export function mountVariables(root, el0, w) {
   let el = el0;
   const me = api.auth.current()?.user;
   const memKey = `architect.var.${el.id}`;
   const mem = store.get(memKey, {});
-  let section = mem.section || null;
-  let open = mem.open || null;      // entry id whose chat is open
+  let section = mem.section || null; // top-level tab
+  let sub = mem.sub || null;         // open sub-section (e.g. School › Student), or null
+  let open = mem.open || null;       // entry id whose chat is open
   let busy = false;
   let pending = false;
   let draft = '';
   let sending = false;
-  const remember = () => store.set(memKey, { section, open });
+  let dragging = false;
+  const remember = () => store.set(memKey, { section, sub, open });
 
   const box = h('div', { class: 'vr' });
   root.append(box);
 
   const sections = () => (el.sections?.length ? el.sections : defaultVariables().sections);
+  const tops = () => sections().filter((s) => !s.parent);
+  const kids = (id) => sections().filter((s) => s.parent === id);
+  const secById = (id) => sections().find((s) => s.id === id);
   const entries = () => el.entries || [];
+  const inSec = (id) => entries().filter((x) => x.section === id);
+  const countIn = (id) => inSec(id).length + kids(id).reduce((n, k) => n + inSec(k.id).length, 0);
+  const pathOf = (id) => { const s = secById(id); if (!s) return ''; const p = s.parent && secById(s.parent); return p ? `${p.name} › ${s.name}` : s.name; };
   const save = (p) => w.patch({ sections: sections(), ...p });
   const setEntries = (list) => save({ entries: list });
   const patchEntry = (id, fn) => setEntries(entries().map((x) => (x.id === id ? { ...x, ...fn(x) } : x)));
+  const here = () => sub || section;
 
   function render() {
+    if (dragging) { pending = true; return; }
     if (busy) {
       // Typing a note: refresh the messages in place, keep the composer (and your cursor) alone.
       const x = open && entries().find((e) => e.id === open);
@@ -57,57 +70,186 @@ export function mountVariables(root, el0, w) {
       return;
     }
     pending = false;
-    const secs = sections();
-    if (!secs.some((s) => s.id === section)) section = secs[0]?.id || null;
+    const t = tops();
+    if (!t.some((s) => s.id === section)) section = t[0]?.id || null;
+    if (sub && secById(sub)?.parent !== section) sub = null;
     const entry = open && entries().find((x) => x.id === open);
     if (open && !entry) open = null;
-    box.replaceChildren(entry ? chat(entry) : grid(secs));
+    const keep = box.querySelector('.vr-grid')?.scrollTop;
+    box.replaceChildren(entry ? chat(entry) : grid(t));
+    if (keep && !entry) box.querySelector('.vr-grid').scrollTop = keep;
     if (entry) requestAnimationFrame(() => { const l = box.querySelector('.vr-msgs'); if (l) l.scrollTop = l.scrollHeight; });
   }
 
   /* ---------------- sections + grid ---------------- */
-  function grid(secs) {
+  function grid(t) {
     const tabs = h('div', { class: 'vr-tabs', role: 'tablist' },
-      secs.map((s) => {
-        const b = h('button', {
-          type: 'button', role: 'tab', class: ['vr-tab', s.id === section && 'is-on'], 'aria-selected': String(s.id === section),
-          onclick: () => { section = s.id; remember(); render(); },
-          ondblclick: () => renameSection(s),
-          oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, s); },
-        }, s.name.toUpperCase());
-        return b;
-      }),
-      h('button', { type: 'button', class: 'vr-tab-add', title: 'New section', 'aria-label': 'New section', onclick: addSection }, icon('plus', 14)));
-    const list = entries().filter((x) => x.section === section);
+      t.map((s) => h('button', {
+        type: 'button', role: 'tab', class: ['vr-tab', s.id === section && 'is-on'], 'aria-selected': String(s.id === section), 'data-sec': s.id,
+        onclick: () => { section = s.id; sub = null; remember(); render(); },
+        ondblclick: () => renameSection(s),
+        oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, s); },
+      }, s.name.toUpperCase())),
+      h('button', { type: 'button', class: 'vr-tab-add', title: 'Add', 'aria-label': 'Add a section or import', onclick: (e) => addMenu(e.currentTarget) }, icon('plus', 14)));
+
+    const cur = here();
+    const cats = sub ? [] : kids(section);
+    const list = inSec(cur);
+    const body = [];
+    if (sub) {
+      const s = secById(sub);
+      body.push(h('div', { class: 'vr-crumb' },
+        h('button', { type: 'button', class: 'vr-crumb-back', onclick: () => { sub = null; remember(); render(); } }, icon('chevronLeft', 14), 'SECTIONS'),
+        h('span', { class: 'vr-crumb-name', style: { '--h': hue(s?.name || '') }, oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); if (s) sectionMenu({ x: e.clientX, y: e.clientY }, s); }, ondblclick: () => s && renameSection(s) }, (s?.name || '').toUpperCase())));
+    }
+    const tiles = cats.map((c) => h('button', {
+      type: 'button', class: 'vr-cat', 'data-sec': c.id, style: { '--h': hue(c.name) },
+      onclick: () => { sub = c.id; remember(); render(); },
+      ondblclick: (e) => { e.preventDefault(); renameSection(c); },
+      oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, c); },
+    }, h('span', { class: 'vr-cat-name' }, c.name.toUpperCase()), h('small', {}, String(countIn(c.id)))));
     const cards = list.map((x) => card(x));
     cards.push(h('button', { type: 'button', class: 'vr-card vr-new', onclick: () => addEntry() }, icon('plus', 18), h('span', {}, 'Add')));
-    return h('div', { class: 'vr-home' }, tabs, h('div', { class: 'vr-grid' }, cards),
-      !list.length ? h('p', { class: 'vr-hint' }, 'A teacher, a committee, your family, the office — every influence gets its own space.') : null);
+    const gridEl = h('div', { class: 'vr-grid' }, ...tiles, ...cards);
+    gridEl.addEventListener('contextmenu', (e) => {
+      if (e.target !== gridEl) return;
+      e.preventDefault(); e.stopPropagation();
+      menu({ x: e.clientX, y: e.clientY }, [
+        { label: `Add variable to ${secById(cur)?.name || 'here'}`, icon: 'plus', onSelect: () => addEntry() },
+        !sub ? { label: `Add sub-section in ${secById(section)?.name || 'here'}`, icon: 'folder', onSelect: () => addSection(section) } : null,
+        { label: 'Add section', icon: 'folder', onSelect: () => addSection(null) },
+        '-',
+        { label: 'Import from Variables file…', icon: 'upload', onSelect: importFile },
+      ].filter(Boolean));
+    });
+    return h('div', { class: 'vr-home' }, tabs, ...body, gridEl,
+      !list.length && !cats.length ? h('p', { class: 'vr-hint' }, 'A teacher, a committee, your family, the office — every influence gets its own space. Right-click for more.') : null);
   }
 
   function card(x) {
     const url = x.photo ? urlOf(x.photo, render) : null;
     const notes = x.notes?.length || 0;
     const more = h('button', { type: 'button', class: 'vr-card-more', 'aria-label': `Options for ${x.name}`, onclick: (e) => { e.stopPropagation(); entryMenu(e.currentTarget, x); } }, icon('more', 14));
-    return h('div', {
-      class: ['vr-card', x.photo ? 'has-face' : 'is-label'], role: 'button', tabindex: 0, 'aria-label': `Open ${x.name}`,
-      onclick: (e) => { if (!e.target.closest('button')) openEntry(x.id); },
-      onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) openEntry(x.id); },
+    const name = h('span', { class: 'vr-name', title: 'Double-click to rename' }, x.name);
+    const hh = hue(x.name);
+    const node = h('div', {
+      class: 'vr-card', role: 'button', tabindex: 0, 'aria-label': `Open ${x.name}`, 'data-id': x.id,
+      onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) openEntry(x.id); if (e.key === 'F2') renameInline(name, x); },
       oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); entryMenu({ x: e.clientX, y: e.clientY }, x); },
     },
-      x.photo ? h('span', { class: 'vr-face' }, url ? h('img', { src: url, alt: '', draggable: false }) : null) : null,
-      h('span', { class: 'vr-name' }, x.photo ? x.name : x.name.toUpperCase()),
+      h('span', { class: ['vr-face', !x.photo && 'is-initials'], style: x.photo ? null : { background: `hsl(${hh},32%,26%)`, color: `hsl(${hh},60%,78%)` } },
+        x.photo ? (url ? h('img', { src: url, alt: '', draggable: false }) : null) : initials(x.name)),
+      name,
       notes ? h('span', { class: 'vr-count', title: `${notes} note${notes === 1 ? '' : 's'}` }, String(notes)) : null,
       more);
+    name.addEventListener('dblclick', (e) => { e.stopPropagation(); clearTimeout(node._open); renameInline(name, x); });
+    node.addEventListener('pointerdown', (e) => dragCard(e, node, x));
+    return node;
   }
 
   function openEntry(id) { open = id; draft = ''; remember(); render(); }
 
-  async function addSection() {
-    const name = await promptDialog('New section', { placeholder: 'e.g. Gym, Church, Clients', ok: 'Add', maxLength: 32 });
+  function renameInline(span, x) {
+    if (span.isContentEditable) return;
+    busy = true;
+    span.contentEditable = 'true';
+    span.focus();
+    document.getSelection()?.selectAllChildren(span);
+    const done = (ok) => {
+      span.removeEventListener('blur', onBlur); span.removeEventListener('keydown', onKey);
+      span.contentEditable = 'false';
+      busy = false;
+      const t = span.textContent.replace(/\s+/g, ' ').trim();
+      if (ok && t && t !== x.name) patchEntry(x.id, () => ({ name: t.slice(0, 48) }));
+      else { span.textContent = x.name; if (pending) render(); }
+    };
+    const onBlur = () => done(true);
+    const onKey = (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); span.blur(); } if (e.key === 'Escape') { e.preventDefault(); done(false); } };
+    span.addEventListener('blur', onBlur); span.addEventListener('keydown', onKey);
+  }
+
+  // Drag a card to reorder it, or onto a section tab / category tile to move it there.
+  function dragCard(e, node, x) {
+    if (e.button !== 0 || e.target.closest('button, [contenteditable="true"]')) return;
+    const sx = e.clientX, sy = e.clientY;
+    const r0 = node.getBoundingClientRect();
+    let ghost = null, mark = null, drop = null;
+    const clear = () => { mark?.classList.remove('is-drop-before', 'is-drop-after', 'is-drop-in'); mark = null; };
+    const move = (ev) => {
+      if (!ghost && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+      if (!ghost) {
+        dragging = true;
+        ghost = node.cloneNode(true);
+        ghost.classList.add('vr-ghost');
+        Object.assign(ghost.style, { width: `${r0.width}px`, height: `${r0.height}px`, left: `${r0.left}px`, top: `${r0.top}px` });
+        document.body.append(ghost);
+        node.classList.add('is-lifted');
+        document.body.classList.add('fi-dragging');
+      }
+      ghost.style.transform = `translate(${ev.clientX - sx}px, ${ev.clientY - sy}px) rotate(-1.5deg)`;
+      const t = document.elementFromPoint(ev.clientX, ev.clientY);
+      const sec = t?.closest?.('.vr [data-sec]');
+      const other = t?.closest?.('.vr-card[data-id]');
+      clear(); drop = null;
+      if (sec && box.contains(sec)) { mark = sec; sec.classList.add('is-drop-in'); drop = { section: sec.dataset.sec }; }
+      else if (other && other !== node && box.contains(other)) {
+        const b = other.getBoundingClientRect();
+        const after = ev.clientX > b.left + b.width / 2;
+        mark = other; other.classList.add(after ? 'is-drop-after' : 'is-drop-before');
+        drop = { id: other.dataset.id, after };
+      }
+    };
+    const up = (ev) => {
+      node.removeEventListener('pointermove', move); node.removeEventListener('pointerup', up); node.removeEventListener('pointercancel', up);
+      clear();
+      document.body.classList.remove('fi-dragging');
+      if (!ghost) {
+        // A click. Clicking the name waits a beat so a double-click can rename instead.
+        if (ev.type === 'pointerup') {
+          if (e.target.closest('.vr-name')) node._open = setTimeout(() => openEntry(x.id), 230);
+          else openEntry(x.id);
+        }
+        return;
+      }
+      ghost.remove();
+      node.classList.remove('is-lifted');
+      dragging = false;
+      if (!drop) { if (pending) render(); return; }
+      const rest = entries().filter((y) => y.id !== x.id);
+      if (drop.section) {
+        const target = secById(drop.section);
+        if (!target) return;
+        // Dropping on a tab with sub-sections files it at the top level of that tab.
+        setEntries([...rest, { ...x, section: target.id }]);
+        toast(`Moved to ${pathOf(target.id)}.`, { ms: 1600 });
+        return;
+      }
+      const ref = rest.find((y) => y.id === drop.id);
+      const i = rest.indexOf(ref);
+      rest.splice(drop.after ? i + 1 : i, 0, { ...x, section: ref.section });
+      setEntries(rest);
+    };
+    node.setPointerCapture(e.pointerId);
+    node.addEventListener('pointermove', move); node.addEventListener('pointerup', up); node.addEventListener('pointercancel', up);
+  }
+
+  function addMenu(anchor) {
+    menu(anchor, [
+      { label: 'New section', icon: 'folder', onSelect: () => addSection(null) },
+      section ? { label: `New sub-section in ${secById(section)?.name}`, icon: 'folder', onSelect: () => addSection(section) } : null,
+      '-',
+      { label: 'Import from Variables file…', icon: 'upload', onSelect: importFile },
+    ].filter(Boolean));
+  }
+
+  async function addSection(parent) {
+    const name = await promptDialog(parent ? `New sub-section in ${secById(parent)?.name}` : 'New section', { placeholder: parent ? 'e.g. Student, Cadet Officer' : 'e.g. Gym, Church, Clients', ok: 'Add', maxLength: 32 });
     if (!name?.trim()) return;
-    const s = { id: uid(), name: name.trim() };
-    section = s.id; remember();
+    const dup = sections().some((x) => (x.parent || null) === (parent || null) && x.name.toLowerCase() === name.trim().toLowerCase());
+    if (dup) { toast('There’s already a section with that name.', { tone: 'error' }); return; }
+    const s = parent ? { id: uid(), name: name.trim(), parent } : { id: uid(), name: name.trim() };
+    if (parent) { section = parent; sub = s.id; } else { section = s.id; sub = null; }
+    remember();
     save({ sections: [...sections(), s] });
   }
 
@@ -118,23 +260,36 @@ export function mountVariables(root, el0, w) {
   }
 
   function sectionMenu(anchor, s) {
-    const secs = sections();
-    const i = secs.findIndex((x) => x.id === s.id);
-    const swap = (j) => { const next = [...secs]; [next[i], next[j]] = [next[j], next[i]]; save({ sections: next }); };
+    const siblings = sections().filter((x) => (x.parent || null) === (s.parent || null));
+    const i = siblings.findIndex((x) => x.id === s.id);
+    const swap = (j) => {
+      const a = siblings[i], b = siblings[j];
+      save({ sections: sections().map((x) => (x.id === a.id ? b : x.id === b.id ? a : x)) });
+    };
+    const prev = s.parent ? 'Move up' : 'Move left', next = s.parent ? 'Move down' : 'Move right';
     menu(anchor, [
+      { header: pathOf(s.id) },
+      { label: 'Add variable here', icon: 'plus', onSelect: () => { if (s.parent) { section = s.parent; sub = s.id; } else { section = s.id; sub = null; } remember(); render(); addEntry(); } },
+      !s.parent ? { label: 'Add sub-section', icon: 'folder', onSelect: () => addSection(s.id) } : null,
       { label: 'Rename', icon: 'edit', onSelect: () => renameSection(s) },
-      { label: 'Move left', icon: 'chevronLeft', disabled: i === 0, onSelect: () => swap(i - 1) },
-      { label: 'Move right', icon: 'chevronRight', disabled: i === secs.length - 1, onSelect: () => swap(i + 1) },
+      { label: prev, icon: 'chevronLeft', disabled: i === 0, onSelect: () => swap(i - 1) },
+      { label: next, icon: 'chevronRight', disabled: i === siblings.length - 1, onSelect: () => swap(i + 1) },
       '-',
-      { label: 'Delete section', icon: 'trash', danger: true, disabled: secs.length < 2, onSelect: () => deleteSection(s) },
-    ]);
+      { label: 'Delete section', icon: 'trash', danger: true, disabled: !s.parent && tops().length < 2, onSelect: () => deleteSection(s) },
+    ].filter(Boolean));
   }
 
   async function deleteSection(s) {
-    const inside = entries().filter((x) => x.section === s.id);
-    if (inside.length && !(await confirmDialog(`Delete ${s.name}?`, `${inside.length} entr${inside.length === 1 ? 'y' : 'ies'} and their notes go with it.`))) return;
-    save({ sections: sections().filter((x) => x.id !== s.id), entries: entries().filter((x) => x.section !== s.id) });
+    const ids = new Set([s.id, ...kids(s.id).map((k) => k.id)]);
+    const inside = entries().filter((x) => ids.has(x.section));
+    const subs = ids.size - 1;
+    if ((inside.length || subs) && !(await confirmDialog(`Delete ${s.name}?`, [subs ? `${subs} sub-section${subs === 1 ? '' : 's'}` : '', inside.length ? `${inside.length} entr${inside.length === 1 ? 'y' : 'ies'} and their notes` : ''].filter(Boolean).join(' and ') + ' go with it.'))) return;
+    if (ids.has(sub)) sub = null;
+    save({ sections: sections().filter((x) => !ids.has(x.id)), entries: entries().filter((x) => !ids.has(x.section)) });
   }
+
+  // Every section as "School › Student" for pickers.
+  const allSecs = () => tops().flatMap((t) => [t, ...kids(t.id)]);
 
   async function addEntry() {
     const name = h('input', { class: 'input', placeholder: 'A person, a group, a commitment', maxlength: 48, 'aria-label': 'Name' });
@@ -150,7 +305,7 @@ export function mountVariables(root, el0, w) {
       },
     }, face);
     const pickLabel = h('span', { class: 'vr-pick-label' }, 'Add a photo (optional)');
-    const secSel = h('select', { class: 'input', 'aria-label': 'Section' }, sections().map((s) => h('option', { value: s.id, selected: s.id === section }, s.name)));
+    const secSel = h('select', { class: 'input', 'aria-label': 'Section' }, allSecs().map((s) => h('option', { value: s.id, selected: s.id === here() }, s.parent ? `   ${pathOf(s.id)}` : s.name)));
     setTimeout(() => name.focus(), 50);
     name.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.closest('.dlg')?.querySelector('.btn-primary')?.click(); });
     const ok = await dialog({
@@ -165,7 +320,9 @@ export function mountVariables(root, el0, w) {
     const n = name.value.trim();
     if (!ok || !n) return;
     const x = { id: uid(), section: secSel.value, name: n, photo: null, notes: [], at: Date.now() };
-    section = x.section; remember();
+    const s = secById(x.section);
+    if (s?.parent) { section = s.parent; sub = s.id; } else { section = x.section; sub = null; }
+    remember();
     setEntries([...entries(), x]);
     if (file) setPhoto(x.id, file);
   }
@@ -178,17 +335,67 @@ export function mountVariables(root, el0, w) {
   }
 
   function entryMenu(anchor, x) {
-    const others = sections().filter((s) => s.id !== x.section);
+    const others = allSecs().filter((s) => s.id !== x.section);
+    const nameEl = () => box.querySelector(`.vr-card[data-id="${x.id}"] .vr-name`);
     menu(anchor, [
       { label: 'Open notes', icon: 'chat', onSelect: () => openEntry(x.id) },
-      { label: 'Rename', icon: 'edit', onSelect: async () => { const n = await promptDialog('Rename', { value: x.name, maxLength: 48 }); if (n?.trim()) patchEntry(x.id, () => ({ name: n.trim() })); } },
-      { label: x.photo ? 'Change photo' : 'Add a photo', icon: 'image', onSelect: async () => { const [f] = await pickMedia({ multiple: false, accept: 'image/*' }); if (f) setPhoto(x.id, f); } },
-      x.photo ? { label: 'Remove photo', icon: 'eyeOff', onSelect: () => patchEntry(x.id, () => ({ photo: null })) } : null,
+      { label: 'Rename', icon: 'edit', kbd: 'F2', onSelect: () => { const n = nameEl(); if (n) renameInline(n, x); else promptDialog('Rename', { value: x.name, maxLength: 48 }).then((v) => { if (v?.trim()) patchEntry(x.id, () => ({ name: v.trim() })); }); } },
+      { label: x.photo ? 'Replace profile picture' : 'Add a profile picture', icon: 'image', onSelect: async () => { const [f] = await pickMedia({ multiple: false, accept: 'image/*' }); if (f) setPhoto(x.id, f); } },
+      x.photo ? { label: 'Remove picture', icon: 'eyeOff', onSelect: () => patchEntry(x.id, () => ({ photo: null })) } : null,
+      { label: 'Duplicate', icon: 'copy', onSelect: () => { const list = entries(); const i = list.findIndex((y) => y.id === x.id); const copy = { ...x, id: uid(), name: `${x.name} copy`, notes: [], at: Date.now() }; setEntries([...list.slice(0, i + 1), copy, ...list.slice(i + 1)]); } },
       others.length ? { header: 'Move to' } : null,
-      ...others.map((s) => ({ label: s.name, icon: 'folderMove', onSelect: () => patchEntry(x.id, () => ({ section: s.id })) })),
+      ...others.map((s) => ({ label: pathOf(s.id), icon: 'folderMove', onSelect: () => patchEntry(x.id, () => ({ section: s.id })) })),
       '-',
       { label: 'Delete', icon: 'trash', danger: true, onSelect: async () => { if (await confirmDialog(`Delete ${x.name}?`, x.notes?.length ? 'Its notes go with it.' : 'This can’t be undone from here.')) setEntries(entries().filter((y) => y.id !== x.id)); } },
     ].filter(Boolean));
+  }
+
+  /* ---------------- import: the v59 custom-widget Variables (HTML export) ---------------- */
+  // Reads its sections (School › Student …), names and profile pictures; merges by name.
+  async function importFile() {
+    const [f] = await pickMedia({ multiple: false, accept: '.html,.htm,text/html' });
+    if (!f) return;
+    let doc;
+    try { doc = new DOMParser().parseFromString(await f.text(), 'text/html'); } catch { toast('Couldn’t read that file.', { tone: 'error' }); return; }
+    const mainEl = doc.querySelector('main');
+    if (!mainEl) { toast('That doesn’t look like a Variables export.', { tone: 'error' }); return; }
+    const label = (d) => { const sm = d.querySelector(':scope > summary'); const t = sm && [...sm.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim()); return (t?.textContent || sm?.textContent || '').trim(); };
+    const people = (d) => [...d.querySelectorAll(':scope > button[data-target]')].map((b) => ({ name: (b.querySelector('span')?.textContent || '').trim(), img: b.querySelector('i img')?.getAttribute('src') || null })).filter((p) => p.name);
+    const plan = [];
+    for (const top of mainEl.querySelectorAll(':scope > details')) {
+      const subs = [...top.querySelectorAll(':scope > details')];
+      plan.push({ name: label(top), people: people(top), subs: subs.map((s) => ({ name: label(s), people: people(s) })) });
+    }
+    const total = plan.reduce((n, t) => n + t.people.length + t.subs.reduce((m, s) => m + s.people.length, 0), 0);
+    if (!total) { toast('No variables found in that file.', { tone: 'error' }); return; }
+    if (!(await confirmDialog('Import variables?', `${plan.length} section${plan.length === 1 ? '' : 's'} and ${total} entr${total === 1 ? 'y' : 'ies'}. Anything with the same name is kept, not duplicated.`, { ok: 'Import', danger: false }))) return;
+    let secs = [...sections()];
+    let list = [...entries()];
+    const find = (name, parent) => secs.find((s) => (s.parent || null) === (parent || null) && s.name.toLowerCase() === name.toLowerCase());
+    const ensure = (name, parent) => { let s = find(name, parent); if (!s) { s = parent ? { id: uid(), name, parent } : { id: uid(), name }; secs.push(s); } return s; };
+    const progress = toast(`Importing… 0/${total}`, { ms: 0 });
+    let done = 0, added = 0;
+    const take = async (secId, p) => {
+      done++;
+      progress.update(`Importing… ${done}/${total}`);
+      let x = list.find((y) => y.section === secId && y.name.toLowerCase() === p.name.toLowerCase());
+      if (!x) { x = { id: uid(), section: secId, name: p.name.slice(0, 48), photo: null, notes: [], at: Date.now() }; list.push(x); added++; }
+      if (!x.photo && p.img?.startsWith('data:image')) {
+        try {
+          const blob = await (await fetch(p.img)).blob();
+          const up = await uploadMedia(new File([blob], `${p.name}.jpg`, { type: blob.type || 'image/jpeg' }));
+          list = list.map((y) => (y.id === x.id ? { ...y, photo: up.path } : y));
+        } catch {}
+      }
+    };
+    for (const t of plan) {
+      const top = ensure(t.name || 'Imported', null);
+      for (const p of t.people) await take(top.id, p);
+      for (const s of t.subs) { const child = ensure(s.name || 'Imported', top.id); for (const p of s.people) await take(child.id, p); }
+    }
+    progress.close();
+    save({ sections: secs, entries: list });
+    toast(`Imported ${added} new entr${added === 1 ? 'y' : 'ies'}.`, { ms: 3000 });
   }
 
   /* ---------------- an entry's notes ---------------- */
@@ -215,7 +422,7 @@ export function mountVariables(root, el0, w) {
       h('button', { class: 'vr-back', type: 'button', 'aria-label': 'Back to variables', onclick: () => { open = null; remember(); render(); } }, icon('chevronLeft', 16)),
       x.photo ? h('span', { class: 'vr-mini-face' }, urlOf(x.photo, render) ? h('img', { src: urlOf(x.photo), alt: '' }) : null) : null,
       h('span', { class: 'vr-chat-name' }, x.name),
-      h('span', { class: 'vr-chat-sec' }, sections().find((s) => s.id === x.section)?.name || ''),
+      h('span', { class: 'vr-chat-sec' }, pathOf(x.section)),
       h('button', { class: 'vr-card-more', type: 'button', 'aria-label': 'Options', onclick: (e) => entryMenu(e.currentTarget, x) }, icon('more', 14)));
     const wrap = h('div', { class: 'vr-chat' }, head,
       h('div', { class: 'vr-msgs' }, msgRows(x)),

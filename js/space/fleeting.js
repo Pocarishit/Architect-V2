@@ -4,7 +4,7 @@
 //   Story    the day as a timeline (GM → Afternoon → Nighttime → Second Wind → new morning).
 //            Drop photos, paste videos, type narration; each fragment carries its Set-Point.
 //   Tracker  the month: a ringed circle is a day that has a story, in the colour of how the day moved.
-//   Weekly   one goal, eight week-columns of checkbox tasks; drag tasks between weeks.
+//   Weekly   one goal, one week at a time: a renamable week card of what's needed to be true.
 // Everything lives on the widget object, so it syncs with the rest of the Space like any other object.
 // Drift is computed from the clock (start point + speed × time), so everyone sees the same motion.
 import { h } from '../core/dom.js';
@@ -126,7 +126,7 @@ export function mountFleeting(root, el0, w) {
       weeks[key] = [...(weeks[key] || []), ...(v || [])];
     }
     const deadline = wk.deadline || keyOf(new Date(parseKey(start).getTime() + 55 * 86_400_000)); // default: 8 weeks
-    return { goal: wk.goal || DEFAULT_GOAL, start, deadline, weeks, tray: wk.tray || [] };
+    return { goal: wk.goal || DEFAULT_GOAL, start, deadline, weeks, tray: wk.tray || [], titles: wk.titles || {} };
   };
   const setIdeas = (list, live = false) => (live ? w.live : w.patch)({ ideas: list });
   const setStory = (k, list) => w.patch({ story: { ...(w.current().story || {}), [k]: list } });
@@ -739,72 +739,111 @@ export function mountFleeting(root, el0, w) {
   }
 
   /* ================= WEEKLY ================= */
-  let scrolledWeek = false;
-  const weekDates = (start, n) => { const s = parseKey(start); const a = new Date(s.getFullYear(), s.getMonth(), s.getDate() + (n - 1) * 7); return [a, new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6)]; };
-
-  let showArchive = false;
+  // One week at a time: the goal on top, one week card below. Arrows at the card's edges step weeks.
+  // Every week has a renamable title (stored in weekly.titles by Monday key) and its list of
+  // "what's needed to be true". Weeks with nothing in them simply show up blank.
+  let viewWeek = null;     // Monday key of the week on screen (null → this week)
   const sel = new Set();   // selected task ids (Weekly)
   let anchorId = null;     // for shift-click ranges
+  const SLOT_HINTS = ['add a key requirement…', 'add another requirement…', 'add one more requirement…'];
+
+  /** Which week to show: the one you stepped to, else this week clamped into the plan. */
+  function weekOnScreen(p, keys) {
+    if (viewWeek && keys.includes(viewWeek)) return viewWeek;
+    const now = keyOf(mondayOf(new Date()));
+    if (keys.includes(now)) return now;
+    return now < keys[0] ? keys[0] : keys[keys.length - 1];
+  }
+  function stepWeek(d) {
+    const keys = planWeeks(weekly());
+    const i = keys.indexOf(weekOnScreen(weekly(), keys)) + d;
+    if (i < 0 || i >= keys.length) return;
+    viewWeek = keys[i]; sel.clear(); renderWeekly();
+  }
 
   function renderWeekly() {
-    const p = weekly();
+    let p = weekly();
     const now = keyOf(mondayOf(new Date()));
+    // The old "no week yet" tray is gone: anything still parked there joins this week.
+    if (p.tray.length) {
+      const into = keyOf(mondayOf(parseKey(p.deadline))) < now ? keyOf(mondayOf(parseKey(p.deadline))) : now;
+      setWeekly({ weeks: { ...p.weeks, [into]: [...(p.weeks[into] || []), ...p.tray] }, tray: [] });
+      p = weekly();
+    }
     const keys = planWeeks(p);
     const first = keyOf(mondayOf(parseKey(p.start))), lastWk = keyOf(mondayOf(parseKey(p.deadline)));
-    const numOf = (k) => Math.round((parseKey(k) - parseKey(first)) / (7 * 86_400_000)) + 1;
-    const all = [...Object.values(p.weeks).flat(), ...p.tray].map((x) => x.id);
+    const k = weekOnScreen(p, keys);
+    const idx = keys.indexOf(k);
+    const n = Math.round((parseKey(k) - parseKey(first)) / (7 * 86_400_000)) + 1;
+    const list = p.weeks[k] || [];
+    const all = Object.values(p.weeks).flat().map((x) => x.id);
     for (const id of [...sel]) if (!all.includes(id)) sel.delete(id);
-    const past = keys.filter((k) => k < now);
-    const shown = keys.filter((k) => k >= now || showArchive);
-    const left = keys.filter((k) => k >= now && k <= lastWk).length;
+    const left = keys.filter((x) => x >= now && x <= lastWk).length;
     const daysLeft = Math.ceil((parseKey(p.deadline) - new Date(new Date().toDateString())) / 86_400_000);
-    const keepX = stage.querySelector('.fi-wk-cols')?.scrollLeft;
+    const a = parseKey(k), b = new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6);
+
     const goal = h('button', { class: 'fi-goal', type: 'button', title: 'Rename the goal', onclick: () => editGoal(goal, p.goal) }, `GOAL: ${p.goal}`.toUpperCase());
     const due = h('button', { class: ['fi-due', daysLeft < 0 && 'is-over'], type: 'button', title: 'Set the start and deadline', onclick: (e) => datesPop(e.currentTarget, p) },
       icon('hourglass', 13),
-      `DUE ${shortDate(parseKey(p.deadline)).toUpperCase()} · `,
+      `DUE ${shortDate(parseKey(p.deadline)).toUpperCase()} – `,
       h('b', {}, daysLeft < 0 ? 'PAST DEADLINE' : left === 1 ? 'LAST WEEK' : `${left} WEEKS LEFT`));
-    const cols = h('div', { class: 'fi-wk-cols' }, shown.map((k) => {
-      const list = p.weeks[k] || [];
-      const a = parseKey(k), b = new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6);
-      const n = numOf(k);
-      const after = k > lastWk, before = k < first;
-      return h('section', { class: ['fi-wk', k === now && 'is-now', k < now && 'is-past', after && 'is-after'], 'data-wk': k, 'aria-label': `Week ${n}${k === now ? ', this week' : ''}` },
-        h('header', { class: 'fi-wk-head', title: `${shortDate(a)} – ${shortDate(b)}` },
-          h('span', { class: 'fi-wk-row' },
-            h('span', { class: 'fi-wk-n' }, before ? 'BEFORE' : `WK ${n}`),
-            k === now ? h('span', { class: 'fi-wk-now' }, 'THIS WEEK')
-              : h('span', { class: 'fi-wk-date' }, after ? 'AFTER DEADLINE' : k === lastWk ? `DUE · ${shortDate(a).toUpperCase()}` : shortDate(a).toUpperCase())),
-          h('span', { class: 'fi-wk-dots', 'aria-label': `${list.filter((x) => x.done).length} of ${list.length} done` }, list.map((x) => h('i', { class: x.done ? 'is-done' : null })))),
-        h('div', { class: 'fi-wk-list' }, list.map((x) => taskRow(x, k))),
-        k < now ? null : adder(k));
-    }));
-    if (!shown.length) cols.append(h('p', { class: 'fi-wk-none' }, 'The deadline has passed. Set a new one to plan the next stretch.'));
-    const anchor = parseKey(keys.find((k) => k >= now) || lastWk);
-    const tray = h('section', { class: 'fi-wk-tray', 'data-wk': 'tray', 'aria-label': 'Tasks without a week' },
-      h('span', { class: 'fi-tray-label' }, 'NO WEEK YET'),
-      h('div', { class: 'fi-wk-list is-tray' }, p.tray.map((x) => taskRow(x, 'tray'))),
-      adder('tray'));
-    const pastDone = past.reduce((n, k) => n + (p.weeks[k] || []).length, 0);
-    const archiveBtn = past.length ? h('button', {
-      type: 'button', class: ['fi-archive', showArchive && 'is-open'], 'aria-expanded': String(showArchive),
-      onclick: () => { showArchive = !showArchive; scrolledWeek = false; renderWeekly(); },
-    }, icon(showArchive ? 'eyeOff' : 'history', 14), showArchive ? 'HIDE PAST WEEKS' : `ARCHIVE · ${past.length} WEEK${past.length === 1 ? '' : 'S'}${pastDone ? ` · ${pastDone} TASK${pastDone === 1 ? '' : 'S'}` : ''}`) : null;
+
+    const title = h('button', { class: 'fi-wk-name', type: 'button', title: 'Rename this week', onclick: () => editWeekTitle(title, k, p) },
+      (p.titles?.[k] || `WEEK ${n}`).toUpperCase());
+    const slots = Math.max(1, SLOT_HINTS.length - list.length);
+    const hintAt = (i) => SLOT_HINTS[Math.min(list.length + i, SLOT_HINTS.length - 1)];
+    const arrow = (d, label) => {
+      const to = keys[idx + d];
+      return h('button', {
+        type: 'button', class: ['fi-wk-arrow', d < 0 ? 'is-prev' : 'is-next'], disabled: !to,
+        'aria-label': label, title: to ? `${label} · ${shortDate(parseKey(to))}` : label,
+        'data-wk': to || null, onclick: () => stepWeek(d),
+      }, icon(d < 0 ? 'chevronLeft' : 'chevronRight', 18));
+    };
+    const card = h('section', {
+      class: ['fi-wk', 'fi-wk-card', k === now && 'is-now', k < now && 'is-past', k > lastWk && 'is-after'],
+      'data-wk': k, 'aria-label': `${p.titles?.[k] || `Week ${n}`}${k === now ? ', this week' : ''}`,
+    },
+      title,
+      h('p', { class: 'fi-wk-sub' }, 'WHAT’S NEEDED TO BE TRUE'),
+      h('div', { class: 'fi-wk-list' }, list.map((x) => taskRow(x, k))),
+      Array.from({ length: slots }, (_, i) => adder(k, hintAt(i), i === 0)));
+    const meta = h('p', { class: 'fi-wk-meta' },
+      `${shortDate(a).toUpperCase()} – ${shortDate(b).toUpperCase()}`,
+      k === now ? ' · THIS WEEK' : k > lastWk ? ' · AFTER DEADLINE' : k === lastWk ? ' · DUE WEEK' : k < now ? ' · PAST' : '');
+
     const look = weeklyLook();
     const bgUrl = look.bg ? urlOf(look.bg, () => tab === 'weekly' && refresh()) : null;
-    const lookBtn = h('button', { class: 'fi-look-btn', type: 'button', title: 'Background & theme', 'aria-label': 'Weekly background and theme', onclick: (e) => lookMenu(e.currentTarget) }, icon('image', 14));
-    stage.replaceChildren(h('div', {
+    const view = h('div', {
       class: ['fi-weekly', look.bg && 'has-bg'], 'data-wk-theme': look.theme || 'default',
       style: bgUrl ? { '--wk-img': `url("${bgUrl}")` } : null,
     },
-      h('div', { class: 'fi-wk-top' },
-        h('div', { class: 'fi-wk-title' }, h('b', { class: 'fi-ms' }, 'MILESTONE'), h('span', { class: 'fi-ms-month' }, anchor.toLocaleDateString(undefined, { month: 'long' }))),
-        h('div', { class: 'fi-wk-goalbox' }, goal, h('span', { class: 'fi-due-row' }, due, lookBtn))),
-      archiveBtn ? h('div', { class: 'fi-wk-bar' }, archiveBtn) : null,
-      cols, tray, selBar(p)));
-    if (keepX != null && scrolledWeek) cols.scrollLeft = keepX;
-    else if (showArchive) requestAnimationFrame(() => { const c = cols.querySelector('.fi-wk.is-now'); if (c) cols.scrollLeft = Math.max(0, c.offsetLeft - 8); });
-    scrolledWeek = true;
+      h('div', { class: 'fi-wk-top' }, goal, due),
+      h('div', { class: 'fi-wk-stage' }, arrow(-1, 'Previous week'), card, arrow(1, 'Next week')),
+      meta,
+      selBar(p));
+    // Background & theme now live on a right-click of the empty Weekly space.
+    view.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.fi-task, input, [contenteditable="true"]')) return;
+      e.preventDefault(); lookMenu({ x: e.clientX, y: e.clientY });
+    });
+    stage.replaceChildren(view);
+  }
+
+  function editWeekTitle(btn, k, p) {
+    const cur = p.titles?.[k] || '';
+    const inp = h('input', { class: 'fi-wk-name-input', value: cur, maxlength: 40, placeholder: btn.textContent, 'aria-label': 'Week title' });
+    btn.replaceWith(inp);
+    inp.focus(); inp.select();
+    let gone = false;
+    const done = (save) => {
+      if (gone) return; gone = true;
+      const v = inp.value.trim();
+      if (save && v !== cur) { const t = { ...(weekly().titles || {}) }; if (v) t[k] = v; else delete t[k]; setWeekly({ titles: t }); }
+      renderWeekly();
+    };
+    inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
+    inp.addEventListener('blur', () => done(true));
   }
 
   /* ---- Weekly look: your own background image and theme ---- */
@@ -922,8 +961,7 @@ export function mountFleeting(root, el0, w) {
     const first = keyOf(mondayOf(parseKey(p.start)));
     const n = (k) => Math.round((parseKey(k) - parseKey(first)) / (7 * 86_400_000)) + 1;
     return [{ header: 'Move to' },
-      ...planWeeks(p).filter((k) => k >= now).map((k) => ({ label: `${k === now ? 'This week' : `Week ${n(k)}`} · ${shortDate(parseKey(k))}`, icon: 'calendar', onSelect: () => moveSel(k) })),
-      { label: 'No week yet', icon: 'folder', onSelect: () => moveSel('tray') }];
+      ...planWeeks(p).filter((k) => k >= now).map((k) => ({ label: `${p.titles?.[k] || (k === now ? 'This week' : `Week ${n(k)}`)} · ${shortDate(parseKey(k))}`, icon: 'calendar', onSelect: () => moveSel(k) }))];
   }
   function moveMenu(anchor) { menu(anchor, moveItems(), { side: 'top' }); }
 
@@ -949,6 +987,9 @@ export function mountFleeting(root, el0, w) {
 
   stage.tabIndex = -1;
   stage.addEventListener('keydown', (e) => {
+    if (tab === 'weekly' && !e.target.closest('input, textarea, [contenteditable="true"]') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault(); e.stopPropagation(); stepWeek(e.key === 'ArrowLeft' ? -1 : 1); return;
+    }
     if (tab !== 'weekly' || !sel.size || e.target.closest('input, textarea, [contenteditable="true"]')) return;
     if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); e.stopPropagation(); deleteSel(); }
     else if (e.key === 'Escape') { e.stopPropagation(); sel.clear(); paintSel(); }
@@ -959,9 +1000,10 @@ export function mountFleeting(root, el0, w) {
     if (tab === 'weekly' && sel.size && !e.target.closest('.fi-task, .fi-sel-bar, .menu')) { sel.clear(); paintSel(); }
   });
 
-  function adder(wk) {
+  // An outlined slot: click it, type, Enter adds the requirement to this week.
+  function adder(wk, hint = 'add another requirement…', lead = true) {
     const inp = h('input', {
-      class: 'fi-add-input', maxlength: 160, placeholder: wk === 'tray' ? 'a task without a week…' : 'add a task…', 'aria-label': wk === 'tray' ? 'Add a task without a week' : `Add a task to week ${wk}`,
+      class: 'fi-add-input', maxlength: 160, placeholder: `+ ${hint}`, 'aria-label': `Add a requirement to week ${wk}`,
       onkeydown: (e) => {
         if (e.key === 'Escape') { e.target.value = ''; e.target.blur(); return; }
         if (e.key !== 'Enter' || !e.target.value.trim()) return;
@@ -972,10 +1014,10 @@ export function mountFleeting(root, el0, w) {
         pending = false;
         setWeekly(withList(p, wk, [...listOf(p, wk), { id: uid(), text, done: false }]));
         renderWeekly();
-        stage.querySelector(`[data-wk="${wk}"] .fi-add-input`)?.focus();
+        stage.querySelector(`.fi-wk-card[data-wk="${wk}"] .fi-add-input`)?.focus();
       },
     });
-    return h('label', { class: 'fi-add' }, icon('plus', 13), inp);
+    return h('label', { class: ['fi-add', 'fi-slot', lead && 'is-lead'] }, inp);
   }
 
   function editTask(span, x, wk) {

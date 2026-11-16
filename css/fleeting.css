@@ -491,3 +491,57 @@ body.fi-dragging, body.fi-dragging * { cursor: grabbing !important; }
     linear-gradient(160deg, #ffffff 0%, var(--s2) 50%, color-mix(in srgb, var(--s2) 85%, #000 10%) 100%);
 }
 [data-theme="light"] .vr-cat-name { text-shadow: none; }
+
+/* ---------------- Weekly · one week at a time (Nov 17) ---------------- */
+.fi-weekly { display: flex; flex-direction: column; align-items: center; gap: 0; padding: 22px 16px 22px; }
+.fi-weekly .fi-wk-top { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 10px; padding: 0; width: 100%; }
+.fi-weekly .fi-goal, .fi-weekly .fi-goal-input { text-align: center; max-width: 92%; font-size: 18px; }
+.fi-weekly .fi-goal-input { min-width: 240px; }
+.fi-weekly .fi-due { height: 26px; color: var(--fg-3); }
+.fi-wk-stage { display: grid; grid-template-columns: 40px minmax(0, 340px) 40px; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 24px; }
+.fi-wk-card {
+  min-height: 0; display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+  padding: 30px 22px 22px; border-radius: 18px; background: transparent; border: 1.5px solid var(--fg-2);
+  box-shadow: none; animation: fi-wk-in .22s var(--ease);
+}
+.fi-wk-card.is-now { border-color: var(--fg); box-shadow: none; background: transparent; }
+.fi-wk-card.is-past { opacity: .62; }
+.fi-wk-card.is-past:hover { opacity: .9; }
+.fi-wk-card.is-after { border-style: dashed; }
+.fi-wk-card.is-over { background: var(--s2); }
+@keyframes fi-wk-in { from { opacity: 0; transform: translateY(4px); } }
+.fi-wk-name, .fi-wk-name-input {
+  align-self: center; max-width: 100%; font-family: var(--f-dot); font-weight: 700; font-size: 32px; line-height: 1.1; letter-spacing: .04em;
+  color: var(--fg); background: transparent; border: 0; padding: 4px 8px; border-radius: 10px; text-align: center; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fi-wk-name:hover { background: var(--s2); }
+.fi-wk-name-input { cursor: text; outline: 1px solid var(--line-2); width: 100%; text-transform: uppercase; }
+.fi-wk-name-input::placeholder { color: var(--fg-4); }
+.fi-wk-sub { margin: 6px 0 12px; text-align: center; font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .1em; color: var(--fg-2); }
+.fi-wk-card .fi-wk-list { gap: 8px; flex: none; }
+.fi-wk-card .fi-wk-list:empty { display: none; }
+.fi-wk-card .fi-task, .fi-wk-card.is-now .fi-task { background: transparent; border: 1.5px solid var(--fg-3); border-radius: 10px; padding: 10px 12px; }
+.fi-wk-card .fi-task.is-done { background: transparent; border-color: var(--line-2); }
+.fi-wk-card .fi-task-text { font-size: 13.5px; }
+.fi-slot { opacity: 1; height: 42px; justify-content: center; padding: 0 12px; border: 1.5px solid var(--fg-3); border-radius: 10px; color: var(--fg-2); transition: border-color .15s, background .15s; }
+.fi-slot:hover { border-color: var(--fg-2); }
+.fi-slot:focus-within { border-color: var(--fg); background: var(--s2); }
+.fi-slot .fi-add-input { text-align: center; font-family: var(--f-mono); font-size: 12px; letter-spacing: .02em; }
+.fi-slot .fi-add-input::placeholder { color: var(--fg-2); opacity: .85; }
+.fi-slot:focus-within .fi-add-input { text-align: left; }
+.fi-slot:not(.is-lead) .fi-add-input::placeholder { opacity: .55; }
+.fi-wk-arrow { width: 40px; height: 64px; border-radius: 12px; display: grid; place-items: center; color: var(--fg-3); opacity: .35; cursor: pointer; transition: opacity .15s, color .15s, background .15s; }
+.fi-wk-arrow:hover:not(:disabled) { opacity: 1; color: var(--fg); background: var(--s2); }
+.fi-wk-arrow:disabled { opacity: 0; cursor: default; pointer-events: none; }
+.fi-wk-arrow.is-over { opacity: 1; color: var(--fg); background: var(--s3); }
+.fi-wk-meta { margin: 14px 0 0; font-family: var(--f-mono); font-size: 9.5px; letter-spacing: .1em; color: var(--fg-4); text-align: center; }
+.fi-weekly .fi-sel-bar { position: sticky; margin-top: 16px; }
+.fi-weekly.has-bg .fi-wk-card { background: color-mix(in srgb, var(--s2) 60%, transparent); backdrop-filter: blur(14px) saturate(1.1); -webkit-backdrop-filter: blur(14px) saturate(1.1); }
+.fi-weekly.has-bg .fi-wk-top { text-shadow: 0 1px 12px rgba(0,0,0,.6); }
+@media (max-width: 520px) {
+  .fi-wk-stage { grid-template-columns: 30px minmax(0, 1fr) 30px; gap: 2px; }
+  .fi-wk-arrow { width: 30px; }
+  .fi-wk-card { padding: 24px 14px 16px; }
+  .fi-wk-name, .fi-wk-name-input { font-size: 26px; }
+}

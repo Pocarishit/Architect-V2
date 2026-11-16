@@ -20,6 +20,7 @@ import { onEscapeFull } from '../core/guard.js';
 import { go } from '../core/router.js';
 import { askSource } from '../space/radio.js';
 import { labelOf } from '../space/chat.js';
+import { openEmergencyRoom, comboWatcher } from '../space/er.js';
 
 export function mountSpace(root) {
   const me = api.auth.current()?.user;
@@ -684,6 +685,7 @@ export function mountSpace(root) {
       { label: 'Chat', icon: 'chat', onSelect: () => addWidget('chat', at) },
       { label: 'Radio', icon: 'radio', onSelect: () => addWidget('radio', at) },
       { label: 'Say something out loud', icon: 'speaker', kbd: 'Enter', onSelect: () => sayBar() },
+      { label: 'Emergency Room', icon: 'flame', kbd: 'E+R', onSelect: () => openER() },
       { label: 'Widget…', icon: 'widget', onSelect: () => widgetPicker(at) },
       '-',
       { header: 'Move around' },
@@ -845,6 +847,19 @@ export function mountSpace(root) {
     return true;
   }
 
+  /* ---------------- Emergency Room (E + R) ---------------- */
+  let er = null;
+  let erTool = null;
+  const erCombo = comboWatcher();
+  function openER() {
+    if (er?.open || !editor()) return;
+    closeFloating();
+    bpWin?.close(); bpWin = null;
+    page.querySelector('.say-bar')?.remove();
+    er = openEmergencyRoom(page, { me, spaceId: () => ids.shared || (mode === 'shared' ? spaceId : null), onClose: () => { er = null; } });
+  }
+  offs.push(() => { er?.close(); erCombo.off(); });
+
   const onPointer = (e) => { lastPointer = { x: e.clientX, y: e.clientY }; };
   window.addEventListener('pointermove', onPointer, { passive: true });
   offs.push(() => window.removeEventListener('pointermove', onPointer));
@@ -854,6 +869,9 @@ export function mountSpace(root) {
     if (!ed || getSurface() || isTypingTarget(e.target) || document.querySelector('.dlg') || ed.editingId) return;
     if (e.target instanceof Element && e.target.closest('.wg-body')) return;
     if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); toggleSpace(); return; }
+    // E then R (or both together): walk into the Emergency Room. E alone still picks the eraser.
+    if (e.code === 'KeyE' && !e.repeat) erTool = ed.tool;
+    if (erCombo.test(e)) { e.preventDefault(); e.stopPropagation(); if (erTool) ed.setTool(erTool); openER(); return; }
     const combo = comboOf(e);
     const p = points().find((x) => x.key && x.key === combo);
     if (p) { e.preventDefault(); e.stopPropagation(); goTo(p); return; }

@@ -96,6 +96,7 @@ export function mountVariables(root, el0, w) {
   let dragging = false;
   let free = null; // Free View of the open chat, when it's on
   const freeBusy = () => !!free?.busy();
+  let finding = false, query = '', hit = 0; // the open chat's search bar
   const remember = () => store.set(memKey, { section, sub, open });
 
   const box = h('div', { class: 'vr' });
@@ -139,11 +140,12 @@ export function mountVariables(root, el0, w) {
       // Typing a note: refresh the messages in place, keep the composer (and your cursor) alone.
       const x = open && entries().find((e) => e.id === open);
       const list = box.querySelector('.vr-msgs');
-      if (x && free && x.free?.on) { free.update(x); return; }
+      if (x && free && x.free?.on) { free.update(x); markFind(false); return; }
       if (x && list && !x.free?.on) {
         const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
         list.replaceChildren(...msgRows(x));
-        if (atEnd) list.scrollTop = list.scrollHeight;
+        if (atEnd && !query) list.scrollTop = list.scrollHeight;
+        markFind(false);
       } else pending = true;
       return;
     }
@@ -157,8 +159,74 @@ export function mountVariables(root, el0, w) {
     free?.destroy(); free = null;
     box.replaceChildren(entry ? chat(entry) : grid(t));
     if (keep && !entry) box.querySelector('.vr-grid').scrollTop = keep;
-    if (entry && !free) requestAnimationFrame(() => { const l = box.querySelector('.vr-msgs'); if (l) l.scrollTop = l.scrollHeight; });
+    if (entry && !free && !query) requestAnimationFrame(() => { const l = box.querySelector('.vr-msgs'); if (l) l.scrollTop = l.scrollHeight; });
+    if (entry) requestAnimationFrame(() => markFind(false));
   }
+
+  /* ---------------- search the open chat ---------------- */
+  // Matching notes light up, the rest dim; Enter / the arrows step through them, oldest to newest.
+  function findIds() {
+    const x = open && entries().find((e) => e.id === open);
+    const q = query.trim().toLowerCase();
+    if (!x || !q) return [];
+    return (x.notes || []).filter((m) => `${m.text || ''} ${(m.files || []).map((f) => f.name || '').join(' ')}`.toLowerCase().includes(q)).map((m) => m.id);
+  }
+  function markFind(jump) {
+    const list = box.querySelector('.vr-msgs');
+    const count = box.querySelector('.vr-find-n');
+    if (!list) return;
+    const ids = findIds();
+    const on = finding && !!query.trim();
+    list.classList.toggle('is-finding', on);
+    const rows = new Map([...list.querySelectorAll('.sc-msg[data-id]')].map((r) => [r.dataset.id, r]));
+    for (const r of rows.values()) { r.classList.remove('is-hit', 'is-cur'); }
+    if (!on) { if (count) count.textContent = ''; return; }
+    for (const id of ids) rows.get(id)?.classList.add('is-hit');
+    if (count) count.textContent = ids.length ? `${Math.min(hit, ids.length - 1) + 1}/${ids.length}` : '0';
+    if (!ids.length) return;
+    hit = Math.max(0, Math.min(hit, ids.length - 1));
+    const cur = rows.get(ids[hit]);
+    if (!cur) return;
+    cur.classList.add('is-cur');
+    if (!jump) return;
+    // Scroll inside the chat only (the canvas around it may be zoomed).
+    const lr = list.getBoundingClientRect(), rr = cur.getBoundingClientRect();
+    const k = lr.width / (list.offsetWidth || 1) || 1;
+    list.scrollTop += (rr.top - lr.top) / k - list.clientHeight / 2 + rr.height / k / 2;
+    list.scrollLeft += Math.max(0, (rr.right - lr.right) / k + 24) - Math.max(0, (lr.left - rr.left) / k + 24);
+  }
+  function stepFind(d) {
+    const n = findIds().length;
+    if (!n) return;
+    hit = (hit + d + n) % n;
+    markFind(true);
+  }
+  function findBar() {
+    const inp = h('input', {
+      class: 'vr-find-input', type: 'search', placeholder: 'Search this chat', value: query, spellcheck: false, 'aria-label': 'Search this chat',
+      oninput: (e) => { query = e.target.value; const n = findIds().length; hit = Math.max(0, n - 1); markFind(true); }, // start from the newest match
+      onkeydown: (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); stepFind(e.shiftKey ? 1 : -1); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); }
+      },
+      onfocus: () => { busy = true; },
+      onblur: () => { busy = false; if (pending) setTimeout(render, 0); },
+    });
+    const bar = h('div', { class: 'vr-find', role: 'search' },
+      icon('search', 14),
+      inp,
+      h('span', { class: 'vr-find-n', 'aria-live': 'polite' }),
+      h('button', { class: 'vr-find-btn', type: 'button', 'aria-label': 'Older match', title: 'Older match (Enter)', onclick: () => stepFind(-1) }, icon('chevronUp', 14)),
+      h('button', { class: 'vr-find-btn', type: 'button', 'aria-label': 'Newer match', title: 'Newer match (Shift+Enter)', onclick: () => stepFind(1) }, icon('chevronDown', 14)),
+      h('button', { class: 'vr-find-btn', type: 'button', 'aria-label': 'Close search', title: 'Close (Esc)', onclick: () => closeFind() }, icon('close', 14)));
+    requestAnimationFrame(() => { if (finding && !query) inp.focus(); });
+    return bar;
+  }
+  function openFind() {
+    if (finding) { box.querySelector('.vr-find-input')?.focus(); return; }
+    finding = true; query = ''; hit = 0; render();
+  }
+  function closeFind() { finding = false; query = ''; hit = 0; busy = false; render(); }
 
   /* ---------------- sections + grid ---------------- */
   function grid(t) {
@@ -231,7 +299,7 @@ export function mountVariables(root, el0, w) {
     return node;
   }
 
-  function openEntry(id) { open = id; draft = ''; remember(); render(); }
+  function openEntry(id) { open = id; draft = ''; finding = false; query = ''; hit = 0; remember(); render(); }
 
   function renameInline(span, x) {
     if (span.isContentEditable) return;
@@ -488,14 +556,16 @@ export function mountVariables(root, el0, w) {
       onclick: () => patchEntry(x.id, (e) => ({ free: { pos: {}, links: [], ink: [], ...(e.free || {}), on: !fvOn } })),
     }, h('i'), 'FREE VIEW');
     const head = h('div', { class: 'vr-chat-head' },
-      h('button', { class: 'vr-back', type: 'button', 'aria-label': 'Back to variables', onclick: () => { open = null; remember(); render(); } }, icon('chevronLeft', 16)),
+      h('button', { class: 'vr-back', type: 'button', 'aria-label': 'Back to variables', onclick: () => { open = null; finding = false; query = ''; remember(); render(); } }, icon('chevronLeft', 16)),
       x.photo ? h('span', { class: 'vr-mini-face' }, urlOf(x.photo, render) ? h('img', { src: urlOf(x.photo), alt: '' }) : null) : null,
       h('span', { class: 'vr-chat-name' }, x.name),
       h('span', { class: 'vr-chat-sec' }, pathOf(x.section)),
       free ? free.tools : null,
+      h('button', { class: ['vr-find-toggle', finding && 'is-on'], type: 'button', 'aria-label': 'Search this chat', 'aria-pressed': String(finding), title: 'Search this chat', onclick: () => (finding ? closeFind() : openFind()) }, icon('search', 15)),
       toggle,
       h('button', { class: 'vr-card-more', type: 'button', 'aria-label': 'Options', onclick: (e) => entryMenu(e.currentTarget, x) }, icon('more', 14)));
     const wrap = h('div', { class: ['vr-chat is-sc', fvOn && 'is-free'] }, head,
+      finding ? findBar() : null,
       free ? free.el : h('div', { class: 'vr-msgs sc-list', role: 'log' }, msgRows(x)),
       h('div', { class: 'vr-compose sc-compose' },
         h('button', { class: ['sc-plus', sending && 'is-busy'], type: 'button', 'aria-label': 'Add a photo', disabled: sending, onclick: async () => { const fs = await pickMedia({ accept: 'image/*,video/*' }); if (fs.length) sendFiles(x.id, fs); } },

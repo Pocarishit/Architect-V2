@@ -723,3 +723,26 @@ body.fi-dragging .fi-wk-arrow.is-over { opacity: 1; }
 .vr-fv-capture { position: absolute; inset: 0; z-index: 5; display: none; touch-action: none; }
 .vr-fv-board[data-tool="link"] .vr-fv-capture { display: block; cursor: alias; }
 .vr-fv-board[data-tool="pen"] .vr-fv-capture, .vr-fv-board[data-tool="arrow"] .vr-fv-capture { display: block; cursor: crosshair; }
+
+/* Story → Tracker side button (Nov 18): the calendar opens from Story instead of its own tab. */
+.fi-cal-btn { margin-left: 4px; }
+.fi-cal-btn.is-on { background: var(--fg); color: var(--bg); }
+.fi-cal-btn.is-on:hover { background: var(--fg); color: var(--bg); opacity: .85; }
+
+/* Free view anchoring (Nov 18): a moved message leaves an invisible placeholder in the column. */
+.vr-fv-flow .vr-fv-ghost { visibility: hidden; pointer-events: none; }
+
+/* Variables chat search (Nov 18): magnifier in the header, a slim bar under it. */
+.vr-find-toggle { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--fg-3); cursor: pointer; transition: color .12s, background .12s; }
+.vr-find-toggle:hover { background: var(--s3); color: var(--fg); }
+.vr-find-toggle.is-on { background: var(--fg); color: var(--bg); }
+.vr-find { flex: none; display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line); color: var(--fg-3); }
+.vr-find-input { flex: 1; min-width: 0; height: 28px; border: 0; outline: 0; background: transparent; color: var(--fg); font-family: var(--f-sans); font-size: 13px; }
+.vr-find-input::placeholder { color: var(--fg-3); }
+.vr-find-input::-webkit-search-cancel-button { display: none; }
+.vr-find-n { flex: none; min-width: 34px; text-align: right; font-family: var(--f-mono); font-size: 10px; letter-spacing: .06em; color: var(--fg-3); }
+.vr-find-btn { flex: none; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; color: var(--fg-3); cursor: pointer; }
+.vr-find-btn:hover { background: var(--s3); color: var(--fg); }
+.vr-msgs.is-finding .sc-msg[data-id] { opacity: .22; transition: opacity .15s; }
+.vr-msgs.is-finding .sc-msg.is-hit { opacity: 1; }
+.vr-msgs.is-finding .sc-msg.is-cur .sc-bubble { outline: 1.5px solid var(--fg); outline-offset: 2px; }

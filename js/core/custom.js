@@ -11,6 +11,8 @@ export const safeMode = () => !!getPref('safeMode', false) || /[?&]safe\b/.test(
 
 export async function applyCustom({ rerunJs = false } = {}) {
   try { await loadPrefs(); } catch {}
+  // Self-cleaning: reading the release history trims anything past the last few versions.
+  releases().catch(() => {});
   const safe = safeMode();
   let style = document.getElementById('architect-custom-css');
   if (!style) { style = document.createElement('style'); style.id = 'architect-custom-css'; document.head.append(style); }

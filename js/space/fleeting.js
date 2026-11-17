@@ -1,4 +1,4 @@
-// Fleeting Ideas — one object, four tabs.
+// Fleeting Ideas — one object, three tabs (the Tracker calendar opens from a button in Story).
 //   Ideas    an open canvas: type at the bottom and the idea drifts around like a screensaver.
 //            Grab one and it freezes; drop it on the canvas to park it, or on your Path to make it a task.
 //   Story    the day as a timeline (GM → Afternoon → Nighttime → Second Wind → new morning).
@@ -70,7 +70,7 @@ const glassOf = (id) => { const n = hashOf(id); return { hue: GLASS_HUES[n % GLA
 const tf = (x, y, tilt = 0, lift = false) => `translate(${x}px, ${y}px) rotate(${lift ? 0 : tilt}deg)${lift ? ' scale(1.04)' : ''}`;
 const fold = (v) => { v = ((v % 2) + 2) % 2; return v > 1 ? 2 - v : v; };
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
-const TABS = [['ideas', 'Ideas'], ['story', 'Story'], ['tracker', 'Tracker'], ['weekly', 'Weekly']];
+const TABS = [['ideas', 'Ideas'], ['story', 'Story'], ['weekly', 'Weekly']];
 const DEFAULT_GOAL = 'Rona’s Apartment';
 // Weekly looks — yours alone (saved to your account prefs), so everyone can plan on their own backdrop.
 const WK_THEMES = [
@@ -88,13 +88,16 @@ export function mountFleeting(root, el0, w) {
   const me = api.auth.current()?.user;
   const memKey = `architect.fi.${el.id}`;
   const mem = store.get(memKey, {});
-  let tab = TABS.some(([id]) => id === mem.tab) ? mem.tab : 'ideas';
+  // Tracker used to be a tab: anyone who left it open lands in Story with the calendar showing.
+  let tab = mem.tab === 'tracker' ? 'story' : TABS.some(([id]) => id === mem.tab) ? mem.tab : 'ideas';
+  let cal = mem.tab === 'tracker' || !!mem.cal; // Story's calendar (the Tracker) is open
   let day = storyKey();
   let month = (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })();
   let hold = 0;          // > 0 while dragging or editing: remote updates wait
   let pending = false;
   let uploads = [];      // story fragments still uploading (this device only)
-  const remember = () => store.set(memKey, { tab });
+  const remember = () => store.set(memKey, { tab, cal });
+  const view = () => (tab === 'story' && cal ? 'tracker' : tab);
 
   const tabsRow = h('div', { class: 'fi-tabs', role: 'tablist' });
   const aside = h('div', { class: 'fi-aside' });
@@ -145,7 +148,7 @@ export function mountFleeting(root, el0, w) {
   /* ---------------- shell ---------------- */
   function setTab(id) {
     if (tab === id) return;
-    tab = id; remember();
+    tab = id; cal = false; remember();
     paint();
   }
 
@@ -154,24 +157,34 @@ export function mountFleeting(root, el0, w) {
       type: 'button', role: 'tab', class: ['fi-tab', tab === id && 'is-on'], 'aria-selected': String(tab === id),
       onclick: () => setTab(id),
     }, label)));
+    const v = view();
     box.dataset.tab = tab;
-    composer.hidden = !(tab === 'ideas' || tab === 'story');
+    composer.hidden = !(v === 'ideas' || v === 'story');
     attach.hidden = tab !== 'story';
     input.placeholder = tab === 'story' ? (day === storyKey() ? 'narrate this moment…' : `add to ${shortDate(parseKey(day))}…`) : 'type an idea…';
     input.setAttribute('aria-label', tab === 'story' ? 'Narrate a moment' : 'Type an idea');
-    aside.replaceChildren(...(tab === 'story' ? dayNav() : []));
+    aside.replaceChildren(...(tab === 'story' ? [...(cal ? [] : dayNav()), calBtn()] : []));
     stopIdeas();
     stage.replaceChildren();
     stage.scrollTop = 0;
-    stage.className = `fi-stage is-${tab}`;
-    if (tab === 'ideas') mountIdeas();
-    else if (tab === 'story') {
+    stage.className = `fi-stage is-${v}`;
+    if (v === 'ideas') mountIdeas();
+    else if (v === 'story') {
       renderStory();
       // Today opens around the current moment; other days open at first light.
       if (day === storyKey()) stage.scrollTop = Math.max(0, PT + (storyMin() / 1440) * Number(tl.dataset.th) - stage.clientHeight * 0.45);
     }
-    else if (tab === 'tracker') renderTracker();
+    else if (v === 'tracker') renderTracker();
     else renderWeekly();
+  }
+
+  // Story's side button: flips the stage between the day's timeline and the month calendar.
+  function calBtn() {
+    return h('button', {
+      type: 'button', class: ['fi-nav', 'fi-cal-btn', cal && 'is-on'], 'aria-pressed': String(cal),
+      'aria-label': cal ? 'Back to the story' : 'Open the tracker', title: cal ? 'Back to the story' : 'Tracker — the month at a glance',
+      onclick: () => { cal = !cal; if (cal) { const d = parseKey(day); month = new Date(d.getFullYear(), d.getMonth(), 1); } remember(); paint(); },
+    }, icon('calendar', 16));
   }
 
   function refresh() {
@@ -179,9 +192,10 @@ export function mountFleeting(root, el0, w) {
     const a = document.activeElement;
     if (a && stage.contains(a) && a.matches('input, textarea, [contenteditable="true"]')) { pending = true; return; }
     pending = false;
-    if (tab === 'ideas') syncIdeas();
-    else if (tab === 'story') renderStory();
-    else if (tab === 'tracker') renderTracker();
+    const v = view();
+    if (v === 'ideas') syncIdeas();
+    else if (v === 'story') renderStory();
+    else if (v === 'tracker') renderTracker();
     else renderWeekly();
   }
   const release = () => { hold = Math.max(0, hold - 1); if (!hold && pending) setTimeout(refresh, 0); };
@@ -874,7 +888,7 @@ export function mountFleeting(root, el0, w) {
 
   // Drop photos/videos where they belong on the line.
   stage.addEventListener('dragover', (e) => {
-    if (tab !== 'story' && tab !== 'ideas') return;
+    if (view() !== 'story' && view() !== 'ideas') return; // not onto the open calendar
     if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
@@ -922,7 +936,7 @@ export function mountFleeting(root, el0, w) {
         style: sp ? { '--sp': sp.color } : null,
         title: sp ? `${list.length} fragment${list.length === 1 ? '' : 's'} · mostly ${sp.label}` : k === today ? 'Today — still being written' : 'Untold',
         'aria-label': `${d.toDateString()}${sp ? `, told, mostly ${sp.label}` : ', untold'}`,
-        onclick: () => { day = k; setTab('story'); },
+        onclick: () => { day = k; cal = false; remember(); paint(); },
       }, String(d.getDate())));
     }
     const told = cells.filter((c) => c.classList?.contains('is-told')).length;

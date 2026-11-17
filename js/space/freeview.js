@@ -3,7 +3,9 @@
 //   Link    drag from one message to another to connect them.
 //   Pen     scribble. Arrow: scribble with an arrowhead at the end.
 //   Erase   click a link or a drawing to remove it.
-// New messages still land in the column; each carries a handle so you can pull it aside right away.
+// Every message keeps its spot: one you pull out leaves an invisible placeholder in the column, so the
+// rest never slide up to fill the gap (double-click its handle and it goes back into that same slot).
+// New messages land at the end of the column — the bottom of the conversation — with a handle ready.
 // Layout lives on the entry: free = { on, pos: { msgId: {x, y} }, links: [{ id, a, b }], ink: [{ id, pts, arrow }] }.
 import { h, s } from '../core/dom.js';
 import { icon } from '../core/icons.js';
@@ -45,10 +47,14 @@ export function mountFreeView(o) {
     const f = free();
     const notes = x.notes || [];
     const pinned = notes.filter((m) => f.pos[m.id]);
-    const loose = notes.filter((m) => !f.pos[m.id]);
     items.clear();
-    flow = h('div', { class: 'vr-fv-flow' }, o.flowRows(loose));
-    for (const row of flow.querySelectorAll('.sc-msg[data-id]')) { items.set(row.dataset.id, row); addGrip(row, row.dataset.id); }
+    // The column holds every message in order; the ones you've moved out stay as invisible
+    // placeholders, so nothing slides up and new messages always arrive at the bottom.
+    flow = h('div', { class: 'vr-fv-flow' }, o.flowRows(notes));
+    for (const row of [...flow.querySelectorAll('.sc-msg[data-id]')]) {
+      if (f.pos[row.dataset.id]) ghost(row);
+      else { items.set(row.dataset.id, row); addGrip(row, row.dataset.id); }
+    }
     const placed = pinned.map((m) => {
       const row = o.one(m);
       const wrap = h('div', { class: 'vr-fv-item', 'data-id': m.id, style: { left: `${f.pos[m.id].x}px`, top: `${f.pos[m.id].y}px` } }, row);
@@ -60,6 +66,15 @@ export function mountFreeView(o) {
     board.dataset.tool = tool;
     paintTools();
     requestAnimationFrame(() => { size(); draw(); });
+  }
+
+  // Keep a message's slot in the column without showing it (or letting it be clicked / linked).
+  function ghost(row) {
+    row.classList.add('vr-fv-ghost');
+    row.removeAttribute('data-id');
+    row.setAttribute('aria-hidden', 'true');
+    row.inert = true;
+    return row;
   }
 
   function addGrip(row, id) {
@@ -181,8 +196,9 @@ export function mountFreeView(o) {
       if (!moved && Math.hypot(p.x - start.x, p.y - start.y) < 3) return;
       if (!moved) {
         moved = true;
-        if (!wrap) { // pull it out of the column, right where it is
+        if (!wrap) { // pull it out of the column, right where it is — its slot stays put
           const gx = row.querySelector('.vr-fv-grip')?.offsetWidth || 0;
+          row.before(ghost(row.cloneNode(true)));
           wrap = h('div', { class: 'vr-fv-item', 'data-id': id, style: { left: `${r0.x - gx}px`, top: `${r0.y}px` } });
           board.insertBefore(wrap, capture);
           wrap.append(row);

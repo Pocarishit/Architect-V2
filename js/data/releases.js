@@ -1,15 +1,35 @@
 // Versioned updates for your custom CSS / JS ("push updates and fixes") with rollback.
-// Every push is a numbered release kept in your prefs (last 30). The first push also keeps
-// a v0 snapshot of what you had before, so you can always get back to it.
-// The Local API does the same server-side: updates.push / updates.list / updates.rollback.
+// Every push is a numbered release kept in your prefs — only the last few (KEEP), plus the v0 snapshot
+// of what you had before the first push. Older ones are pruned on every push, and an oversized history
+// left over from before (it used to keep 30, which bloated the prefs row to megabytes) trims itself the
+// first time it's read. The Local API does the same server-side: updates.push / updates.list / updates.rollback.
 import { getPref, setPref, loadPrefs } from './prefs.js';
 
-const KEEP = 30;
+const KEEP = 5; // newest releases kept (the v0 snapshot rides along on top)
 
+// Oldest-first list → v0 snapshot + the newest KEEP, and never drops the active version.
+function prune(all, active = null) {
+  const sorted = [...all].sort((a, b) => a.v - b.v);
+  const snap = sorted.find((r) => r.v === 0);
+  const rest = sorted.filter((r) => r.v !== 0);
+  let kept = rest.slice(-KEEP);
+  const act = active != null && rest.find((r) => r.v === active);
+  if (act && !kept.includes(act)) kept = [act, ...kept.slice(1)];
+  return [...(snap ? [snap] : []), ...kept].sort((a, b) => a.v - b.v);
+}
+
+let trimming = null;
 export async function releases() {
   await loadPrefs().catch(() => {});
-  const list = Array.isArray(getPref('releases', null)) ? getPref('releases', []) : [];
-  return { list: [...list].sort((a, b) => b.v - a.v), active: getPref('releaseActive', null) };
+  let list = Array.isArray(getPref('releases', null)) ? getPref('releases', []) : [];
+  const active = getPref('releaseActive', null);
+  const lean = prune(list, active);
+  if (lean.length < list.length) {
+    // Self-cleaning: a history saved before the cap gets cut down once, quietly.
+    list = lean;
+    trimming ||= setPref('releases', lean).catch(() => {}).finally(() => { trimming = null; });
+  }
+  return { list: [...list].sort((a, b) => b.v - a.v), active };
 }
 
 export async function pushRelease({ css, js, note = '', source = 'app' } = {}) {
@@ -19,8 +39,7 @@ export async function pushRelease({ css, js, note = '', source = 'app' } = {}) {
   if (!all.length) all.push({ v: 0, css: curCss, js: curJs, note: 'Before the first update', source: 'snapshot', at: new Date().toISOString() });
   const v = Math.max(...all.map((r) => r.v)) + 1;
   const rel = { v, css: css ?? curCss, js: js ?? curJs, note: String(note || '').slice(0, 200), source, at: new Date().toISOString() };
-  all.push(rel);
-  if (all.length > KEEP) all = [all[0], ...all.slice(-(KEEP - 1))]; // the v0 snapshot always stays
+  all = prune([...all, rel], v);
   await setPref('releases', all);
   await setPref('customCss', rel.css);
   await setPref('customJs', rel.js);

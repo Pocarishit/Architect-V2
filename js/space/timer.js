@@ -13,7 +13,7 @@ const DOTS = 60;
 const MAX = 99 * 3600 + 59 * 60 + 59;
 const DAY_START = 7 * 60; // the story/setpoint day runs 7AM → 7AM
 const MODES = [['timer', 'Timer'], ['watch', 'Stopwatch'], ['setpoint', 'Setpoint']];
-const PRESETS = [[5, '5M'], [15, '15M'], [25, '25M'], [45, '45M'], [60, '1H'], [90, '90M']];
+const PRESETS = [[15, '15M'], [60, '1H'], [120, '2H'], [240, '4H'], [600, '10H'], [1800, '30H']];
 const pad = (n) => String(n).padStart(2, '0');
 const split = (sec) => [Math.floor(sec / 3600), Math.floor((sec % 3600) / 60), Math.floor(sec % 60)];
 const fmtWatch = (ms) => { const [hh, m, sec] = split(ms / 1000); return `${hh ? `${hh}:` : ''}${pad(m)}:${pad(sec)}.${pad(Math.floor((ms % 1000) / 10))}`; };
@@ -88,9 +88,9 @@ export function mountTimer(root, el0, w) {
   }
   // Builds the segments only when the layout changes (so a focused segment keeps focus while you type),
   // then just updates their numbers.
-  function paintDigits(sec, editable) {
-    const [hh, m, ss] = split(Math.max(0, Math.ceil(sec)));
-    const showH = editable || hh > 0;
+  function paintDigits(sec, editable, floor = false) {
+    const [hh, m, ss] = split(Math.max(0, floor ? Math.floor(sec) : Math.ceil(sec)));
+    const showH = true; // always HH:MM:SS — built for long sessions (up to 99h)
     const shape = `${editable}|${showH}`;
     if (shape !== lastHtml) {
       lastHtml = shape;
@@ -103,18 +103,11 @@ export function mountTimer(root, el0, w) {
       if (!n) continue;
       const t = pad(v);
       if (n.textContent !== t) n.textContent = t;
-      n.classList.toggle('is-zero', editable && u === 'h' && !v);
       if (editable) n.setAttribute('aria-valuenow', String(v));
     }
     digits.classList.toggle('is-edit', editable);
     digits.classList.toggle('is-long', showH);
   }
-  function paintText(t) {
-    if (t !== lastHtml) { digits.textContent = t; lastHtml = t; }
-    digits.classList.remove('is-edit');
-    digits.classList.toggle('is-long', true);
-  }
-
   function frame() {
     raf = requestAnimationFrame(frame);
     if (document.hidden || !box.isConnected) return;
@@ -129,13 +122,13 @@ export function mountTimer(root, el0, w) {
       const frac = t.set ? left / t.set : 0;
       paintRing(done ? 0 : frac, running ? Math.max(0, Math.round(frac * DOTS) - 1) : -1);
       text = done ? 'Time' : running ? 'Running' : t.left < t.set ? 'Paused' : 'Set';
-      if (running) subTxt = `ends ${clock12(new Date(t.end))}`;
+      if (running) { const e = new Date(t.end), today = new Date().toDateString() === e.toDateString(); subTxt = `ends ${today ? '' : `${e.toLocaleDateString(undefined, { weekday: 'short' })} `}${clock12(e)}`; }
       if (running) { const mLeft = Math.ceil(left / 60); if (mLeft !== announced) { announced = mLeft; live.textContent = `${mLeft} minute${mLeft === 1 ? '' : 's'} left`; } }
       if (done && chimed !== t.end) { chimed = t.end; if (now() - t.end < 15_000) { live.textContent = 'Time is up'; chime(); } }
     } else if (t.mode === 'watch') {
       const ms = watchMs(t);
       running = !!t.wStart;
-      paintText(fmtWatch(ms));
+      paintDigits(ms / 1000, false, true);
       const sec = Math.floor(ms / 1000) % 60;
       paintRing(ms ? (sec + 1) / DOTS : 0, running ? sec : -1);
       text = running ? 'Running' : ms ? 'Paused' : 'Stopwatch';

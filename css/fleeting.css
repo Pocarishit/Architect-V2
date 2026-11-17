@@ -746,3 +746,168 @@ body.fi-dragging .fi-wk-arrow.is-over { opacity: 1; }
 .vr-msgs.is-finding .sc-msg[data-id] { opacity: .22; transition: opacity .15s; }
 .vr-msgs.is-finding .sc-msg.is-hit { opacity: 1; }
 .vr-msgs.is-finding .sc-msg.is-cur .sc-bubble { outline: 1.5px solid var(--fg); outline-offset: 2px; }
+
+/* ============================================================
+   Nov 18 — Fleeting Ideas: one Ideas, two views, influence colours
+   ============================================================ */
+
+/* View option beside the tabs: Mine · Shared */
+.fi-views { display: inline-flex; gap: 1px; padding: 2px; border-radius: 10px; background: var(--s2); }
+.fi-view {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border: 0; border-radius: 8px;
+  background: transparent; cursor: pointer; color: var(--fg-3);
+  font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; transition: color .12s, background .12s;
+}
+.fi-view:hover { color: var(--fg-2); }
+.fi-view.is-on { color: var(--fg); background: var(--s3); }
+.fi-view:focus-visible { outline: 1px solid var(--fg-3); outline-offset: 1px; }
+@media (max-width: 520px) { .fi-view span { display: none; } .fi-view { padding: 0 8px; } }
+
+/* The influence split: amber external on the left, violet internal on the right */
+.fi-zones { position: absolute; inset: 6px 16px 0; display: grid; grid-template-columns: 1fr 1fr; pointer-events: none; border-radius: 14px; overflow: hidden; }
+.fi-zone { position: relative; }
+.fi-zone.is-ext { background: radial-gradient(90% 70% at 0% 100%, hsl(36 90% 55% / .10), transparent 70%), linear-gradient(90deg, hsl(36 80% 50% / .05), transparent); }
+.fi-zone.is-int { background: radial-gradient(90% 70% at 100% 100%, hsl(268 85% 62% / .11), transparent 70%), linear-gradient(270deg, hsl(268 70% 55% / .05), transparent); }
+.fi-zone.is-int::before { /* the divider */
+  content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 1px;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--fg) 16%, transparent) 18%, color-mix(in srgb, var(--fg) 16%, transparent) 82%, transparent);
+}
+.fi-zone-label { position: absolute; top: 10px; font-family: var(--f-dot, var(--f-mono)); font-weight: 700; font-size: 11px; letter-spacing: .22em; }
+.fi-zone.is-ext .fi-zone-label { left: 14px; color: hsl(38 85% 62% / .55); }
+.fi-zone.is-int .fi-zone-label { right: 14px; color: hsl(268 80% 74% / .55); }
+.fi-field { z-index: 1; }
+.fi-field .fi-empty { position: relative; z-index: 1; }
+[data-theme="light"] .fi-zone.is-ext .fi-zone-label { color: hsl(34 80% 38% / .7); }
+[data-theme="light"] .fi-zone.is-int .fi-zone-label { color: hsl(268 55% 45% / .7); }
+
+/* Ideas take their colour from the side they live on; crossing the divider shifts the glass smoothly. */
+@property --fh { syntax: '<number>'; inherits: true; initial-value: 268; }
+.fi-idea { --fh: var(--hi, 268); --h: var(--fh); transition: --fh .55s var(--ease), box-shadow .18s var(--ease), border-color .18s var(--ease), filter .18s var(--ease); }
+.fi-idea[data-side="ext"] { --fh: var(--he, 36); }
+.fi-idea[data-side="int"] { --fh: var(--hi, 268); }
+.fi-idea.is-held { transition: --fh .35s var(--ease); }
+
+/* ============================================================
+   Nov 18 — Variables: glass subsections
+   Beveled glass with light catching the top-left corner, a bright lit edge in the section's own colour
+   and a soft glow lifting it off the board. No flat accent bar: the colour carries the identity.
+   ============================================================ */
+.vr-cat {
+  --g: var(--h, 210);
+  align-items: center; justify-content: center; text-align: center;
+  padding: 18px; border-radius: 16px; color: #fff;
+  background:
+    radial-gradient(120% 140% at 0% 0%, hsl(var(--g) 90% 82% / .34), transparent 46%),
+    linear-gradient(158deg, hsl(var(--g) 50% 34% / .9) 0%, hsl(var(--g) 44% 19% / .93) 52%, hsl(var(--g) 40% 10% / .96) 100%);
+  border: 1px solid hsl(var(--g) 85% 74% / .55);
+  box-shadow:
+    inset 0 1px 0 hsl(var(--g) 95% 90% / .55),
+    inset 1px 0 0 hsl(var(--g) 90% 86% / .22),
+    inset 0 -2px 0 rgba(0, 0, 0, .4),
+    inset -1px 0 0 rgba(0, 0, 0, .25),
+    0 0 30px -8px hsl(var(--g) 90% 60% / .6),
+    0 18px 32px -18px rgba(0, 0, 0, .9);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2); backdrop-filter: blur(10px) saturate(1.2);
+  transition: box-shadow .2s var(--ease), border-color .2s var(--ease), transform .2s var(--ease), filter .2s var(--ease);
+}
+.vr-cat::before { content: none; } /* the flat accent bar is gone */
+.vr-cat::after {
+  content: ''; position: absolute; top: -30px; left: -30px; right: auto; width: 110px; height: 110px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, .22), transparent 65%); opacity: 1; filter: blur(8px); pointer-events: none;
+}
+.vr-cat:hover {
+  transform: translateY(-2px);
+  background:
+    radial-gradient(120% 140% at 0% 0%, hsl(var(--g) 95% 86% / .44), transparent 50%),
+    linear-gradient(158deg, hsl(var(--g) 52% 38% / .92) 0%, hsl(var(--g) 46% 22% / .94) 52%, hsl(var(--g) 40% 11% / .96) 100%);
+  border-color: hsl(var(--g) 90% 80% / .75);
+  box-shadow:
+    inset 0 1px 0 hsl(var(--g) 95% 92% / .65),
+    inset 1px 0 0 hsl(var(--g) 90% 86% / .25),
+    inset 0 -2px 0 rgba(0, 0, 0, .4),
+    0 0 40px -6px hsl(var(--g) 90% 62% / .75),
+    0 24px 38px -18px rgba(0, 0, 0, .9);
+}
+.vr-cat:active { transform: translateY(0); filter: brightness(.95); }
+.vr-cat:focus-visible { outline: none; box-shadow: 0 0 0 1.5px #fff, 0 0 34px -6px hsl(var(--g) 90% 62% / .7); }
+.vr-cat-name { position: relative; z-index: 1; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .5); }
+.vr-cat small { position: absolute; z-index: 1; right: 12px; bottom: 10px; color: hsl(var(--g) 70% 86% / .8); }
+.vr-cat.is-drop-in { outline: 1.5px dashed #fff; outline-offset: 3px; border-radius: 16px; }
+[data-theme="light"] .vr-cat {
+  color: hsl(var(--g) 45% 16%);
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(255, 255, 255, .95), transparent 55%),
+    linear-gradient(158deg, hsl(var(--g) 85% 93% / .96), hsl(var(--g) 70% 80% / .96));
+  border-color: hsl(var(--g) 65% 60% / .55);
+  box-shadow: inset 0 1px 0 #fff, inset 0 -2px 0 hsl(var(--g) 40% 50% / .18), 0 0 22px -8px hsl(var(--g) 80% 55% / .55), 0 12px 22px -14px rgba(0, 0, 0, .35);
+}
+[data-theme="light"] .vr-cat-name { color: hsl(var(--g) 45% 16%); text-shadow: none; }
+[data-theme="light"] .vr-cat small { color: hsl(var(--g) 40% 30% / .7); }
+
+/* ============================================================
+   Nov 18 — Variables: Free View grows teeth
+   ============================================================ */
+.vr-msgs.vr-fv:focus { outline: none; }
+.vr-fv-tool.is-danger:hover { color: var(--red); }
+.vr-fv-selbar { display: inline-flex; align-items: center; gap: 1px; margin-left: 4px; padding-left: 6px; border-left: 1px solid var(--line-2); }
+.vr-fv-selbar b { min-width: 18px; padding: 0 4px; font-family: var(--f-mono); font-weight: 400; font-size: 10.5px; color: var(--fg); text-align: center; }
+
+/* Selection window + what it caught */
+.vr-fv-marquee { position: absolute; z-index: 7; pointer-events: none; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--fg) 55%, transparent); background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.sc-msg.is-fv-picked .sc-bubble { box-shadow: 0 0 0 1.5px var(--fg), 0 0 18px -4px color-mix(in srgb, var(--fg) 40%, transparent); }
+.vr-fv-board[data-tool="move"] { cursor: default; }
+
+/* Boxes and circles */
+.vr-fv-svg rect, .vr-fv-svg ellipse { fill: none; stroke: var(--fg); stroke-width: 1.8; stroke-linejoin: round; }
+.vr-fv-svg rect.hit, .vr-fv-svg ellipse.hit { stroke: transparent; stroke-width: 16; }
+.vr-fv-svg g[data-shape] { pointer-events: stroke; }
+.vr-fv-board[data-tool="move"] .vr-fv-svg g[data-shape] { cursor: move; }
+.vr-fv-svg g[data-shape]:hover rect:not(.hit), .vr-fv-svg g[data-shape]:hover ellipse:not(.hit) { stroke-width: 2.4; }
+.vr-fv-svg g.is-picked rect:not(.hit), .vr-fv-svg g.is-picked ellipse:not(.hit) { stroke-dasharray: 6 4; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--fg) 45%, transparent)); }
+.vr-fv-shape.is-live rect, .vr-fv-shape.is-live ellipse { stroke-dasharray: 5 5; }
+.vr-fv-board[data-tool="erase"] .vr-fv-svg g[data-shape]:hover rect:not(.hit), .vr-fv-board[data-tool="erase"] .vr-fv-svg g[data-shape]:hover ellipse:not(.hit) { stroke: var(--red); }
+.vr-fv-board[data-tool="box"] .vr-fv-capture, .vr-fv-board[data-tool="ring"] .vr-fv-capture { display: block; cursor: crosshair; }
+.vr-fv-board[data-tool="box"] .vr-fv-svg, .vr-fv-board[data-tool="ring"] .vr-fv-svg { z-index: 4; }
+.vr-fv-board[data-tool="note"] .vr-fv-capture { display: block; cursor: copy; }
+
+/* Notes: free-view-only text cards */
+.vr-fv-note {
+  position: absolute; z-index: 3; box-sizing: border-box; min-width: 120px; padding: 10px 14px 14px; border-radius: 12px;
+  background: color-mix(in srgb, var(--s2) 92%, var(--fg) 4%); border: 1px dashed color-mix(in srgb, var(--fg) 30%, transparent);
+  box-shadow: 0 12px 24px -16px rgba(0, 0, 0, .8); cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none;
+}
+.vr-fv-note-tag { display: block; margin-bottom: 6px; font-family: var(--f-dot, var(--f-mono)); font-weight: 700; font-size: 9.5px; letter-spacing: .22em; color: var(--fg-3); }
+.vr-fv-note-text { min-height: 1.4em; font-family: var(--f-sans); font-size: 13.5px; line-height: 1.45; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; outline: none; }
+.vr-fv-note.is-editing { cursor: text; border-style: solid; border-color: var(--fg-2); }
+.vr-fv-note.is-editing .vr-fv-note-text { user-select: text; -webkit-user-select: text; }
+.vr-fv-note.is-held { z-index: 4; cursor: grabbing; filter: drop-shadow(0 18px 24px rgba(0, 0, 0, .55)); }
+.vr-fv-note.is-picked { border-style: solid; border-color: var(--fg); box-shadow: 0 0 0 1px var(--fg), 0 12px 24px -16px rgba(0, 0, 0, .8); }
+.vr-fv-board[data-tool="erase"] .vr-fv-note { cursor: pointer; }
+.vr-fv-board[data-tool="erase"] .vr-fv-note:hover { border-color: var(--red); }
+
+/* Resize: pulled-out messages, photos, files and notes stretch from their corner */
+.vr-fv-size {
+  position: absolute; right: -5px; bottom: -5px; z-index: 2; width: 14px; height: 14px; border-radius: 4px; cursor: nwse-resize; touch-action: none;
+  background: var(--bg, #000); border: 1.5px solid var(--fg-2); opacity: 0; transition: opacity .12s;
+}
+.vr-fv-item:hover > .vr-fv-size, .vr-fv-note:hover > .vr-fv-size, .is-sizing > .vr-fv-size { opacity: 1; }
+@media (hover: none) { .vr-fv-size { opacity: .7; } }
+.vr-fv-item.is-sized { max-width: none; }
+.vr-fv-item.is-sized > .sc-msg { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+.vr-fv-item.is-sized .sc-bubble { flex: 1 1 auto; min-width: 0; }
+.vr-fv-item.is-sized .sc-file { width: 100%; }
+.vr-fv-item.is-sized .sc-file img { width: 100%; max-height: none; object-fit: contain; }
+.vr-fv-item.is-sized .sc-file-ph { width: 100%; }
+.vr-fv-item.is-sizing, .vr-fv-note.is-sizing { z-index: 4; }
+
+/* Default view: reorder handle + drop line */
+.vr-ord-grip {
+  flex: none; width: 18px; height: 26px; margin-top: 3px; display: grid; place-items: center; border: 0; border-radius: 6px;
+  background: transparent; color: var(--fg-3); cursor: grab; touch-action: none; opacity: 0; transition: opacity .12s, color .12s, background .12s;
+}
+.sc-msg:hover > .vr-ord-grip, .vr-ord-grip:focus-visible { opacity: .9; }
+.vr-ord-grip:hover { background: var(--s2); color: var(--fg); }
+@media (hover: none) { .vr-ord-grip { opacity: .5; } }
+.vr-msgs.is-ordering { position: relative; }
+.vr-msgs.is-ordering .sc-msg.is-lifted { opacity: .3; }
+.vr-ord-line { position: absolute; left: 14px; right: 14px; height: 2px; border-radius: 2px; background: var(--fg); box-shadow: 0 0 10px color-mix(in srgb, var(--fg) 50%, transparent); pointer-events: none; z-index: 3; }

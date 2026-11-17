@@ -143,7 +143,7 @@ export function mountVariables(root, el0, w) {
       if (x && free && x.free?.on) { free.update(x); markFind(false); return; }
       if (x && list && !x.free?.on) {
         const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
-        list.replaceChildren(...msgRows(x));
+        list.replaceChildren(...orderRows(x));
         if (atEnd && !query) list.scrollTop = list.scrollHeight;
         markFind(false);
       } else pending = true;
@@ -533,6 +533,76 @@ export function mountVariables(root, el0, w) {
     return rows.length ? rows : (x.notes?.length ? [] : [h('p', { class: 'sc-empty' }, `Notes on ${x.name}. Reflect, keep track, see how things change.`)]);
   }
 
+  /* ---------------- reorder (default view) ---------------- */
+  // Drag a message's handle up or down to change where it sits in the conversation. The order is the
+  // notes' own order, so Free View's column follows it too (messages you've placed by hand stay put).
+  function orderRows(x) {
+    const rows = msgRows(x);
+    for (const row of rows) {
+      if (!row.matches?.('.sc-msg[data-id]')) continue;
+      const g = h('button', { type: 'button', class: 'vr-ord-grip', 'aria-label': 'Drag to reorder', title: 'Drag to reorder' }, icon('grip', 12));
+      g.addEventListener('pointerdown', (e) => dragOrder(e, row, x));
+      row.classList.add('has-grip');
+      row.prepend(g);
+    }
+    return rows;
+  }
+
+  function dragOrder(e, row, x) {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const list = row.closest('.vr-msgs');
+    if (!list) return;
+    const id = row.dataset.id;
+    const sy = e.clientY;
+    const line = h('div', { class: 'vr-ord-line', 'aria-hidden': 'true' });
+    let on = false, before = undefined; // undefined: no move · null: to the end · id: above that message
+    const move = (ev) => {
+      if (!on && Math.abs(ev.clientY - sy) < 4) return;
+      if (!on) { on = true; dragging = true; row.classList.add('is-lifted'); list.classList.add('is-ordering'); list.append(line); document.body.classList.add('fi-dragging'); }
+      const lr = list.getBoundingClientRect();
+      if (ev.clientY > lr.bottom - 30) list.scrollTop += 12; else if (ev.clientY < lr.top + 30) list.scrollTop -= 12;
+      const rows = [...list.querySelectorAll('.sc-msg[data-id]')].filter((r) => r !== row);
+      const next = rows.find((r) => { const b = r.getBoundingClientRect(); return ev.clientY < b.top + b.height / 2; }) || null;
+      before = next ? next.dataset.id : null;
+      const ref = next || rows[rows.length - 1];
+      const top = ref ? (next ? ref.offsetTop - 5 : ref.offsetTop + ref.offsetHeight + 3) : 0;
+      line.style.top = `${top}px`;
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+      document.body.classList.remove('fi-dragging');
+      line.remove(); row.classList.remove('is-lifted'); list.classList.remove('is-ordering');
+      dragging = false;
+      if (!on || before === undefined || before === id) { if (pending) render(); return; }
+      patchEntry(x.id, (en) => {
+        const notes = [...(en.notes || [])];
+        const i = notes.findIndex((m) => m.id === id);
+        if (i < 0) return {};
+        const [m] = notes.splice(i, 1);
+        const j = before ? notes.findIndex((n) => n.id === before) : -1;
+        notes.splice(j < 0 ? notes.length : j, 0, m);
+        return { notes };
+      });
+    };
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+  }
+
+  // Menu shortcut: one step up or down.
+  function nudgeNote(x, m, d) {
+    patchEntry(x.id, (en) => {
+      const notes = [...(en.notes || [])];
+      const i = notes.findIndex((n) => n.id === m.id), j = i + d;
+      if (i < 0 || j < 0 || j >= notes.length) return {};
+      [notes[i], notes[j]] = [notes[j], notes[i]];
+      return { notes };
+    });
+  }
+
   function chat(x) {
     const ta = h('textarea', {
       class: 'vr-input sc-input', rows: 1, placeholder: 'Enter your message', maxlength: 4000, 'aria-label': 'Write a note', value: draft,
@@ -548,6 +618,17 @@ export function mountVariables(root, el0, w) {
         flowRows: (list) => msgRows(x, list),
         one: (m) => bubble(x, m),
         save: (f) => patchEntry(x.id, () => ({ free: f })),
+        // Clearing messages from free view deletes them from the chat, and tidies their layout.
+        remove: (ids, fp = {}) => {
+          const gone = new Set(ids);
+          patchEntry(x.id, (e) => {
+            const f = { pos: {}, size: {}, links: [], ...(e.free || {}), ...fp, on: true };
+            const pos = { ...f.pos }, size = { ...f.size };
+            gone.forEach((id) => { delete pos[id]; delete size[id]; });
+            return { notes: (e.notes || []).filter((m) => !gone.has(m.id)), free: { ...f, pos, size, links: f.links.filter((l) => !gone.has(l.a) && !gone.has(l.b)) } };
+          });
+        },
+        idle: () => { if (pending) setTimeout(render, 0); },
       });
     }
     const toggle = h('button', {
@@ -566,7 +647,7 @@ export function mountVariables(root, el0, w) {
       h('button', { class: 'vr-card-more', type: 'button', 'aria-label': 'Options', onclick: (e) => entryMenu(e.currentTarget, x) }, icon('more', 14)));
     const wrap = h('div', { class: ['vr-chat is-sc', fvOn && 'is-free'] }, head,
       finding ? findBar() : null,
-      free ? free.el : h('div', { class: 'vr-msgs sc-list', role: 'log' }, msgRows(x)),
+      free ? free.el : h('div', { class: 'vr-msgs sc-list', role: 'log' }, orderRows(x)),
       h('div', { class: 'vr-compose sc-compose' },
         h('button', { class: ['sc-plus', sending && 'is-busy'], type: 'button', 'aria-label': 'Add a photo', disabled: sending, onclick: async () => { const fs = await pickMedia({ accept: 'image/*,video/*' }); if (fs.length) sendFiles(x.id, fs); } },
           sending ? h('span', { class: 'dots-loader sm' }, h('i'), h('i'), h('i')) : icon('plus', 18)),
@@ -591,6 +672,8 @@ export function mountVariables(root, el0, w) {
   function msgMenu(anchor, x, m) {
     menu(anchor, [
       m.text ? { label: 'Copy', icon: 'copy', onSelect: async () => { try { await navigator.clipboard.writeText(m.text); toast('Copied.', { ms: 1400 }); } catch {} } } : null,
+      !x.free?.on ? { label: 'Move up', icon: 'chevronUp', disabled: (x.notes || [])[0]?.id === m.id, onSelect: () => nudgeNote(x, m, -1) } : null,
+      !x.free?.on ? { label: 'Move down', icon: 'chevronDown', disabled: (x.notes || []).at(-1)?.id === m.id, onSelect: () => nudgeNote(x, m, 1) } : null,
       m.text ? { label: 'Edit', icon: 'edit', onSelect: async () => { const t = await promptDialog('Edit note', { value: m.text, maxLength: 4000 }); if (t?.trim()) patchEntry(x.id, (e) => ({ notes: (e.notes || []).map((y) => (y.id === m.id ? { ...y, text: t.trim(), edited: true } : y)) })); } } : null,
       '-',
       { label: 'Delete note', icon: 'trash', danger: true, onSelect: () => patchEntry(x.id, (e) => ({ notes: (e.notes || []).filter((y) => y.id !== m.id) })) },
@@ -623,7 +706,7 @@ export function mountVariables(root, el0, w) {
   function grow(ta) { ta.style.height = 'auto'; ta.style.height = `${Math.min(160, ta.scrollHeight)}px`; }
 
   render();
-  const off = onMyVars(() => render());
+  const off = onMyVars((d, keys) => { if (keys && keys.every((k) => k === 'ideas')) return; render(); }); // ideas share the row: don't repaint for them
   loadMyVars().then(() => {
     // Your account has no Variables yet: your personal Space's list becomes yours automatically.
     // (The shared object's old list could be anyone's, so that one waits for "Bring in".)

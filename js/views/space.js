@@ -81,19 +81,41 @@ export function mountSpace(root) {
       if (t) mountDock(); // the dock's buttons point at the canvas on screen
     } else {
       t = null;
-      slot = slots[m] = { el: null, board: null, t: null, offs: [] };
-      const before = page.lastElementChild;
-      slot.board = mountBoard(page, id, {
-        space: true,
-        mountWidget: createWidgetHost({ editor: () => slot.t?.editor || null, spaceId: id, personal: m === 'personal', me, openBoard, snapBack, detach, detachTicketCol, snapTicketCol, popTicket, snapTicket, expandTicket, poppedTickets, openMenuFor, reveal, addPortal, register, registerTts }),
-        extendMenu,
-        onReady: (tools) => onReady(tools, slot, m),
-      });
-      slot.el = page.lastElementChild !== before ? page.lastElementChild : null;
-      if (slot.el) page.prepend(slot.el); // keep the dock and overlays above every canvas
+      slot = mountSlot(m, id);
     }
     if (!first) flash(m === 'personal' ? 'Personal space' : 'Shared space');
     if (getPref('spaceMode', 'shared') !== m) setPref('spaceMode', m).catch(() => {});
+  }
+
+  function mountSlot(m, id) {
+    const slot = slots[m] = { el: null, board: null, t: null, offs: [] };
+    const before = page.lastElementChild;
+    slot.board = mountBoard(page, id, {
+      space: true,
+      mountWidget: createWidgetHost({ editor: () => slot.t?.editor || null, spaceId: id, personal: m === 'personal', me, openBoard, snapBack, detach, detachTicketCol, snapTicketCol, popTicket, snapTicket, expandTicket, poppedTickets, openMenuFor, reveal, addPortal, register, registerTts, warmShared }),
+      extendMenu,
+      onReady: (tools) => onReady(tools, slot, m),
+    });
+    slot.el = page.lastElementChild !== before ? page.lastElementChild : null;
+    if (slot.el) page.prepend(slot.el); // keep the dock and overlays above every canvas
+    return slot;
+  }
+
+  // Fleeting Ideas' Shared view in your personal Space needs the shared pool, which lives on the shared
+  // Space's object: load that Space quietly in the background (hidden and parked) if it isn't open yet.
+  let warming = null;
+  function warmShared() {
+    if (slots.shared || mode === 'shared') return warming || Promise.resolve();
+    warming ||= (async () => {
+      try {
+        const id = await idFor('shared');
+        if (destroyed || slots.shared) return;
+        const slot = mountSlot('shared', id);
+        if (mode !== 'shared') park(slot);
+      } catch (e) { console.warn('Shared Space did not load in the background', e); }
+      finally { warming = null; }
+    })();
+    return warming;
   }
 
   // Hide a Space without unloading it. 'parked' keeps its keyboard, copy and paste handlers asleep.

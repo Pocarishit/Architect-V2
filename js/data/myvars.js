@@ -4,6 +4,9 @@
 // person sees their own. Changes reach the other Space instantly (same tab) and your other devices
 // within seconds (polled while the tab is visible).
 // If the table hasn't been created yet it still works, kept in this browser only.
+// Nov 18: the same row also carries your personal Fleeting Ideas (`ideas`), so an idea you drop in one
+// Space is the same idea in the other. Subscribers get the keys that changed, so Variables doesn't
+// repaint every time an idea glides.
 import { api, configured } from './api.js';
 import { store } from '../core/util.js';
 
@@ -22,7 +25,7 @@ const subs = new Set();
 const me = () => api.auth.current()?.user || null;
 const localKey = () => `architect.myvars.${uidKey || 'anon'}`;
 const missing = (e) => /relation .* does not exist|Could not find the table|42P01|PGRST205/i.test(`${e?.code || ''} ${e?.message || e || ''}`);
-const emit = () => { for (const fn of subs) { try { fn(data); } catch {} } };
+const emit = (keys = null) => { for (const fn of subs) { try { fn(data, keys); } catch {} } };
 
 function reset() {
   clearTimeout(timer); clearInterval(poller);
@@ -48,7 +51,7 @@ export function loadMyVars() {
       if (configured && !missing(e)) console.warn('Variables: falling back to this browser', e);
       if (local) data = normal(local); else fresh = true;
     }
-    data ||= { sections: null, entries: [], rev: 0 };
+    data ||= { sections: null, entries: [], ideas: null, rev: 0 };
     if (remote && !poller) {
       poller = setInterval(pull, POLL_MS);
       document.addEventListener('visibilitychange', () => { if (!document.hidden) pull(); });
@@ -60,7 +63,12 @@ export function loadMyVars() {
   return loading;
 }
 
-const normal = (d) => ({ sections: Array.isArray(d.sections) && d.sections.length ? d.sections : null, entries: Array.isArray(d.entries) ? d.entries : [], rev: Number(d.rev) || 0 });
+const normal = (d) => ({
+  sections: Array.isArray(d.sections) && d.sections.length ? d.sections : null,
+  entries: Array.isArray(d.entries) ? d.entries : [],
+  ideas: Array.isArray(d.ideas) ? d.ideas : null, // null: never saved (your old personal-Space ideas move in once)
+  rev: Number(d.rev) || 0,
+});
 
 export const myVars = () => data;
 export const myVarsRemote = () => remote;
@@ -72,7 +80,7 @@ export function setMyVars(patch) {
   data = { ...data, ...patch, rev: Date.now() };
   store.set(localKey(), data);
   dirty = true;
-  emit();
+  emit(Object.keys(patch));
   clearTimeout(timer);
   timer = setTimeout(flush, SAVE_MS);
 }

@@ -1,5 +1,8 @@
 // Fleeting Ideas — one object, three tabs (the Tracker calendar opens from a button in Story).
-//   Ideas    an open canvas: type at the bottom and the idea drifts around like a screensaver.
+//   Ideas    an influence canvas split in two: EXTERNAL (amber, left) and INTERNAL (violet, right).
+//            Where an idea sits is its classification, and its glass takes that side's colour.
+//            Two views: Mine (default — your own ideas, on your account, the same in every Space)
+//            and Shared (the pool on the shared Space's object: ideas shared with you or made there).
 //            Grab one and it freezes; drop it on the canvas to park it, or on your Path to make it a task.
 //   Story    the day as a timeline (GM → Afternoon → Nighttime → Second Wind → new morning).
 //            Drop photos, paste videos, type narration; each fragment carries its Set-Point.
@@ -15,6 +18,8 @@ import { api, friendlyError } from '../data/api.js';
 import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia, fmtDur } from './media.js';
 import { avatarsFor } from '../data/profile.js';
 import { getPref, setPref } from '../data/prefs.js';
+import { loadMyVars, myVars, setMyVars, onMyVars } from '../data/myvars.js';
+import { registerPool, poolReady, poolIdeas, setPoolIdeas, onPool } from '../data/ideapool.js';
 
 /* Who wrote a Story event: name + face, looked up once per person. */
 const whoNames = new Map(), whoFaces = new Map();
@@ -67,6 +72,10 @@ const planWeeks = (p) => {
 const GLASS_HUES = [268, 186, 38, 340, 146, 214, 14, 300, 52, 166];
 const hashOf = (str) => { let x = 2166136261; for (const c of String(str)) x = Math.imul(x ^ c.charCodeAt(0), 16777619); return x >>> 0; };
 const glassOf = (id) => { const n = hashOf(id); return { hue: GLASS_HUES[n % GLASS_HUES.length], tilt: (((n >>> 8) % 61) - 30) / 10 }; };
+// Influence colours: two families instead of a rainbow. Each idea keeps its own shade within the family.
+const EXT_HUES = [30, 38, 24, 44, 34];      // amber — external
+const INT_HUES = [266, 276, 258, 284, 270]; // violet — internal
+const shadesOf = (id) => { const n = hashOf(id); return { ext: EXT_HUES[n % EXT_HUES.length], int: INT_HUES[(n >>> 4) % INT_HUES.length] }; };
 const tf = (x, y, tilt = 0, lift = false) => `translate(${x}px, ${y}px) rotate(${lift ? 0 : tilt}deg)${lift ? ' scale(1.04)' : ''}`;
 const fold = (v) => { v = ((v % 2) + 2) % 2; return v > 1 ? 2 - v : v; };
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
@@ -96,7 +105,11 @@ export function mountFleeting(root, el0, w) {
   let hold = 0;          // > 0 while dragging or editing: remote updates wait
   let pending = false;
   let uploads = [];      // story fragments still uploading (this device only)
-  const remember = () => store.set(memKey, { tab, cal });
+  // Ideas view: 'mine' (default, private to you) or 'shared' (the pool).
+  let ideaView = mem.iv === 'shared' ? 'shared' : 'mine';
+  const personal = !!w.host?.personal;
+  let mineReady = false;
+  const remember = () => store.set(memKey, { tab, cal, iv: ideaView });
   const view = () => (tab === 'story' && cal ? 'tracker' : tab);
 
   const tabsRow = h('div', { class: 'fi-tabs', role: 'tablist' });
@@ -126,7 +139,13 @@ export function mountFleeting(root, el0, w) {
   });
 
   /* ---------------- shared state ---------------- */
-  const ideas = () => el.ideas || [];
+  // Ideas come from one of two stores. Mine: your account (data/myvars.js). Shared: the pool — this
+  // object's ideas in the shared Space, or (from your personal Space) the shared Space's object.
+  const mineList = () => myVars()?.ideas || [];
+  const poolGet = () => (personal ? poolIdeas() : (el.ideas || []));
+  const poolSet = (list, live = false) => (personal ? setPoolIdeas(list, live) : (live ? w.live : w.patch)({ ideas: list }));
+  const poolOk = () => !personal || poolReady();
+  const ideas = () => (ideaView === 'shared' ? poolGet() : mineList());
   const story = (k = day) => el.story?.[k] || [];
   // Weekly plan. Weeks are keyed by their Monday (YYYY-MM-DD) and run from start to the deadline,
   // so the columns generate themselves. Older plans keyed weeks 1..8 — those convert on read.
@@ -141,7 +160,10 @@ export function mountFleeting(root, el0, w) {
     const deadline = wk.deadline || keyOf(new Date(parseKey(start).getTime() + 55 * 86_400_000)); // default: 8 weeks
     return { goal: wk.goal || DEFAULT_GOAL, start, deadline, weeks, tray: wk.tray || [], titles: wk.titles || {} };
   };
-  const setIdeas = (list, live = false) => (live ? w.live : w.patch)({ ideas: list });
+  const setIdeas = (list, live = false) => {
+    if (ideaView === 'shared') { if (poolOk()) poolSet(list, live); }
+    else if (mineReady) setMyVars({ ideas: list });
+  };
   const setStory = (k, list) => w.patch({ story: { ...(w.current().story || {}), [k]: list } });
   const setWeekly = (p) => { const cur = weekly(); w.patch({ weekly: { ...cur, ...p } }); };
 
@@ -163,7 +185,8 @@ export function mountFleeting(root, el0, w) {
     attach.hidden = tab !== 'story';
     input.placeholder = tab === 'story' ? (day === storyKey() ? 'narrate this moment…' : `add to ${shortDate(parseKey(day))}…`) : 'type an idea…';
     input.setAttribute('aria-label', tab === 'story' ? 'Narrate a moment' : 'Type an idea');
-    aside.replaceChildren(...(tab === 'story' ? [...(cal ? [] : dayNav()), calBtn()] : []));
+    aside.replaceChildren(...(tab === 'story' ? [...(cal ? [] : dayNav()), calBtn()] : tab === 'ideas' ? [viewSwitch()] : []));
+    if (tab === 'ideas') input.placeholder = ideaView === 'shared' ? 'add to the shared pool…' : 'type an idea…';
     stopIdeas();
     stage.replaceChildren();
     stage.scrollTop = 0;
@@ -176,6 +199,24 @@ export function mountFleeting(root, el0, w) {
     }
     else if (v === 'tracker') renderTracker();
     else renderWeekly();
+  }
+
+  // Ideas' view option: your own ideas, or the shared pool.
+  function viewSwitch() {
+    const opt = (id, label, ic, title) => h('button', {
+      type: 'button', role: 'radio', class: ['fi-view', ideaView === id && 'is-on'], 'aria-checked': String(ideaView === id), title,
+      onclick: () => setIdeaView(id),
+    }, icon(ic, 13), h('span', {}, label));
+    return h('div', { class: 'fi-views', role: 'radiogroup', 'aria-label': 'Ideas view' },
+      opt('mine', 'Mine', 'lock', 'Your ideas — only you see them, in every Space'),
+      opt('shared', 'Shared', 'users', 'The shared pool — ideas shared with you or made there'));
+  }
+  function setIdeaView(v) {
+    if (ideaView === v) return;
+    ideaView = v; remember();
+    hist.length = 0; fut.length = 0; selIdeas.clear();
+    if (v === 'shared' && personal && !poolReady()) w.host?.warmShared?.();
+    paint();
   }
 
   // Story's side button: flips the stage between the day's timeline and the month calendar.
@@ -206,6 +247,7 @@ export function mountFleeting(root, el0, w) {
     if (!text) return;
     input.value = '';
     if (tab === 'story') { addFragment({ kind: 'text', text }); return; }
+    if (ideaView === 'shared' ? !poolOk() : !mineReady) { input.value = text; toast('One moment — still opening your ideas.', { ms: 1800 }); return; }
     // A new idea slides in from the bottom and settles somewhere on the ice.
     const x = 0.1 + Math.random() * 0.8;
     commitIdeas([...ideas(), {
@@ -236,7 +278,12 @@ export function mountFleeting(root, el0, w) {
   function paintIdeaSel() { for (const [id, n] of nodes) n.node.classList.toggle('is-sel', selIdeas.has(id)); }
 
   function mountIdeas() {
-    field = h('div', { class: 'fi-field' });
+    field = h('div', { class: 'fi-field', 'data-view': ideaView });
+    // The influence split: external on the left, internal on the right. Purely visual — clicks and the
+    // selection window pass straight through to the field.
+    stage.append(h('div', { class: 'fi-zones', 'aria-hidden': 'true' },
+      h('div', { class: 'fi-zone is-ext' }, h('span', { class: 'fi-zone-label' }, 'EXTERNAL')),
+      h('div', { class: 'fi-zone is-int' }, h('span', { class: 'fi-zone-label' }, 'INTERNAL'))));
     stage.append(field);
     field.addEventListener('pointerdown', marquee);
     nodes.clear();
@@ -257,21 +304,25 @@ export function mountFleeting(root, el0, w) {
     for (const i of list) {
       let n = nodes.get(i.id);
       if (!n) {
-        const g = glassOf(i.id);
-        const node = h('div', { class: 'fi-idea', tabindex: 0, 'data-id': i.id, style: { '--h': g.hue } });
+        const g = glassOf(i.id), sh = shadesOf(i.id);
+        const node = h('div', { class: 'fi-idea', tabindex: 0, 'data-id': i.id, style: { '--he': sh.ext, '--hi': sh.int } });
         bindIdea(node, i.id);
         field.append(node);
         n = { node, w: 0, h: 0, tilt: g.tilt };
         nodes.set(i.id, n);
       }
       if (n.node.textContent !== i.text) n.node.textContent = i.text;
-      n.node.title = 'Drag to move · flick to slide · drop on your Path to make it a task';
+      n.node.title = 'Left: external · right: internal — drag across to reclassify · drop on your Path to make it a task';
       n.node.classList.toggle('is-sel', selIdeas.has(i.id));
       n.w = n.node.offsetWidth; n.h = n.node.offsetHeight;
     }
     field.classList.toggle('is-empty', !list.length);
     field.querySelector('.fi-empty')?.remove();
-    if (!list.length) field.append(h('p', { class: 'fi-empty' }, 'Nothing drifting yet.', h('br'), 'If it’s on your mind, throw it in below.'));
+    const waiting = ideaView === 'shared' ? !poolOk() : !mineReady;
+    if (waiting) field.append(h('p', { class: 'fi-empty' }, ideaView === 'shared' ? 'Opening the shared pool…' : 'Loading your ideas…'));
+    else if (!list.length) field.append(h('p', { class: 'fi-empty' }, ...(ideaView === 'shared'
+      ? ['Nothing in the shared pool yet.', h('br'), 'Share one of yours, or type one here.']
+      : ['Nothing drifting yet.', h('br'), 'Only you see these. Throw it in below.'])));
     place();
   }
 
@@ -291,6 +342,12 @@ export function mountFleeting(root, el0, w) {
   const posOf = (i, t) => { const m = motion(i, t); return { x: m.x, y: m.y }; };
   const moving = (m) => Math.hypot(m.vx, m.vy) > STILL;
 
+  // Which side of the divider an idea's centre is on decides its colour (and so its classification).
+  function sideTo(node, px, w, W) {
+    const side = px + w / 2 < W / 2 ? 'ext' : 'int';
+    if (node.dataset.side !== side) node.dataset.side = side;
+  }
+
   const bumped = new Map(); // "a|b" → time, so one contact is one bump
   function place() {
     if (!field) return;
@@ -306,6 +363,7 @@ export function mountFleeting(root, el0, w) {
       const m = motion(i, t);
       const px = Math.round(m.x * Math.max(0, W - n.w)), py = Math.round(m.y * Math.max(0, H - n.h));
       n.node.style.transform = tf(px, py, n.tilt);
+      sideTo(n.node, px, n.w, W);
       boxes.push({ i, m, n, px, py, rx: Math.max(1, W - n.w), ry: Math.max(1, H - n.h) });
     }
     // Bumps: an idea you set moving knocks into the ones it touches (only the thrower's screen decides).
@@ -388,6 +446,8 @@ export function mountFleeting(root, el0, w) {
         fx = Math.max(0, Math.min(rx, (ev.clientX - fr.left) / scale - offX));
         fy = Math.max(0, Math.min(ry, (ev.clientY - fr.top) / scale - offY));
         node.style.transform = tf(Math.round(fx), Math.round(fy), tilt, true);
+        sideTo(node, fx, nw, W);
+        if (ghost) ghost.dataset.side = node.dataset.side;
         // Outside its box it becomes a floating copy you can drop on your Path.
         const col = inside ? null : pathColAt(ev.clientX, ev.clientY);
         showGhost(!inside);
@@ -476,12 +536,37 @@ export function mountFleeting(root, el0, w) {
         selIdeas.size > 1 && selIdeas.has(id) ? { label: `Copy ${selIdeas.size} ideas`, icon: 'copy', kbd: '⌘C', onSelect: copyIdeas } : { label: 'Copy', icon: 'copy', kbd: '⌘C', onSelect: () => { selIdeas.clear(); selIdeas.add(id); paintIdeaSel(); copyIdeas(); } },
         { label: 'Give it a nudge', icon: 'curve', onSelect: () => { const m = motion(i, Date.now()); const a = Math.random() * Math.PI * 2; setIdeas(ideas().map((x) => (x.id === id ? { ...x, x: m.x, y: m.y, vx: Math.cos(a) * 0.35, vy: Math.sin(a) * 0.35, t0: Date.now(), parked: false, mv: me?.id || null } : x))); } },
         { label: 'Add to today’s story', icon: 'note', onSelect: () => { addFragment({ kind: 'text', text: i.text }, storyKey()); setIdeas(ideas().filter((x) => x.id !== id)); toast('Added to today’s story.', { ms: 1800 }); } },
+        ...poolItems(i),
         '-',
         selIdeas.size > 1 && selIdeas.has(id)
           ? { label: `Let ${selIdeas.size} go`, icon: 'trash', danger: true, kbd: 'Del', onSelect: deleteIdeas }
           : { label: 'Let it go', icon: 'trash', danger: true, kbd: 'Del', onSelect: () => removeIdea(id) },
       ]);
     });
+  }
+
+  /* ---- moving ideas between Mine and the shared pool (same id, same spot: the same idea) ---- */
+  const pickIds = (id) => (selIdeas.size > 1 && selIdeas.has(id) ? new Set(selIdeas) : new Set([id]));
+  function poolItems(i) {
+    const ids = pickIds(i.id), n = ids.size, many = n > 1 ? ` ${n} ideas` : '';
+    if (ideaView === 'mine') return [{ label: `Share${many} to the pool`, icon: 'share', onSelect: () => moveIdeas(ids, 'shared') }];
+    const all = ideas().filter((q) => ids.has(q.id));
+    const allMine = all.every((q) => q.by === me?.id);
+    return [allMine
+      ? { label: `Take${many || ' it'} back to Mine`, icon: 'lock', onSelect: () => moveIdeas(ids, 'mine') }
+      : { label: `Copy${many} to Mine`, icon: 'copy', onSelect: () => moveIdeas(ids, 'mine', true) }];
+  }
+  function moveIdeas(ids, to, copy = false) {
+    if (to === 'shared' && !poolOk()) { w.host?.warmShared?.(); toast('Opening the shared pool — try again in a moment.', { ms: 2600 }); return; }
+    if (to === 'mine' && !mineReady) return;
+    const from = ideas();
+    const moving = from.filter((q) => ids.has(q.id)).map((q) => ({ ...q, by: q.by || me?.id || null }));
+    if (!moving.length) return;
+    if (to === 'shared') poolSet([...poolGet().filter((q) => !ids.has(q.id)), ...moving]);
+    else setMyVars({ ideas: [...mineList().filter((q) => !ids.has(q.id)), ...moving.map((q) => (copy ? { ...q, id: uid(), by: me?.id || null } : q))] });
+    if (!copy) { commitIdeas(from.filter((q) => !ids.has(q.id))); ids.forEach((x) => selIdeas.delete(x)); }
+    const n = moving.length;
+    toast(to === 'shared' ? `Shared ${n === 1 ? 'it' : n} to the pool.` : copy ? `Copied ${n === 1 ? 'it' : n} to Mine.` : `Back in Mine.`, { ms: 2000 });
   }
 
   function removeIdea(id) {
@@ -575,7 +660,7 @@ export function mountFleeting(root, el0, w) {
       const dx = (ev.clientX - sx) / scale, dy = (ev.clientY - sy) / scale;
       for (const g of group) {
         g.fx = Math.max(0, Math.min(g.rx, g.x0 + dx)); g.fy = Math.max(0, Math.min(g.ry, g.y0 + dy));
-        if (g.n) g.n.node.style.transform = tf(Math.round(g.fx), Math.round(g.fy), g.n.tilt, true);
+        if (g.n) { g.n.node.style.transform = tf(Math.round(g.fx), Math.round(g.fy), g.n.tilt, true); sideTo(g.n.node, g.fx, g.n.node.offsetWidth, W); }
       }
       const col = pathColAt(ev.clientX, ev.clientY);
       if (col !== over) { over?.classList.remove('fi-drop-on'); over = col; over?.classList.add('fi-drop-on'); }
@@ -1372,14 +1457,35 @@ export function mountFleeting(root, el0, w) {
   });
   onResize.observe(stage);
 
+  // The shared Space's object is the pool everyone's Shared view reads.
+  const poolReg = personal ? null : registerPool({ id: el.id, get: () => w.current()?.ideas || el.ideas || [], set: (list, live) => (live ? w.live : w.patch)({ ideas: list }) });
+  const ideasShown = () => tab === 'ideas';
+  const offPool = personal ? onPool(() => { if (ideasShown() && ideaView === 'shared') refresh(); }) : () => {};
+  const offMine = onMyVars((d, keys) => { if ((!keys || keys.includes('ideas')) && ideasShown() && ideaView === 'mine') refresh(); });
+  if (personal && ideaView === 'shared' && !poolReady()) w.host?.warmShared?.();
+  loadMyVars().then(() => {
+    // Your personal Space's old ideas were always yours: they move into Mine once (merged by id).
+    const legacyKey = `architect.fi.legacy.${el.id}`;
+    const old = personal && !store.get(legacyKey, null) ? (el.ideas || []) : [];
+    if (old.length) {
+      const have = new Set(mineList().map((q) => q.id));
+      setMyVars({ ideas: [...mineList(), ...old.filter((q) => !have.has(q.id))] });
+    }
+    if (personal) store.set(legacyKey, 'done');
+    mineReady = true;
+    if (ideasShown()) refresh();
+  }).catch(() => { mineReady = true; if (ideasShown()) refresh(); });
+
   paint();
 
   return {
     update(next) {
       const changed = next.ideas !== el.ideas || next.story !== el.story || next.weekly !== el.weekly;
+      const poolChanged = next.ideas !== el.ideas;
       el = next;
+      if (poolChanged) poolReg?.changed();
       if (changed) refresh();
     },
-    destroy() { stopIdeas(); onResize.disconnect(); window.removeEventListener('architect:drop-idea', onDropIdea); box.remove(); },
+    destroy() { stopIdeas(); onResize.disconnect(); window.removeEventListener('architect:drop-idea', onDropIdea); poolReg?.off(); offPool(); offMine(); box.remove(); },
   };
 }

@@ -500,7 +500,7 @@ export function mountSpace(root) {
     const ed = editor();
     if (!ed) return;
     const el = ed.els.find((e) => e.type === 'widget' && e.kind === kind && !ed.isHidden(e) && (kind !== 'path' || e.owner === me.id));
-    if (el) { ed.select([el.id]); ed.fitRect(el, { maxZ: 1, pad: innerWidth < 720 ? 8 : 40 }); }
+    if (el) { ed.select([el.id]); ed.fitRect(el, FILL.has(kind) ? { maxZ: 2.5, pad: innerWidth < 720 ? 6 : 24 } : { maxZ: 1, pad: innerWidth < 720 ? 8 : 40 }); }
   }
 
   /* ---------------- Blueprints: a window over the Space, or full screen ---------------- */
@@ -684,6 +684,7 @@ export function mountSpace(root) {
       { label: 'Video or link', icon: 'video', kbd: 'K', onSelect: () => t.openEmbed() },
       { label: 'Chat', icon: 'chat', onSelect: () => addWidget('chat', at) },
       { label: 'Radio', icon: 'radio', onSelect: () => addWidget('radio', at) },
+      { label: 'Timer', icon: 'hourglass', onSelect: () => addWidget('timer', at) },
       { label: 'Say something out loud', icon: 'speaker', kbd: 'Enter', onSelect: () => sayBar() },
       { label: 'Emergency Room', icon: 'flame', kbd: 'E+R', onSelect: () => openER() },
       { label: 'Widget…', icon: 'widget', onSelect: () => widgetPicker(at) },
@@ -711,7 +712,7 @@ export function mountSpace(root) {
 
   async function widgetPicker(at) {
     const choose = (kind) => { closeFloating(); addWidget(kind, at); };
-    const opts = ['path', 'fleeting', 'variables', 'blueprints', 'chat', 'tts', 'radio', 'custom'];
+    const opts = ['path', 'fleeting', 'variables', 'timer', 'blueprints', 'chat', 'tts', 'radio', 'custom'];
     dialog({
       title: 'Add a widget',
       width: 460,
@@ -808,42 +809,53 @@ export function mountSpace(root) {
     const next = { ...objKeys() };
     for (const [id, k] of Object.entries(next)) if (k === chosen) delete next[id];
     if (chosen) next[el.id] = chosen; else delete next[el.id];
-    const modes = { ...keyModes() };
-    for (const id of Object.keys(modes)) if (!next[id]) delete modes[id];
-    if (chosen) modes[el.id] = mode;
+    const kinds = { ...keyKinds() };
+    for (const id of Object.keys(kinds)) if (!next[id]) delete kinds[id];
+    if (chosen) kinds[el.id] = kindOf(el);
     await setPref('objectKeys', next);
-    setPref('objectKeyModes', modes).catch(() => {});
-    if (chosen) toast(`${chosen} now opens it.`);
+    setPref('objectKeyKinds', kinds).catch(() => {});
+    if (chosen) toast(`${chosen} now opens it — in whichever space you’re in.`);
   }
 
-  // Shortcuts work from either Space: if the object lives in the other one, switch there first.
-  const keyModes = () => getPref('objectKeyModes', {}) || {};
+  // Universal shortcuts: the same key does the same jump in every space. A key belongs to a kind of
+  // object (Path, Variables, Fleeting Ideas, Timer…); pressing it jumps to that object in the space
+  // you're standing in. It never switches spaces.
+  const keyKinds = () => getPref('objectKeyKinds', {}) || {};
+  const kindOf = (el) => (el.type === 'widget' ? `widget:${el.kind}` : el.type === 'frame' && el.title ? `frame:${el.title}` : `el:${el.id}`);
+  const FILL = new Set(['fleeting', 'timer']); // objects that open big: they fill the screen
   function focusObject(ed, id) {
     const el = ed?.byId.get(id);
     if (!el || ed.isHidden(el)) return false;
     if (el.type === 'widget' && el.kind === 'portal') { openBoard(el.boardId); return true; }
     ed.select([id]);
-    ed.fitRect(rectOf(el, ed.byId), { maxZ: el.type === 'widget' ? 1 : 1.5, pad: 60 });
+    const big = el.type === 'widget' && FILL.has(el.kind);
+    ed.fitRect(rectOf(el, ed.byId), big ? { maxZ: 2.5, pad: innerWidth < 720 ? 6 : 24 } : { maxZ: el.type === 'widget' ? 1 : 1.5, pad: 60 });
     return true;
   }
+  // The object in this space that answers to a key: the same object if it's here, else its counterpart.
+  function counterpart(ed, id) {
+    if (!ed) return null;
+    const same = ed.byId.get(id);
+    if (same && !ed.isHidden(same)) return same.id;
+    let kind = keyKinds()[id];
+    if (!kind) { // keys saved before kinds were recorded: learn the kind from whichever space holds it
+      for (const s of Object.values(slots)) {
+        const e = s?.t?.editor?.byId.get(id);
+        if (e) { kind = kindOf(e); setPref('objectKeyKinds', { ...keyKinds(), [id]: kind }).catch(() => {}); break; }
+      }
+    }
+    if (!kind || kind.startsWith('el:')) return null;
+    const [t, k] = kind.split(/:(.*)/s);
+    const list = ed.els.filter((e) => !ed.isHidden(e) && (t === 'widget' ? e.type === 'widget' && e.kind === k : e.type === 'frame' && e.title === k));
+    // Your own Path first; otherwise the first one on the canvas.
+    return (list.find((e) => e.owner === me.id) || list[0])?.id || null;
+  }
   function openObject(id) {
-    if (focusObject(editor(), id)) return true;
-    const other = mode === 'shared' ? 'personal' : 'shared';
-    const known = keyModes()[id];
-    if (known && known !== other) return false;
-    const there = slots[other]?.t?.editor;
-    if (there && !there.byId.get(id)) return false; // loaded, and it isn't there either
-    if (switching) return true;
-    switching = true;
-    (async () => {
-      try {
-        await openMode(other);
-        // A Space opened for the first time needs a moment to load its objects.
-        for (let i = 0; i < 40 && !slots[other]?.t; i++) await new Promise((r) => setTimeout(r, 100));
-        if (mode === other && !focusObject(editor(), id)) toast('That shortcut’s object is gone.', { ms: 2200 });
-      } catch (e) { toast(e?.message || friendlyError(e), { tone: 'error', ms: 5000 }); }
-      finally { switching = false; }
-    })();
+    const target = counterpart(editor(), id);
+    if (target && focusObject(editor(), target)) return true;
+    const kind = keyKinds()[id];
+    const name = kind?.startsWith('widget:') ? WIDGETS[kind.slice(7)]?.label : null;
+    toast(name ? `No ${name} in this space.` : 'That shortcut’s object isn’t in this space.', { ms: 2200 });
     return true;
   }
 

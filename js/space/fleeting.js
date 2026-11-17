@@ -63,6 +63,11 @@ const planWeeks = (p) => {
   for (const [k, v] of Object.entries(p.weeks)) if (v?.length) out.add(k);
   return [...out].sort();
 };
+// Glass ideas: each card gets its own hue and a slight tilt, derived from its id so everyone sees the same.
+const GLASS_HUES = [268, 186, 38, 340, 146, 214, 14, 300, 52, 166];
+const hashOf = (str) => { let x = 2166136261; for (const c of String(str)) x = Math.imul(x ^ c.charCodeAt(0), 16777619); return x >>> 0; };
+const glassOf = (id) => { const n = hashOf(id); return { hue: GLASS_HUES[n % GLASS_HUES.length], tilt: (((n >>> 8) % 61) - 30) / 10 }; };
+const tf = (x, y, tilt = 0, lift = false) => `translate(${x}px, ${y}px) rotate(${lift ? 0 : tilt}deg)${lift ? ' scale(1.04)' : ''}`;
 const fold = (v) => { v = ((v % 2) + 2) % 2; return v > 1 ? 2 - v : v; };
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const TABS = [['ideas', 'Ideas'], ['story', 'Story'], ['tracker', 'Tracker'], ['weekly', 'Weekly']];
@@ -106,6 +111,11 @@ export function mountFleeting(root, el0, w) {
   // Paste photos/videos straight into Story (or into Ideas → they land in today's story).
   box.addEventListener('paste', (e) => {
     const files = mediaFiles(e.clipboardData);
+    if (!files.length && tab === 'ideas' && !e.target.closest?.('input, textarea, [contenteditable="true"]')) {
+      const lines = String(e.clipboardData?.getData('text/plain') || '').split(/\r?\n/).map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 60);
+      if (lines.length) { e.preventDefault(); addIdeas(lines); paintIdeaSel(); }
+      return;
+    }
     if (!files.length) return;
     e.preventDefault();
     if (tab === 'ideas') { day = storyKey(); setTab('story'); }
@@ -184,7 +194,7 @@ export function mountFleeting(root, el0, w) {
     if (tab === 'story') { addFragment({ kind: 'text', text }); return; }
     // A new idea slides in from the bottom and settles somewhere on the ice.
     const x = 0.1 + Math.random() * 0.8;
-    setIdeas([...ideas(), {
+    commitIdeas([...ideas(), {
       id: uid(), text, by: me?.id || null, t0: Date.now(), parked: false, mv: me?.id || null,
       x, y: 1, vx: (Math.random() - 0.5) * 0.4, vy: -(0.9 + Math.random() * 1.1),
     }]);
@@ -197,10 +207,24 @@ export function mountFleeting(root, el0, w) {
   let io = null;
   let onScreen = true;
   let dragId = null;
+  let groupIds = null;       // ids moving together in a group drag
+  const selIdeas = new Set(); // selected ideas (selection window, click, Ctrl/⌘-click)
+  const hist = [], fut = [];  // undo / redo for the Ideas tab
+  // An undoable change to the ideas.
+  const commitIdeas = (list) => { hist.push(ideas()); if (hist.length > 60) hist.shift(); fut.length = 0; setIdeas(list); };
+  function undoIdeas(redo = false) {
+    const from = redo ? fut : hist, to = redo ? hist : fut;
+    if (!from.length) { toast(redo ? 'Nothing to redo.' : 'Nothing to undo.', { ms: 1400 }); return; }
+    to.push(ideas());
+    const prev = from.pop(), now = Date.now();
+    setIdeas(prev.map((q) => ({ ...q, vx: 0, vy: 0, t0: now, x: motion(q, now).x, y: motion(q, now).y })));
+  }
+  function paintIdeaSel() { for (const [id, n] of nodes) n.node.classList.toggle('is-sel', selIdeas.has(id)); }
 
   function mountIdeas() {
     field = h('div', { class: 'fi-field' });
     stage.append(field);
+    field.addEventListener('pointerdown', marquee);
     nodes.clear();
     syncIdeas();
     io = new IntersectionObserver((es) => { onScreen = es.some((x) => x.isIntersecting); }, { threshold: 0 });
@@ -215,17 +239,20 @@ export function mountFleeting(root, el0, w) {
     const list = ideas();
     const live = new Set(list.map((i) => i.id));
     for (const [id, n] of nodes) if (!live.has(id)) { n.node.remove(); nodes.delete(id); }
+    for (const id of [...selIdeas]) if (!live.has(id)) selIdeas.delete(id);
     for (const i of list) {
       let n = nodes.get(i.id);
       if (!n) {
-        const node = h('div', { class: 'fi-idea', tabindex: 0, 'data-id': i.id });
+        const g = glassOf(i.id);
+        const node = h('div', { class: 'fi-idea', tabindex: 0, 'data-id': i.id, style: { '--h': g.hue } });
         bindIdea(node, i.id);
         field.append(node);
-        n = { node, w: 0, h: 0 };
+        n = { node, w: 0, h: 0, tilt: g.tilt };
         nodes.set(i.id, n);
       }
       if (n.node.textContent !== i.text) n.node.textContent = i.text;
       n.node.title = 'Drag to move · flick to slide · drop on your Path to make it a task';
+      n.node.classList.toggle('is-sel', selIdeas.has(i.id));
       n.w = n.node.offsetWidth; n.h = n.node.offsetHeight;
     }
     field.classList.toggle('is-empty', !list.length);
@@ -261,10 +288,10 @@ export function mountFleeting(root, el0, w) {
       const n = nodes.get(i.id);
       if (!n) continue;
       if (!n.w) { n.w = n.node.offsetWidth; n.h = n.node.offsetHeight; }
-      if (i.id === dragId) continue;
+      if (i.id === dragId || groupIds?.has(i.id)) continue;
       const m = motion(i, t);
       const px = Math.round(m.x * Math.max(0, W - n.w)), py = Math.round(m.y * Math.max(0, H - n.h));
-      n.node.style.transform = `translate(${px}px, ${py}px)`;
+      n.node.style.transform = tf(px, py, n.tilt);
       boxes.push({ i, m, n, px, py, rx: Math.max(1, W - n.w), ry: Math.max(1, H - n.h) });
     }
     // Bumps: an idea you set moving knocks into the ones it touches (only the thrower's screen decides).
@@ -304,6 +331,12 @@ export function mountFleeting(root, el0, w) {
       e.preventDefault();
       e.stopPropagation();
       node.focus({ preventScroll: true });
+      if (e.ctrlKey || e.metaKey || e.shiftKey) { // Ctrl/⌘/Shift-click toggles it in the selection
+        if (selIdeas.has(id)) selIdeas.delete(id); else selIdeas.add(id);
+        paintIdeaSel();
+        return;
+      }
+      if (selIdeas.has(id) && selIdeas.size > 1) { dragGroup(e, id); return; }
       const fr0 = field.getBoundingClientRect();
       const scale = fr0.width / (field.clientWidth || 1); // the canvas may be zoomed
       const W = field.clientWidth, H = field.clientHeight;
@@ -313,7 +346,8 @@ export function mountFleeting(root, el0, w) {
       const at = motion(idea, Date.now());
       let fx = at.x * rx, fy = at.y * ry;               // its top-left inside the field (unscaled px)
       const offX = (e.clientX - fr0.left) / scale - fx, offY = (e.clientY - fr0.top) / scale - fy;
-      node.style.transform = `translate(${Math.round(fx)}px, ${Math.round(fy)}px)`;
+      const tilt = nodes.get(id)?.tilt || 0;
+      node.style.transform = tf(Math.round(fx), Math.round(fy), tilt, true);
       dragId = id; hold++;
       node.classList.add('is-held');
       let ghost = null, over = null, moved = false, done = false, frame = 0, last = null;
@@ -339,7 +373,7 @@ export function mountFleeting(root, el0, w) {
         const inside = ev.clientX >= fr.left && ev.clientX <= fr.right && ev.clientY >= fr.top && ev.clientY <= fr.bottom;
         fx = Math.max(0, Math.min(rx, (ev.clientX - fr.left) / scale - offX));
         fy = Math.max(0, Math.min(ry, (ev.clientY - fr.top) / scale - offY));
-        node.style.transform = `translate(${Math.round(fx)}px, ${Math.round(fy)}px)`;
+        node.style.transform = tf(Math.round(fx), Math.round(fy), tilt, true);
         // Outside its box it becomes a floating copy you can drop on your Path.
         const col = inside ? null : pathColAt(ev.clientX, ev.clientY);
         showGhost(!inside);
@@ -379,7 +413,7 @@ export function mountFleeting(root, el0, w) {
           const detail = { x: ev.clientX, y: ev.clientY, text: idea.text, handled: false, column: '' };
           window.dispatchEvent(new CustomEvent('architect:drop-task', { detail }));
           if (detail.handled) {
-            setIdeas(ideas().filter((x) => x.id !== id));
+            commitIdeas(ideas().filter((x) => x.id !== id));
             toast(`Pinned to ${detail.column || 'your Path'}.`, { ms: 2200 });
             cleanup();
             return;
@@ -397,7 +431,9 @@ export function mountFleeting(root, el0, w) {
           }
         }
         const x = clamp01(fx / rx), y = clamp01(fy / ry);
-        setIdeas(ideas().map((q) => (q.id === id ? { ...q, x, y, vx, vy, t0: now, parked: false, mv: me?.id || null } : q)), !moved);
+        const next = ideas().map((q) => (q.id === id ? { ...q, x, y, vx, vy, t0: now, parked: false, mv: me?.id || null } : q));
+        if (moved) commitIdeas(next); else setIdeas(next, true);
+        if (!moved && how === 'up') { selIdeas.clear(); selIdeas.add(id); paintIdeaSel(); } // a click selects it
         cleanup();
       };
       const onUp = (ev) => finish(ev, 'up');
@@ -415,7 +451,7 @@ export function mountFleeting(root, el0, w) {
     node.addEventListener('keydown', (e) => {
       if (node.isContentEditable) return;
       if (e.key === 'Enter') { e.preventDefault(); editIdea(node, id); }
-      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); e.stopPropagation(); removeIdea(id); }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !(selIdeas.size > 1 && selIdeas.has(id))) { e.preventDefault(); e.stopPropagation(); removeIdea(id); }
     });
     node.addEventListener('contextmenu', (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -423,17 +459,20 @@ export function mountFleeting(root, el0, w) {
       if (!i) return;
       menu({ x: e.clientX, y: e.clientY }, [
         { label: 'Edit', icon: 'edit', onSelect: () => editIdea(node, id) },
+        selIdeas.size > 1 && selIdeas.has(id) ? { label: `Copy ${selIdeas.size} ideas`, icon: 'copy', kbd: '⌘C', onSelect: copyIdeas } : { label: 'Copy', icon: 'copy', kbd: '⌘C', onSelect: () => { selIdeas.clear(); selIdeas.add(id); paintIdeaSel(); copyIdeas(); } },
         { label: 'Give it a nudge', icon: 'curve', onSelect: () => { const m = motion(i, Date.now()); const a = Math.random() * Math.PI * 2; setIdeas(ideas().map((x) => (x.id === id ? { ...x, x: m.x, y: m.y, vx: Math.cos(a) * 0.35, vy: Math.sin(a) * 0.35, t0: Date.now(), parked: false, mv: me?.id || null } : x))); } },
         { label: 'Add to today’s story', icon: 'note', onSelect: () => { addFragment({ kind: 'text', text: i.text }, storyKey()); setIdeas(ideas().filter((x) => x.id !== id)); toast('Added to today’s story.', { ms: 1800 }); } },
         '-',
-        { label: 'Let it go', icon: 'trash', danger: true, onSelect: () => removeIdea(id) },
+        selIdeas.size > 1 && selIdeas.has(id)
+          ? { label: `Let ${selIdeas.size} go`, icon: 'trash', danger: true, kbd: 'Del', onSelect: deleteIdeas }
+          : { label: 'Let it go', icon: 'trash', danger: true, kbd: 'Del', onSelect: () => removeIdea(id) },
       ]);
     });
   }
 
   function removeIdea(id) {
-    const before = ideas();
-    setIdeas(before.filter((x) => x.id !== id));
+    selIdeas.delete(id);
+    commitIdeas(ideas().filter((x) => x.id !== id));
   }
 
   function editIdea(node, id) {
@@ -451,7 +490,7 @@ export function mountFleeting(root, el0, w) {
       node.classList.remove('is-editing');
       const text = node.textContent.replace(/\s+/g, ' ').trim();
       dragId = null;
-      if (save && text && text !== i.text) setIdeas(ideas().map((x) => (x.id === id ? { ...x, text } : x)));
+      if (save && text && text !== i.text) commitIdeas(ideas().map((x) => (x.id === id ? { ...x, text } : x)));
       else node.textContent = i.text;
       const n = nodes.get(id); if (n) { n.w = node.offsetWidth; n.h = node.offsetHeight; }
       release();
@@ -461,6 +500,166 @@ export function mountFleeting(root, el0, w) {
     node.addEventListener('blur', onBlur);
     node.addEventListener('keydown', onKey);
   }
+
+  /* ---- selection window, group drag, keys ---- */
+  // Drag on empty ice to draw a selection window; every idea it touches gets selected.
+  function marquee(e) {
+    if (e.button !== 0 || e.target !== field && !e.target.classList?.contains('fi-empty')) return;
+    e.preventDefault(); e.stopPropagation();
+    stage.focus({ preventScroll: true });
+    const fr = field.getBoundingClientRect();
+    const scale = fr.width / (field.clientWidth || 1);
+    const base = e.shiftKey || e.ctrlKey || e.metaKey ? new Set(selIdeas) : new Set();
+    const sx = e.clientX, sy = e.clientY;
+    const box = h('div', { class: 'fi-marquee' });
+    let shown = false;
+    const move = (ev) => {
+      if (!shown && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
+      if (!shown) { shown = true; field.append(box); }
+      const a = { l: Math.min(sx, ev.clientX), t: Math.min(sy, ev.clientY), r: Math.max(sx, ev.clientX), b: Math.max(sy, ev.clientY) };
+      Object.assign(box.style, { left: `${(a.l - fr.left) / scale}px`, top: `${(a.t - fr.top) / scale}px`, width: `${(a.r - a.l) / scale}px`, height: `${(a.b - a.t) / scale}px` });
+      selIdeas.clear(); base.forEach((id) => selIdeas.add(id));
+      for (const [id, n] of nodes) {
+        const b = n.node.getBoundingClientRect();
+        if (b.left < a.r && b.right > a.l && b.top < a.b && b.bottom > a.t) selIdeas.add(id);
+      }
+      paintIdeaSel();
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+      box.remove();
+      if (!shown) { selIdeas.clear(); base.forEach((id) => selIdeas.add(id)); paintIdeaSel(); } // a plain click on the ice clears it
+    };
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+  }
+
+  // Drag one of several selected ideas: they all move together (and can all land on your Path).
+  function dragGroup(e, lead) {
+    const fr0 = field.getBoundingClientRect();
+    const scale = fr0.width / (field.clientWidth || 1);
+    const W = field.clientWidth, H = field.clientHeight;
+    const t0 = Date.now();
+    const group = ideas().filter((q) => selIdeas.has(q.id)).map((q) => {
+      const n = nodes.get(q.id);
+      const rx = Math.max(1, W - (n?.node.offsetWidth || 0)), ry = Math.max(1, H - (n?.node.offsetHeight || 0));
+      const m = motion(q, t0);
+      return { q, n, rx, ry, x0: m.x * rx, y0: m.y * ry, fx: m.x * rx, fy: m.y * ry };
+    });
+    groupIds = new Set(group.map((g) => g.q.id));
+    hold++;
+    group.forEach((g) => { g.n?.node.classList.add('is-held'); if (g.n) g.n.node.style.transform = tf(Math.round(g.fx), Math.round(g.fy), g.n.tilt, true); });
+    const sx = e.clientX, sy = e.clientY;
+    let moved = false, over = null, last = null;
+    const move = (ev) => {
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 3) return;
+      if (!moved) { moved = true; document.body.classList.add('fi-dragging'); }
+      last = ev;
+      const dx = (ev.clientX - sx) / scale, dy = (ev.clientY - sy) / scale;
+      for (const g of group) {
+        g.fx = Math.max(0, Math.min(g.rx, g.x0 + dx)); g.fy = Math.max(0, Math.min(g.ry, g.y0 + dy));
+        if (g.n) g.n.node.style.transform = tf(Math.round(g.fx), Math.round(g.fy), g.n.tilt, true);
+      }
+      const col = pathColAt(ev.clientX, ev.clientY);
+      if (col !== over) { over?.classList.remove('fi-drop-on'); over = col; over?.classList.add('fi-drop-on'); }
+    };
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+      over?.classList.remove('fi-drop-on');
+      document.body.classList.remove('fi-dragging');
+      group.forEach((g) => g.n?.node.classList.remove('is-held'));
+      groupIds = null;
+      const now = Date.now();
+      if (moved && ev?.type === 'pointerup' && pathColAt(ev.clientX, ev.clientY)) {
+        const gone = new Set();
+        let column = '';
+        for (const g of group) {
+          const detail = { x: ev.clientX, y: ev.clientY, text: g.q.text, handled: false, column: '' };
+          window.dispatchEvent(new CustomEvent('architect:drop-task', { detail }));
+          if (detail.handled) { gone.add(g.q.id); column = detail.column; }
+        }
+        if (gone.size) {
+          commitIdeas(ideas().filter((q) => !gone.has(q.id)));
+          gone.forEach((id) => selIdeas.delete(id));
+          toast(`Pinned ${gone.size} to ${column || 'your Path'}.`, { ms: 2200 });
+          release();
+          return;
+        }
+      }
+      if (moved) {
+        const at = new Map(group.map((g) => [g.q.id, { x: clamp01(g.fx / g.rx), y: clamp01(g.fy / g.ry) }]));
+        commitIdeas(ideas().map((q) => (at.has(q.id) ? { ...q, ...at.get(q.id), vx: 0, vy: 0, t0: now, parked: false, mv: me?.id || null } : q)));
+      } else if (ev?.type === 'pointerup') { selIdeas.clear(); selIdeas.add(lead); paintIdeaSel(); }
+      release();
+    };
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+  }
+
+  const selectedIdeas = () => ideas().filter((q) => selIdeas.has(q.id));
+  async function copyIdeas() {
+    const text = selectedIdeas().map((q) => q.text).join('\n');
+    if (!text) return false;
+    try { await navigator.clipboard.writeText(text); toast(`Copied ${selIdeas.size} idea${selIdeas.size === 1 ? '' : 's'}.`, { ms: 1400 }); return true; }
+    catch { toast('Couldn’t reach the clipboard.', { tone: 'error' }); return false; }
+  }
+  function deleteIdeas() {
+    const n = selIdeas.size;
+    if (!n) return;
+    commitIdeas(ideas().filter((q) => !selIdeas.has(q.id)));
+    selIdeas.clear();
+    toast(`Let ${n} idea${n === 1 ? '' : 's'} go.`, { ms: 3200, action: { label: 'Undo', onClick: () => undoIdeas() } });
+  }
+  // New ideas from text (paste, or returning from the Path). at = { x, y } in 0..1 of the field.
+  function addIdeas(texts, at = null) {
+    const now = Date.now();
+    const fresh = texts.map((text, i) => ({
+      id: uid(), text, by: me?.id || null, t0: now, parked: false, mv: me?.id || null,
+      x: clamp01((at ? at.x : 0.1 + Math.random() * 0.8) + (at ? (i % 4) * 0.04 : 0)),
+      y: clamp01((at ? at.y : 0.15 + Math.random() * 0.6) + (at ? Math.floor(i / 4) * 0.08 + (i % 4) * 0.02 : 0)),
+      vx: at ? 0 : (Math.random() - 0.5) * 0.3, vy: at ? 0 : (Math.random() - 0.5) * 0.3,
+    }));
+    commitIdeas([...ideas(), ...fresh]);
+    selIdeas.clear(); fresh.forEach((q) => selIdeas.add(q.id));
+    return fresh;
+  }
+
+  stage.addEventListener('keydown', (e) => {
+    if (tab !== 'ideas' || e.target.closest('input, textarea, [contenteditable="true"]')) return;
+    const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
+    let hit = true;
+    if (mod && k === 'a') { ideas().forEach((q) => selIdeas.add(q.id)); paintIdeaSel(); }
+    else if (mod && k === 'z') undoIdeas(e.shiftKey);
+    else if (mod && k === 'y') undoIdeas(true);
+    else if (mod && k === 'c' && selIdeas.size) copyIdeas();
+    else if (mod && k === 'x' && selIdeas.size) copyIdeas().then((ok) => ok && deleteIdeas());
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selIdeas.size) deleteIdeas();
+    else if (e.key === 'Escape' && selIdeas.size) { selIdeas.clear(); paintIdeaSel(); }
+    else hit = false;
+    if (hit) { e.preventDefault(); e.stopPropagation(); }
+  });
+
+  // A task sent back from the Path lands here as an idea.
+  const onDropIdea = (e) => {
+    const d = e.detail;
+    if (!d || d.handled || !d.texts?.length || !box.isConnected || box.offsetParent === null) return;
+    let at = null;
+    if (d.x != null) {
+      const hit = document.elementFromPoint(d.x, d.y)?.closest?.('.fi');
+      if (hit !== box) return;
+      if (tab === 'ideas' && field) { const fr = field.getBoundingClientRect(); at = { x: clamp01((d.x - fr.left) / fr.width - 0.05), y: clamp01((d.y - fr.top) / fr.height - 0.04) }; }
+    }
+    d.handled = true;
+    addIdeas(d.texts, at);
+    if (tab !== 'ideas') setTab('ideas'); else paintIdeaSel();
+  };
+  window.addEventListener('architect:drop-idea', onDropIdea);
 
   // A Path column you can drop on: yours, under the pointer.
   function pathColAt(x, y) {
@@ -743,6 +942,7 @@ export function mountFleeting(root, el0, w) {
   // Every week has a renamable title (stored in weekly.titles by Monday key) and its list of
   // "what's needed to be true". Weeks with nothing in them simply show up blank.
   let viewWeek = null;     // Monday key of the week on screen (null → this week)
+  const wkSwipe = { acc: 0, t: 0, lock: 0 };
   const sel = new Set();   // selected task ids (Weekly)
   let anchorId = null;     // for shift-click ranges
   const SLOT_HINTS = ['add a key requirement…', 'add another requirement…', 'add one more requirement…'];
@@ -808,9 +1008,8 @@ export function mountFleeting(root, el0, w) {
       h('p', { class: 'fi-wk-sub' }, 'WHAT’S NEEDED TO BE TRUE'),
       h('div', { class: 'fi-wk-list' }, list.map((x) => taskRow(x, k))),
       Array.from({ length: slots }, (_, i) => adder(k, hintAt(i), i === 0)));
-    const meta = h('p', { class: 'fi-wk-meta' },
-      `${shortDate(a).toUpperCase()} – ${shortDate(b).toUpperCase()}`,
-      k === now ? ' · THIS WEEK' : k > lastWk ? ' · AFTER DEADLINE' : k === lastWk ? ' · DUE WEEK' : k < now ? ' · PAST' : '');
+    // The week's dates live in the card's tooltip now; the screen is just the goal and this week.
+    card.title = `${shortDate(a)} – ${shortDate(b)}${k === now ? ' · this week' : k > lastWk ? ' · after the deadline' : k === lastWk ? ' · due week' : k < now ? ' · past' : ''} · ← → or swipe to change week`;
 
     const look = weeklyLook();
     const bgUrl = look.bg ? urlOf(look.bg, () => tab === 'weekly' && refresh()) : null;
@@ -819,9 +1018,29 @@ export function mountFleeting(root, el0, w) {
       style: bgUrl ? { '--wk-img': `url("${bgUrl}")` } : null,
     },
       h('div', { class: 'fi-wk-top' }, goal, due),
+      // The edge arrows only appear while you drag a requirement (drop on one to send it to that week).
       h('div', { class: 'fi-wk-stage' }, arrow(-1, 'Previous week'), card, arrow(1, 'Next week')),
-      meta,
       selBar(p));
+    // Trackpad sideways scroll or a swipe steps weeks — no chevrons on screen.
+    view.addEventListener('wheel', (e) => {
+      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY) * 1.2) return;
+      e.preventDefault(); e.stopPropagation();
+      const t = performance.now();
+      if (t < wkSwipe.lock) return; // one gesture, one week (momentum scrolling keeps firing)
+      if (t - wkSwipe.t > 300) wkSwipe.acc = 0;
+      wkSwipe.t = t; wkSwipe.acc += e.deltaX;
+      if (Math.abs(wkSwipe.acc) > 80) { const d = Math.sign(wkSwipe.acc); wkSwipe.acc = 0; wkSwipe.lock = t + 650; stepWeek(d); }
+    }, { passive: false });
+    view.addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'touch' || e.target.closest('.fi-task, input, button')) return;
+      const sx = e.clientX, sy = e.clientY;
+      const up = (ev) => {
+        view.removeEventListener('pointerup', up);
+        const dx = ev.clientX - sx, dy = ev.clientY - sy;
+        if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) stepWeek(dx < 0 ? 1 : -1);
+      };
+      view.addEventListener('pointerup', up);
+    });
     // Background & theme now live on a right-click of the empty Weekly space.
     view.addEventListener('contextmenu', (e) => {
       if (e.target.closest('.fi-task, input, [contenteditable="true"]')) return;
@@ -1147,6 +1366,6 @@ export function mountFleeting(root, el0, w) {
       el = next;
       if (changed) refresh();
     },
-    destroy() { stopIdeas(); onResize.disconnect(); box.remove(); },
+    destroy() { stopIdeas(); onResize.disconnect(); window.removeEventListener('architect:drop-idea', onDropIdea); box.remove(); },
   };
 }

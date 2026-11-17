@@ -467,6 +467,21 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     try { await Promise.all(patches.map((p) => db.update('path_tasks', p.id, { column_id: p.column_id, position: p.position }))); } catch (e) { fail(e); }
   }
 
+  // Tasks go back to Fleeting Ideas as ideas (dropped at x/y, or anywhere when sent from a menu).
+  async function toIdeas(list, at = null) {
+    if (!list.length) return false;
+    const detail = { texts: list.map((t) => t.title).filter(Boolean), handled: false, ...(at || {}) };
+    window.dispatchEvent(new CustomEvent('architect:drop-idea', { detail }));
+    if (!detail.handled) { if (!at) toast('No Fleeting Ideas in this space.', { ms: 2200 }); return false; }
+    const ids = new Set(list.map((t) => t.id));
+    tasks = tasks.filter((t) => !ids.has(t.id));
+    picked = new Set();
+    render();
+    toast(`Back in Fleeting Ideas${list.length > 1 ? ` (${list.length})` : ''}.`, { ms: 2000 });
+    try { await db.remove('path_tasks', [...ids]); } catch (e) { fail(e); }
+    return true;
+  }
+
   async function bulkDelete() {
     const list = pickedTasks();
     if (!list.length) return;
@@ -761,6 +776,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       { label: picked.has(task.id) ? 'Deselect' : 'Select', icon: 'selectAll', kbd: '⌘Click', onSelect: () => togglePick(task) },
       { label: 'Duplicate', icon: 'copy', onSelect: () => duplicateTask(task) },
       readOnly ? null : { label: 'Plan for another day…', icon: 'calendar', onSelect: () => dayMenu(anchor, [task]) },
+      readOnly ? null : { label: 'Back to Fleeting Ideas', icon: 'spark', onSelect: () => toIdeas([task]) },
       '-',
       { header: 'Move to' },
       ...others.map((c) => ({
@@ -801,6 +817,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       { header: 'Move to' },
       ...columns.map((c) => ({ label: c.title, icon: 'toPaths', onSelect: () => bulkMove(c.id) })),
       '-',
+      readOnly ? null : { label: 'Back to Fleeting Ideas', icon: 'spark', onSelect: () => toIdeas(list) },
       { label: 'Clear selection', icon: 'close', kbd: 'Esc', onSelect: clearPick },
       { label: `Delete ${plural(list.length, 'task')}`, icon: 'trash', kbd: 'Del', danger: true, onSelect: bulkDelete },
     ], { align: 'end' });
@@ -957,6 +974,9 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     }
     drag.ghost.style.transform = `translate(${e.clientX - drag.dx}px, ${e.clientY - drag.dy}px)`;
     const under = document.elementFromPoint(e.clientX, e.clientY);
+    // Over a Fleeting Ideas object: drop it there to turn it back into an idea.
+    const fi = !readOnly ? under?.closest('.fi') : null;
+    if (fi !== drag.fi) { drag.fi?.classList.remove('fi-drop-on'); drag.fi = fi; fi?.classList.add('fi-drop-on'); drag.ghost.classList.toggle('is-to-ideas', !!fi); }
     const colEl = under?.closest('.pcol');
     if (colEl) {
       const list = colEl.querySelector('.pcol-list');
@@ -975,7 +995,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     autoScroll(e);
   }
 
-  function onDragEnd() {
+  function onDragEnd(e) {
     unlisten();
     const d = drag;
     drag = null;
@@ -983,6 +1003,13 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     swallowClick();
     document.body.classList.remove('is-dragging');
     d.ghost.remove();
+    d.fi?.classList.remove('fi-drop-on');
+    if (d.fi && e?.type === 'pointerup') {
+      d.hidden.forEach((n) => { n.style.display = ''; });
+      d.ph.remove();
+      toIdeas(tasks.filter((t) => d.group.has(t.id)), { x: e.clientX, y: e.clientY }).then((ok) => { if (!ok) render(); });
+      return;
+    }
     const colEl = d.ph.closest('.pcol');
     const task = tasks.find((t) => t.id === d.id);
     const sib = (node, dir) => {

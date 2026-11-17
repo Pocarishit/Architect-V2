@@ -545,3 +545,117 @@ body.fi-dragging, body.fi-dragging * { cursor: grabbing !important; }
   .fi-wk-card { padding: 24px 14px 16px; }
   .fi-wk-name, .fi-wk-name-input { font-size: 32px; }
 }
+
+/* ============================================================
+   Nov 17 — Architect SYSTEM updates
+   ============================================================ */
+
+/* Tabs — the Path day-tab style: no pill outlines, no bright button. The tab you're on is white text
+   on a subtle dark chip; the rest are plain gray words. */
+.fi-tabs { gap: 2px; }
+.fi-tab {
+  height: 28px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent;
+  font-family: var(--f-mono); font-size: 11px; font-weight: 400; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--fg-3); transition: color .12s, background .12s;
+}
+.fi-tab:hover { color: var(--fg-2); background: var(--s2); border: 0; }
+.fi-tab.is-on { color: var(--fg); background: var(--s3); border: 0; }
+.fi-tab:focus-visible { outline: 1px solid var(--fg-3); outline-offset: 1px; }
+
+/* Full-screen tabs: Weekly and Tracker scale with the object, so filling the screen fills it with them. */
+.fi-stage.is-weekly, .fi-stage.is-tracker { container-type: size; }
+
+/* ---- Weekly: full-size weeks ---- */
+.fi-stage.is-weekly { overflow-y: auto; }
+.fi-weekly { min-height: 100cqh; padding: clamp(14px, 4cqh, 48px) clamp(12px, 4cqw, 56px); justify-content: center; }
+/* goal + due: smaller and quieter above, so the week stays the loudest thing on screen */
+.fi-weekly .fi-wk-top { gap: 6px; }
+.fi-weekly .fi-goal, .fi-weekly .fi-goal-input { font-size: clamp(12px, 2cqh, 17px); letter-spacing: .08em; color: var(--fg-3); }
+.fi-weekly .fi-goal:hover { color: var(--fg-2); }
+.fi-weekly .fi-due { height: 26px; padding: 0 10px; font-size: clamp(9.5px, 1.4cqh, 11px); color: var(--fg-4); border-color: transparent; background: transparent; }
+.fi-weekly .fi-due:hover { color: var(--fg-2); background: var(--s2); }
+.fi-wk-stage { grid-template-columns: clamp(28px, 5cqw, 64px) minmax(0, min(1100px, 100%)) clamp(28px, 5cqw, 64px); margin-top: clamp(14px, 3.5cqh, 40px); }
+.fi-wk-card {
+  width: 100%; padding: clamp(24px, 6cqh, 72px) clamp(16px, 5cqw, 72px) clamp(20px, 5cqh, 56px);
+  border-radius: clamp(16px, 2.6cqh, 28px); gap: clamp(8px, 1.4cqh, 16px);
+  border: 1.5px solid color-mix(in srgb, var(--fg) 14%, transparent); /* soft ghost gray */
+}
+.fi-wk-card.is-now, .fi-wk-card.is-after { border-color: color-mix(in srgb, var(--fg) 18%, transparent); }
+.fi-wk-name, .fi-wk-name-input { font-size: clamp(34px, 11cqh, 120px); line-height: 1; }
+.fi-wk-sub { margin: clamp(4px, 1cqh, 12px) 0 clamp(12px, 3.5cqh, 40px); font-size: clamp(11px, 1.8cqh, 16px); letter-spacing: .14em; color: var(--fg-3); }
+.fi-wk-card .fi-wk-list { gap: clamp(8px, 1.4cqh, 16px); }
+.fi-wk-card .fi-task, .fi-wk-card.is-now .fi-task { padding: clamp(12px, 2.2cqh, 24px) clamp(14px, 2.4cqw, 28px); border-radius: clamp(10px, 1.6cqh, 16px); } /* requirement boxes keep their border */
+.fi-wk-card .fi-task-text { font-size: clamp(15px, 2.6cqh, 26px); }
+.fi-slot { height: clamp(50px, 8.5cqh, 92px); border-radius: clamp(10px, 1.6cqh, 16px); }
+.fi-slot .fi-add-input { font-size: clamp(13px, 2.1cqh, 20px); }
+.fi-wk-card .fi-check { width: clamp(20px, 3cqh, 30px); height: clamp(20px, 3cqh, 30px); flex: none; }
+/* no stray chevrons or week pagination: the edge arrows only show up as drop targets while dragging */
+.fi-wk-meta { display: none; }
+.fi-wk-arrow { opacity: 0; pointer-events: none; height: clamp(80px, 30cqh, 320px); }
+body.fi-dragging .fi-wk-arrow:not(:disabled) { opacity: .5; pointer-events: auto; border: 1.5px dashed var(--line-2); }
+body.fi-dragging .fi-wk-arrow.is-over { opacity: 1; }
+
+/* ---- Tracker: the month fills the object ---- */
+.fi-stage.is-tracker { overflow: auto; }
+.fi-cal {
+  max-width: none; width: min(100%, 90cqh); min-height: 100cqh; box-sizing: border-box; margin: 0 auto;
+  padding: clamp(12px, 3cqh, 40px) clamp(12px, 3cqw, 40px); align-content: center; gap: clamp(8px, 1.8cqh, 22px);
+}
+.fi-cal-head { gap: clamp(16px, 4cqw, 56px); margin-bottom: clamp(2px, 1cqh, 12px); }
+.fi-cal-month { font-size: clamp(22px, 5.4cqh, 60px); }
+.fi-cal-dow, .fi-cal-grid { gap: clamp(8px, 1.8cqh, 22px) clamp(8px, 2.4cqw, 34px); }
+.fi-cal-dow span { font-size: clamp(14px, 2.8cqh, 30px); }
+.fi-cal-day, .fi-cal-gap { max-width: none; }
+.fi-cal-day { font-size: clamp(13px, 2.8cqh, 30px); }
+.fi-cal-hint { font-size: clamp(12px, 2cqh, 18px); margin-top: clamp(4px, 1cqh, 12px); }
+.fi-cal-key { font-size: clamp(9.5px, 1.4cqh, 12px); }
+.fi-cal-key i { width: clamp(8px, 1.2cqh, 12px); height: clamp(8px, 1.2cqh, 12px); }
+
+/* ---- Ideas: glowing glass tiles ---- */
+.fi-idea {
+  --h: 268;
+  padding: 15px 26px; border-radius: 14px; color: #fff;
+  font-weight: 500; text-shadow: 0 1px 2px rgba(0, 0, 0, .45);
+  background:
+    radial-gradient(130% 160% at 0% 0%, hsl(var(--h) 85% 72% / .38), transparent 55%),
+    linear-gradient(158deg, hsl(var(--h) 48% 34% / .92) 0%, hsl(var(--h) 44% 20% / .94) 52%, hsl(var(--h) 40% 11% / .96) 100%);
+  border: 1px solid hsl(var(--h) 75% 78% / .32);
+  box-shadow:
+    inset 0 1px 0 hsl(var(--h) 90% 88% / .45),
+    inset 1px 0 0 rgba(255, 255, 255, .08),
+    inset 0 -2px 0 rgba(0, 0, 0, .38),
+    0 0 26px -6px hsl(var(--h) 85% 62% / .55),
+    0 16px 30px -16px rgba(0, 0, 0, .85);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2); backdrop-filter: blur(10px) saturate(1.2);
+  transition: box-shadow .18s var(--ease), border-color .18s var(--ease), filter .18s var(--ease);
+}
+.fi-idea:hover, .fi-idea:focus-visible {
+  background:
+    radial-gradient(130% 160% at 0% 0%, hsl(var(--h) 90% 76% / .48), transparent 58%),
+    linear-gradient(158deg, hsl(var(--h) 50% 38% / .94) 0%, hsl(var(--h) 46% 22% / .95) 52%, hsl(var(--h) 40% 12% / .96) 100%);
+  border-color: hsl(var(--h) 80% 82% / .5);
+}
+.fi-idea:focus-visible { box-shadow: inset 0 1px 0 hsl(var(--h) 90% 88% / .5), 0 0 0 1.5px hsl(var(--h) 85% 80% / .8), 0 16px 30px -16px rgba(0, 0, 0, .85); }
+.fi-idea.is-held { box-shadow: inset 0 1px 0 hsl(var(--h) 90% 90% / .55), 0 0 34px -4px hsl(var(--h) 90% 65% / .7), 0 26px 40px -18px rgba(0, 0, 0, .9); }
+.fi-idea.is-sel {
+  border-color: #fff;
+  box-shadow: inset 0 1px 0 hsl(var(--h) 90% 90% / .55), 0 0 0 1.5px #fff, 0 0 30px -4px hsl(var(--h) 90% 66% / .7), 0 16px 30px -16px rgba(0, 0, 0, .85);
+}
+.fi-idea.is-editing { box-shadow: 0 0 0 1.5px #fff, 0 16px 30px -16px rgba(0, 0, 0, .85); }
+.fi-ghost.fi-idea { box-shadow: 0 0 30px -4px hsl(var(--h) 90% 66% / .6), 0 22px 40px -14px rgba(0, 0, 0, .8); }
+.fi-ghost.is-to-path { filter: brightness(1.25); }
+[data-theme="light"] .fi-idea, [data-theme="paper"] .fi-idea {
+  color: hsl(var(--h) 45% 16%); text-shadow: none;
+  background:
+    radial-gradient(130% 160% at 0% 0%, rgba(255, 255, 255, .9), transparent 60%),
+    linear-gradient(158deg, hsl(var(--h) 85% 92% / .95), hsl(var(--h) 70% 80% / .95));
+  border-color: hsl(var(--h) 60% 62% / .45);
+  box-shadow: inset 0 1px 0 #fff, inset 0 -2px 0 hsl(var(--h) 40% 50% / .18), 0 0 20px -8px hsl(var(--h) 80% 55% / .5), 0 12px 22px -14px rgba(0, 0, 0, .35);
+}
+.fi-marquee {
+  position: absolute; z-index: 3; pointer-events: none; border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--fg) 55%, transparent); background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.fi-field { cursor: crosshair; }
+.fi-field .fi-idea { cursor: grab; }
+.ptask-ghost.is-to-ideas { box-shadow: 0 0 0 1.5px var(--fg), 0 0 26px -6px hsl(268 85% 62% / .6), var(--shadow); }

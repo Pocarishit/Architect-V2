@@ -12,6 +12,7 @@ import { makePreview } from '../board/preview.js';
 import { rectOf, unionRects } from '../board/geometry.js';
 import { createWidgetHost, WIDGETS, editCustom } from '../space/widgets.js';
 import { defaultVariables, readVariablesHtml, countPeople, mergeVariables } from '../space/variables.js';
+import { loadMyVars, myVars, setMyVars } from '../data/myvars.js';
 import { themeItems, changePassword } from './shell.js';
 import { openSettings } from './settings.js';
 import { openBoardWindow } from '../space/window.js';
@@ -84,7 +85,7 @@ export function mountSpace(root) {
       const before = page.lastElementChild;
       slot.board = mountBoard(page, id, {
         space: true,
-        mountWidget: createWidgetHost({ editor: () => slot.t?.editor || null, spaceId: id, me, openBoard, snapBack, detach, detachTicketCol, snapTicketCol, popTicket, snapTicket, expandTicket, poppedTickets, openMenuFor, reveal, addPortal, register, registerTts }),
+        mountWidget: createWidgetHost({ editor: () => slot.t?.editor || null, spaceId: id, personal: m === 'personal', me, openBoard, snapBack, detach, detachTicketCol, snapTicketCol, popTicket, snapTicket, expandTicket, poppedTickets, openMenuFor, reveal, addPortal, register, registerTts }),
         extendMenu,
         onReady: (tools) => onReady(tools, slot, m),
       });
@@ -207,9 +208,11 @@ export function mountSpace(root) {
     }
     const progress = toast(`Moving Variables… 0/${people}`, { ms: 0 });
     try {
-      const cur = ed.byId.get(target.id) || target;
-      const out = await mergeVariables({ sections: cur.sections, entries: cur.entries }, plan, { chats, onStep: (n) => progress.update(`Moving Variables… ${n}/${people}`) });
-      ed.updateEls([target.id], { sections: out.sections, entries: out.entries });
+      // Variables live on your account now, so the import goes there (not onto the object).
+      await loadMyVars();
+      const cur = myVars() || {};
+      const out = await mergeVariables({ sections: cur.sections || defaultVariables().sections, entries: cur.entries || [] }, plan, { chats, onStep: (n) => progress.update(`Moving Variables… ${n}/${people}`) });
+      setMyVars({ sections: out.sections, entries: out.entries });
       ed.updateEls([custom.id], { nativeImported: true });
       progress.close();
       toast(`Variables: ${out.added} new ${out.added === 1 ? 'entry' : 'entries'}${out.notes ? `, ${out.notes} notes` : ''}.`, { ms: 4000 });

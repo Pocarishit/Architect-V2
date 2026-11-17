@@ -851,7 +851,7 @@ export function mountBoard(root, boardId, opts = {}) {
 
     function showShortcuts() {
       const groups = [
-        ['Tools', [['V', 'Select'], ['H / Space', 'Hand (pan)'], ['N', 'Sticky note'], ['T', 'Text'], ['S · R · O', 'Shape · Rectangle · Ellipse'], ['L · A', 'Line · Arrow'], ['P', 'Pen (eraser in its menu)'], ['F', 'Frame'], ['B · ⇧B', 'Border box · curve'], ['U', 'Upload media'], ['K', 'Video or link']]],
+        ['Tools', [['V', 'Select'], ['H / Space', 'Hand (pan)'], ['N', 'Sticky note'], ['T', 'Text'], ['S · O', 'Shape · Ellipse'], ['L · A', 'Line · Arrow'], ['P', 'Pen (eraser in its menu)'], ['F', 'Frame'], ['B · ⇧B', 'Border box · curve'], ['U', 'Upload media'], ['K', 'Video or link']]],
         ...(space ? [['Space', [['Right-click · /', 'Space menu'], ['E + R', 'Emergency Room'], ['Your keys', 'Camera points & object shortcuts']]]] : []),
         ['Edit', [['⌘Z / ⇧⌘Z', 'Undo / redo'], ['2 / 3-finger tap', 'Undo / redo (touch)'], ['⌘C · ⌘X · ⌘V', 'Copy · cut · paste'], ['⌥⌘C / ⌥⌘V', 'Copy / paste style'], ['⌘D', 'Duplicate'], ['Alt + drag', 'Duplicate while moving'], ['⌘G / ⇧⌘G', 'Group / ungroup'], ['⇧⌘L', 'Lock'], [']  [', 'Front / back'], ['Arrows', 'Nudge (⇧ = 10px)'], ['Tab / ⇧Tab', 'Next / previous item'], ['Click again · Double-click · Enter · F2', 'Edit text'], ['Del', 'Delete']]],
         ['Text', [['⌘B · ⌘I · ⌘U', 'Bold · italic · underline'], ['⇧⌘X', 'Strikethrough'], ['⌘K', 'Link'], ['⇧⌘. / ⇧⌘,', 'Bigger / smaller'], ['⇧⌘L · E · R', 'Align text (while typing)'], ['⇧⌘7 / ⇧⌘8', 'Numbered / bullet list'], ['⌘\\', 'Clear formatting'], ['⌘Enter · Esc', 'Finish typing']]],

@@ -2306,7 +2306,7 @@ export class Editor {
       return;
     }
     if (k === 'b' && !mod) { this.setOpt('border', e.shiftKey ? 'curve' : 'box'); this.setTool('border'); return; }
-    if (k === 'r') { this.setOpt('shape', 'rect'); this.setTool('shape'); return; }
+    // R no longer picks the rectangle: it belongs to E + R (Emergency Room). S still opens Shapes.
     if (k === 'o') { this.setOpt('shape', 'ellipse'); this.setTool('shape'); return; }
     if (k === 'a') { this.setOpt('line', 'arrow'); this.setTool('line'); return; }
     if (k === 'u') { this.emit('command', 'upload'); return; }

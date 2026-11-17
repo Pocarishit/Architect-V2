@@ -9,6 +9,8 @@ import { uid, store } from '../core/util.js';
 import { api, friendlyError } from '../data/api.js';
 import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia } from './media.js';
 import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
+import { loadMyVars, myVars, setMyVars, onMyVars } from '../data/myvars.js';
+import { mountFreeView } from './freeview.js';
 
 export const DEFAULT_SECTIONS = ['School', 'Family', 'Business', 'Friends'];
 export const defaultVariables = () => ({ sections: DEFAULT_SECTIONS.map((name) => ({ id: uid(), name })), entries: [] });
@@ -92,31 +94,53 @@ export function mountVariables(root, el0, w) {
   let draft = '';
   let sending = false;
   let dragging = false;
+  let free = null; // Free View of the open chat, when it's on
+  const freeBusy = () => !!free?.busy();
   const remember = () => store.set(memKey, { section, sub, open });
 
   const box = h('div', { class: 'vr' });
   root.append(box);
 
-  const sections = () => (el.sections?.length ? el.sections : defaultVariables().sections);
+  // Your Variables live on your account (data/myvars.js), not on this object: the same in both Spaces,
+  // and in the shared Space everyone sees only their own. What's still saved on the object from before
+  // is "legacy" — offered once, never shown as yours until you bring it in.
+  let ready = false;
+  const acct = () => myVars() || { sections: null, entries: [] };
+  let defaults = null;
+  const sections = () => acct().sections || (defaults ||= defaultVariables().sections);
   const tops = () => sections().filter((s) => !s.parent);
   const kids = (id) => sections().filter((s) => s.parent === id);
   const secById = (id) => sections().find((s) => s.id === id);
-  const entries = () => el.entries || [];
+  const entries = () => acct().entries || [];
   const inSec = (id) => entries().filter((x) => x.section === id);
   const countIn = (id) => inSec(id).length + kids(id).reduce((n, k) => n + inSec(k.id).length, 0);
   const pathOf = (id) => { const s = secById(id); if (!s) return ''; const p = s.parent && secById(s.parent); return p ? `${p.name} › ${s.name}` : s.name; };
-  const save = (p) => w.patch({ sections: sections(), ...p });
+  const save = (p) => setMyVars({ sections: sections(), entries: entries(), ...p });
+  const legacyNew = () => {
+    const have = new Set(entries().map((x) => x.id));
+    return (el.entries || []).filter((x) => !have.has(x.id));
+  };
+  function bringIn() {
+    const secIds = new Set(sections().map((x) => x.id));
+    const add = (el.sections || []).filter((x) => !secIds.has(x.id));
+    const n = legacyNew().length;
+    save({ sections: [...sections(), ...add], entries: [...entries(), ...legacyNew()] });
+    store.set(`${memKey}.legacy`, 'done');
+    toast(`Brought in ${n} variable${n === 1 ? '' : 's'}.`, { ms: 2200 });
+  }
   const setEntries = (list) => save({ entries: list });
   const patchEntry = (id, fn) => setEntries(entries().map((x) => (x.id === id ? { ...x, ...fn(x) } : x)));
   const here = () => sub || section;
 
   function render() {
-    if (dragging) { pending = true; return; }
+    if (!ready) { box.replaceChildren(h('p', { class: 'vr-hint' }, 'Loading your variables…')); return; }
+    if (dragging || freeBusy()) { pending = true; return; }
     if (busy) {
       // Typing a note: refresh the messages in place, keep the composer (and your cursor) alone.
       const x = open && entries().find((e) => e.id === open);
       const list = box.querySelector('.vr-msgs');
-      if (x && list) {
+      if (x && free && x.free?.on) { free.update(x); return; }
+      if (x && list && !x.free?.on) {
         const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
         list.replaceChildren(...msgRows(x));
         if (atEnd) list.scrollTop = list.scrollHeight;
@@ -130,9 +154,10 @@ export function mountVariables(root, el0, w) {
     const entry = open && entries().find((x) => x.id === open);
     if (open && !entry) open = null;
     const keep = box.querySelector('.vr-grid')?.scrollTop;
+    free?.destroy(); free = null;
     box.replaceChildren(entry ? chat(entry) : grid(t));
     if (keep && !entry) box.querySelector('.vr-grid').scrollTop = keep;
-    if (entry) requestAnimationFrame(() => { const l = box.querySelector('.vr-msgs'); if (l) l.scrollTop = l.scrollHeight; });
+    if (entry && !free) requestAnimationFrame(() => { const l = box.querySelector('.vr-msgs'); if (l) l.scrollTop = l.scrollHeight; });
   }
 
   /* ---------------- sections + grid ---------------- */
@@ -176,7 +201,12 @@ export function mountVariables(root, el0, w) {
         { label: 'Import from Variables file…', icon: 'upload', onSelect: importFile },
       ].filter(Boolean));
     });
-    return h('div', { class: 'vr-home' }, tabs, ...body, gridEl,
+    const old = store.get(`${memKey}.legacy`, null) ? [] : legacyNew();
+    const banner = old.length ? h('div', { class: 'vr-legacy' },
+      h('span', {}, `Variables are now private to each account. ${old.length} saved on this object from before ${old.length === 1 ? 'isn’t' : 'aren’t'} in yours.`),
+      h('button', { type: 'button', class: 'btn btn-primary sm', onclick: bringIn }, 'Bring in'),
+      h('button', { type: 'button', class: 'btn sm', onclick: () => { store.set(`${memKey}.legacy`, 'dismissed'); render(); } }, 'Not mine')) : null;
+    return h('div', { class: 'vr-home' }, tabs, banner, ...body, gridEl,
       !list.length && !cats.length ? h('p', { class: 'vr-hint' }, 'A teacher, a committee, your family, the office — every influence gets its own space. Right-click here to add one.') : null);
   }
 
@@ -423,16 +453,16 @@ export function mountVariables(root, el0, w) {
   }
 
   /* ---------------- an entry's notes ---------------- */
-  function msgRows(x) {
+  function msgRows(x, list = x.notes || []) {
     const rows = [];
     let lastDay = '', prev = null;
-    for (const m of x.notes || []) {
+    for (const m of list) {
       const dl = chatDayLabel(m.ts);
       if (dl !== lastDay) { rows.push(dayRow(m.ts)); lastDay = dl; prev = null; }
       rows.push(bubble(x, m, prev && prev.by === m.by && m.ts - prev.ts < CHAT_GROUP_MS));
       prev = m;
     }
-    return rows.length ? rows : [h('p', { class: 'sc-empty' }, `Notes on ${x.name}. Reflect, keep track, see how things change.`)];
+    return rows.length ? rows : (x.notes?.length ? [] : [h('p', { class: 'sc-empty' }, `Notes on ${x.name}. Reflect, keep track, see how things change.`)]);
   }
 
   function chat(x) {
@@ -443,14 +473,30 @@ export function mountVariables(root, el0, w) {
       onfocus: () => { busy = true; },
       onblur: () => { busy = false; if (pending) setTimeout(render, 0); },
     });
+    const fvOn = !!x.free?.on;
+    if (fvOn) {
+      free = mountFreeView({
+        entry: () => entries().find((e) => e.id === x.id) || x,
+        flowRows: (list) => msgRows(x, list),
+        one: (m) => bubble(x, m),
+        save: (f) => patchEntry(x.id, () => ({ free: f })),
+      });
+    }
+    const toggle = h('button', {
+      type: 'button', class: ['vr-fv-toggle', fvOn && 'is-on'], 'aria-pressed': String(fvOn),
+      title: fvOn ? 'Back to the normal column' : 'Free view: drag messages anywhere, link them, draw',
+      onclick: () => patchEntry(x.id, (e) => ({ free: { pos: {}, links: [], ink: [], ...(e.free || {}), on: !fvOn } })),
+    }, h('i'), 'FREE VIEW');
     const head = h('div', { class: 'vr-chat-head' },
       h('button', { class: 'vr-back', type: 'button', 'aria-label': 'Back to variables', onclick: () => { open = null; remember(); render(); } }, icon('chevronLeft', 16)),
       x.photo ? h('span', { class: 'vr-mini-face' }, urlOf(x.photo, render) ? h('img', { src: urlOf(x.photo), alt: '' }) : null) : null,
       h('span', { class: 'vr-chat-name' }, x.name),
       h('span', { class: 'vr-chat-sec' }, pathOf(x.section)),
+      free ? free.tools : null,
+      toggle,
       h('button', { class: 'vr-card-more', type: 'button', 'aria-label': 'Options', onclick: (e) => entryMenu(e.currentTarget, x) }, icon('more', 14)));
-    const wrap = h('div', { class: 'vr-chat is-sc' }, head,
-      h('div', { class: 'vr-msgs sc-list', role: 'log' }, msgRows(x)),
+    const wrap = h('div', { class: ['vr-chat is-sc', fvOn && 'is-free'] }, head,
+      free ? free.el : h('div', { class: 'vr-msgs sc-list', role: 'log' }, msgRows(x)),
       h('div', { class: 'vr-compose sc-compose' },
         h('button', { class: ['sc-plus', sending && 'is-busy'], type: 'button', 'aria-label': 'Add a photo', disabled: sending, onclick: async () => { const fs = await pickMedia({ accept: 'image/*,video/*' }); if (fs.length) sendFiles(x.id, fs); } },
           sending ? h('span', { class: 'dots-loader sm' }, h('i'), h('i'), h('i')) : icon('plus', 18)),
@@ -507,13 +553,25 @@ export function mountVariables(root, el0, w) {
   function grow(ta) { ta.style.height = 'auto'; ta.style.height = `${Math.min(160, ta.scrollHeight)}px`; }
 
   render();
+  const off = onMyVars(() => render());
+  loadMyVars().then(() => {
+    // Your account has no Variables yet: your personal Space's list becomes yours automatically.
+    // (The shared object's old list could be anyone's, so that one waits for "Bring in".)
+    const empty = !acct().entries.length && !acct().sections;
+    if (empty && w.host?.personal && !store.get(`${memKey}.legacy`, null) && ((el.entries || []).length || (el.sections || []).length)) {
+      setMyVars({ sections: el.sections?.length ? el.sections : null, entries: el.entries || [] });
+      store.set(`${memKey}.legacy`, 'done');
+    }
+    ready = true;
+    render();
+  }).catch(() => { ready = true; render(); });
 
   return {
     update(next) {
-      const changed = next.entries !== el.entries || next.sections !== el.sections;
+      const legacyChanged = next.entries !== el.entries;
       el = next;
-      if (changed) render();
+      if (legacyChanged && ready && !open) render();
     },
-    destroy() { box.remove(); },
+    destroy() { off(); free?.destroy(); box.remove(); },
   };
 }

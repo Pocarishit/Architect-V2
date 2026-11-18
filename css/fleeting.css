@@ -978,3 +978,65 @@ body.fi-dragging .fi-wk-arrow.is-over { opacity: 1; }
 .vr-fv-grid .vr-fv-board[data-tool="move"] .vr-it { cursor: pointer; }
 .vr-home.is-free .vr-bar .vr-fv-tools { margin-left: auto; }
 @media (max-width: 719px) { .vr-fv-grid .vr-fv-item { width: 150px; } }
+
+/* ============================================================
+   Nov 18 (b) — Variables: a real docked toolbar, free panning, 2-D sizing, full names, in-place editing
+   ============================================================ */
+/* The Free View canvas and its toolbar share a stage: the toolbar is docked beside the canvas, never over it */
+.vr-fv-stage { position: relative; flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; align-items: stretch; }
+.vr-fv-stage > .vr-fv { flex: 1 1 auto; min-width: 0; min-height: 0; }
+.vr-chat.is-sc .vr-fv-stage > .vr-msgs.vr-fv { display: block; padding: 0; overflow: auto; position: relative; }
+.vr-home.is-free .vr-fv-stage > .vr-fv-grid { height: auto; }
+.vr-fv-stage > .vr-fv-dock {
+  flex: none; order: -1; align-self: center; z-index: 5;
+  display: flex; flex-direction: column; gap: 2px; margin: 8px 0 8px 8px; padding: 4px;
+  max-height: calc(100% - 16px); overflow-y: auto; scrollbar-width: none;
+  background: var(--s1); border: 1px solid var(--line); border-radius: 15px; box-shadow: var(--shadow);
+}
+.vr-fv-dock::-webkit-scrollbar { display: none; }
+.vr-fv-dock .vr-fv-tool { flex: none; width: 34px; height: 34px; border-radius: 10px; color: var(--fg-2); background: transparent; }
+.vr-fv-dock .vr-fv-tool:hover { background: var(--s3); color: var(--fg); }
+.vr-fv-dock .vr-fv-tool.is-on { background: var(--fg); color: var(--bg); }
+.vr-fv-dock .vr-fv-tool.is-danger:hover { color: var(--red); }
+.vr-fv-tsep { flex: none; height: 1px; margin: 3px 7px; background: var(--line); }
+.vr-fv-count {
+  flex: none; height: 22px; display: grid; place-items: center; margin: 1px 4px;
+  border-radius: 999px; background: var(--s3); color: var(--fg);
+  font-family: var(--f-mono); font-size: 10.5px; font-variant-numeric: tabular-nums;
+}
+@media (max-width: 719px) {
+  .vr-fv-stage > .vr-fv-dock { margin: 6px 0 6px 6px; }
+  .vr-fv-dock .vr-fv-tool { width: 32px; height: 32px; }
+}
+
+/* Moving around: hand tool, Space + drag, middle mouse — any direction */
+.vr-fv[data-tool="hand"], .vr-fv.is-panready, .vr-fv[data-tool="hand"] .vr-fv-board, .vr-fv.is-panready .vr-fv-board,
+.vr-fv[data-tool="hand"] .vr-it, .vr-fv.is-panready .vr-it, .vr-fv[data-tool="hand"] .sc-msg { cursor: grab; }
+.vr-fv.is-panning, .vr-fv.is-panning * { cursor: grabbing !important; user-select: none; }
+.vr-fv[data-tool="hand"] .vr-fv-grip, .vr-fv[data-tool="hand"] .vr-fv-size { pointer-events: none; opacity: 0 !important; }
+
+/* Sizing: the corner grows both ways. Sized tiles scale their face and name with them */
+.vr-fv-grid .vr-fv-item > .vr-it { min-height: 150px; }
+.vr-fv-grid .vr-fv-item.is-sized > .vr-it { min-height: 0; }
+.vr-fv-grid .vr-fv-item .vr-face { width: calc(92px * var(--fv-k, 1)); height: calc(92px * var(--fv-k, 1)); flex: none; }
+.vr-fv-grid .vr-fv-item .vr-cat-img { width: calc(52px * var(--fv-k, 1)); height: calc(52px * var(--fv-k, 1)); }
+.vr-fv-grid .vr-fv-item .vr-name, .vr-fv-grid .vr-fv-item .vr-cat-name { font-size: calc(14px * (.55 + var(--fv-k, 1) * .45)); }
+.vr-fv-item.is-sized .sc-bubble { align-self: stretch; align-content: start; }
+.vr-fv-item.is-sized .sc-msg.is-media .sc-bubble { height: 100%; }
+.vr-fv-item.is-sized .sc-msg.is-media .sc-file { height: 100%; }
+.vr-fv-item.is-sized .sc-msg.is-media .sc-file img { height: 100%; object-fit: cover; }
+.vr-fv-note.is-sized, .vr-fv-note { box-sizing: border-box; }
+.vr-fv-size { right: -6px; bottom: -6px; width: 16px; height: 16px; cursor: nwse-resize; }
+
+/* Names in full: they wrap, the tile grows — never cut off with an ellipsis */
+.vr-name, .vr-cat-name {
+  white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; word-break: normal;
+  max-width: 100%; text-align: center; hyphens: auto;
+}
+.vr-cat { overflow: hidden; }
+.vr-cat .vr-cat-name { overflow: visible; }
+
+/* Editing a note in the composer (Side Chat style) */
+.vr-chat .vr-mode { margin: 0 14px 0; }
+.vr-chat .vr-compose.is-editing .sc-input { border-color: var(--line-2); }
+.vr-chat-head .vr-chat-name { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.25; min-width: 0; }

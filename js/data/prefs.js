@@ -52,12 +52,12 @@ export async function setPref(k, v) {
 // Forget the cache on sign-out / account switch.
 export function resetPrefs() { data = null; row = null; remote = true; }
 
-// Someone else's setpoint windows (read-only Paths in the shared Space).
-// Only pull `pathTimes` — the full prefs row can be megabytes (custom-code releases, widget HTML)
+// Someone else's setpoint windows + goals (read-only Paths in the shared Space).
+// Only pull `pathTimes` and `pathGoals` — the full prefs row can be megabytes (custom-code releases, widget HTML)
 // and this runs every 15 s while their Path is on screen.
 export async function prefsOf(userId) {
   try {
-    const rows = await api.db.select('architect_prefs', { columns: 'pathTimes:data->pathTimes', filters: { user_id: userId } });
-    return { pathTimes: rows[0]?.pathTimes || {} };
+    const rows = await api.db.select('architect_prefs', { columns: 'pathTimes:data->pathTimes,pathGoals:data->pathGoals', filters: { user_id: userId } });
+    return { pathTimes: rows[0]?.pathTimes || {}, pathGoals: rows[0]?.pathGoals || {} };
   } catch { return {}; }
 }

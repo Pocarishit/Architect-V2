@@ -102,6 +102,7 @@ export function mountVariables(root, el0, w) {
   let gfree = null; // Free View of the grid (object level), when it's on
   const freeBusy = () => !!free?.busy() || !!gfree?.busy();
   let finding = false, query = '', hit = 0; // the open chat's search bar
+  let editing = null; // { entry, id, keep } — a note being edited in the composer, Side Chat style
   const remember = () => store.set(memKey, { section, sub, open });
 
   const box = h('div', { class: 'vr' });
@@ -307,7 +308,8 @@ export function mountVariables(root, el0, w) {
       const items = () => [...kids(here()).map((k) => ({ id: k.id })), ...inSec(here()).map((x) => ({ id: x.id }))];
       gfree = mountFreeView({
         item: '.vr-it', bubble: ':scope', noun: 'tile', home: 'the grid', top: true,
-        className: 'vr-fv vr-fv-grid', role: 'region',
+        className: 'vr-fv vr-fv-grid', role: 'region', stageClass: 'is-grid',
+        lockRatio: true, baseW: 170, // a tile grows in width and height together, its face and name with it
         entry: () => ({ id: `sec:${cur}`, notes: items(), free: secById(cur)?.free || {} }),
         flowRows: () => {
           const g = h('div', { class: 'vr-grid is-fv' }, ...tiles(kids(cur)), ...cards(inSec(cur)), addCard);
@@ -318,7 +320,7 @@ export function mountVariables(root, el0, w) {
         save: (f) => save({ sections: sections().map((x) => (x.id === cur ? { ...x, free: { ...f, on: true } } : x)) }),
         idle: () => { if (pending) setTimeout(render, 0); },
       });
-      gfree.el.addEventListener('contextmenu', (e) => { if (e.target.classList?.contains('vr-fv-board') || e.target === gfree.el) gridMenu(e); });
+      gfree.scroller.addEventListener('contextmenu', (e) => { if (e.target.classList?.contains('vr-fv-board') || e.target === gfree.scroller) gridMenu(e); });
       main = gfree.el;
     } else {
       main = h('div', { class: 'vr-grid' }, ...tiles(), ...cards(), addCard);
@@ -331,7 +333,7 @@ export function mountVariables(root, el0, w) {
       h('button', { type: 'button', class: 'btn btn-primary sm', onclick: bringIn }, 'Bring in'),
       h('button', { type: 'button', class: 'btn sm', onclick: () => { store.set(`${memKey}.legacy`, 'dismissed'); render(); } }, 'Not mine')) : null;
     return h('div', { class: ['vr-home', fvOn && 'is-free'] }, tabs, banner,
-      h('div', { class: 'vr-bar' }, h('div', { class: 'vr-crumb' }, ...bar), gfree ? gfree.tools : null, fvToggle),
+      h('div', { class: 'vr-bar' }, h('div', { class: 'vr-crumb' }, ...bar), fvToggle),
       main,
       !list.length && !cats.length && !fvOn ? h('p', { class: 'vr-hint' }, 'A teacher, a committee, your family, the office — every influence gets its own space. Right-click here to add one.') : null);
   }
@@ -370,7 +372,7 @@ export function mountVariables(root, el0, w) {
     return node;
   }
 
-  function openEntry(id) { open = id; draft = ''; finding = false; query = ''; hit = 0; remember(); render(); }
+  function openEntry(id) { open = id; draft = ''; editing = null; finding = false; query = ''; hit = 0; remember(); render(); }
 
   function renameInline(span, x) {
     if (span.isContentEditable) return;
@@ -681,10 +683,19 @@ export function mountVariables(root, el0, w) {
   }
 
   function chat(x) {
+    if (editing && (editing.entry !== x.id || !(x.notes || []).some((m) => m.id === editing.id))) editing = null;
+    const editingHere = !!editing;
     const ta = h('textarea', {
       class: 'vr-input sc-input', rows: 1, placeholder: 'Enter your message', maxlength: 4000, 'aria-label': 'Write a note', value: draft,
       oninput: (e) => { draft = e.target.value; grow(e.target); },
-      onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(x.id, e.target); } },
+      onkeydown: (e) => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(x.id, e.target); }
+        else if (e.key === 'Escape' && editingHere) { e.preventDefault(); e.stopPropagation(); cancelEdit(); }
+        else if (e.key === 'ArrowUp' && !e.target.value && !editingHere) {
+          const last = [...(x.notes || [])].reverse().find((m) => m.text && (!m.by || m.by === me?.id));
+          if (last) { e.preventDefault(); beginEdit(x, last); }
+        }
+      },
       onfocus: () => { busy = true; },
       onblur: () => { busy = false; if (pending) setTimeout(render, 0); },
     });
@@ -714,18 +725,18 @@ export function mountVariables(root, el0, w) {
       onclick: () => patchEntry(x.id, (e) => ({ free: { pos: {}, links: [], ink: [], ...(e.free || {}), on: !fvOn } })),
     }, h('i'), 'FREE VIEW');
     const head = h('div', { class: 'vr-chat-head' },
-      h('button', { class: 'vr-back', type: 'button', 'aria-label': 'Back to variables', onclick: () => { open = null; finding = false; query = ''; remember(); render(); } }, icon('chevronLeft', 16)),
+      h('button', { class: 'vr-back', type: 'button', 'aria-label': 'Back to variables', onclick: () => { open = null; editing = null; draft = ''; finding = false; query = ''; remember(); render(); } }, icon('chevronLeft', 16)),
       x.photo ? h('span', { class: 'vr-mini-face' }, urlOf(x.photo, render) ? h('img', { src: urlOf(x.photo), alt: '' }) : null) : null,
       h('span', { class: 'vr-chat-name' }, x.name),
       h('span', { class: 'vr-chat-sec' }, pathOf(x.section)),
-      free ? free.tools : null,
       h('button', { class: ['vr-find-toggle', finding && 'is-on'], type: 'button', 'aria-label': 'Search this chat', 'aria-pressed': String(finding), title: 'Search this chat', onclick: () => (finding ? closeFind() : openFind()) }, icon('search', 15)),
       toggle,
       h('button', { class: 'vr-card-more', type: 'button', 'aria-label': 'Options', onclick: (e) => entryMenu(e.currentTarget, x) }, icon('more', 14)));
     const wrap = h('div', { class: ['vr-chat is-sc', fvOn && 'is-free'] }, head,
       finding ? findBar() : null,
       free ? free.el : h('div', { class: 'vr-msgs sc-list', role: 'log' }, orderRows(x)),
-      h('div', { class: 'vr-compose sc-compose' },
+      editingHere ? editBar(x) : null,
+      h('div', { class: ['vr-compose sc-compose', editingHere && 'is-editing'] },
         h('button', { class: ['sc-plus', sending && 'is-busy'], type: 'button', 'aria-label': 'Add a photo', disabled: sending, onclick: async () => { const fs = await pickMedia({ accept: 'image/*,video/*' }); if (fs.length) sendFiles(x.id, fs); } },
           sending ? h('span', { class: 'dots-loader sm' }, h('i'), h('i'), h('i')) : icon('plus', 18)),
         ta));
@@ -733,8 +744,33 @@ export function mountVariables(root, el0, w) {
     wrap.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); wrap.classList.add('is-drop'); } });
     wrap.addEventListener('dragleave', (e) => { if (!wrap.contains(e.relatedTarget)) wrap.classList.remove('is-drop'); });
     wrap.addEventListener('drop', (e) => { wrap.classList.remove('is-drop'); const fs = mediaFiles(e.dataTransfer); if (fs.length) { e.preventDefault(); e.stopPropagation(); sendFiles(x.id, fs); } });
-    requestAnimationFrame(() => grow(ta));
+    requestAnimationFrame(() => {
+      grow(ta);
+      if (editing?.focus) { editing.focus = false; ta.focus({ preventScroll: true }); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    });
     return wrap;
+  }
+
+  // Editing a note works like Side Chat: the composer becomes the edit, with the note it changes above it.
+  function editBar(x) {
+    const m = (x.notes || []).find((n) => n.id === editing.id);
+    return h('div', { class: 'sc-mode vr-mode' }, icon('edit', 13),
+      h('span', { class: 'sc-mode-body' }, h('b', {}, 'Editing'), h('span', { class: 'sc-mode-text' }, (m?.text || '').replace(/\s+/g, ' ').slice(0, 140))),
+      h('button', { class: 'sc-mode-x', type: 'button', 'aria-label': 'Cancel editing', title: 'Cancel (Esc)', onclick: () => cancelEdit() }, icon('close', 13)));
+  }
+  function beginEdit(x, m) {
+    editing = { entry: x.id, id: m.id, keep: editing ? editing.keep : draft, focus: true };
+    draft = m.text || '';
+    busy = false;
+    render();
+  }
+  function cancelEdit() {
+    if (!editing) return;
+    draft = editing.keep || '';
+    editing = null;
+    busy = false;
+    render();
+    requestAnimationFrame(() => box.querySelector('.vr-input')?.focus({ preventScroll: true }));
   }
 
   function bubble(x, m, cont = false) {
@@ -751,7 +787,7 @@ export function mountVariables(root, el0, w) {
       m.text ? { label: 'Copy', icon: 'copy', onSelect: async () => { try { await navigator.clipboard.writeText(m.text); toast('Copied.', { ms: 1400 }); } catch {} } } : null,
       !x.free?.on ? { label: 'Move up', icon: 'chevronUp', disabled: (x.notes || [])[0]?.id === m.id, onSelect: () => nudgeNote(x, m, -1) } : null,
       !x.free?.on ? { label: 'Move down', icon: 'chevronDown', disabled: (x.notes || []).at(-1)?.id === m.id, onSelect: () => nudgeNote(x, m, 1) } : null,
-      m.text ? { label: 'Edit', icon: 'edit', onSelect: async () => { const t = await promptDialog('Edit note', { value: m.text, maxLength: 4000 }); if (t?.trim()) patchEntry(x.id, (e) => ({ notes: (e.notes || []).map((y) => (y.id === m.id ? { ...y, text: t.trim(), edited: true } : y)) })); } } : null,
+      m.text ? { label: 'Edit', icon: 'edit', kbd: '↑', onSelect: () => beginEdit(x, m) } : null,
       '-',
       { label: 'Delete note', icon: 'trash', danger: true, onSelect: () => patchEntry(x.id, (e) => ({ notes: (e.notes || []).filter((y) => y.id !== m.id) })) },
     ].filter(Boolean));
@@ -762,6 +798,15 @@ export function mountVariables(root, el0, w) {
 
   function send(id, ta) {
     const text = ta.value.trim();
+    if (editing && editing.entry === id) {
+      const eid = editing.id;
+      const old = entries().find((e) => e.id === id)?.notes?.find((m) => m.id === eid)?.text;
+      draft = editing.keep || ''; editing = null; busy = false;
+      if (text && text !== old) patchEntry(id, (e) => ({ notes: (e.notes || []).map((y) => (y.id === eid ? { ...y, text: text.slice(0, 4000), edited: true } : y)) }));
+      else render();
+      requestAnimationFrame(() => box.querySelector('.vr-input')?.focus({ preventScroll: true }));
+      return;
+    }
     if (!text) return;
     ta.value = ''; draft = ''; grow(ta);
     pushNote(id, note({ text }));

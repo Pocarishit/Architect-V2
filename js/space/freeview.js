@@ -5,12 +5,15 @@
 //   Box     draw a box around anything for emphasis.   Circle  the same, round.
 //   Note    a quick text card that exists only here — never in the normal chat.
 //   Erase   click a link, shape, note or old drawing to remove it.
-// Pulled-out messages (photos and files included) and notes resize from their corner handle.
+//   Hand    drag to move around the canvas in any direction (also: middle mouse, or hold Space and drag).
+// Pulled-out messages (photos and files included) and notes resize from their corner handle — in width
+// and height together. The tools sit in a toolbar docked to the canvas's edge, like a Blueprint's.
 // Every message keeps its spot: one you pull out leaves an invisible placeholder in the column, so the
 // rest never slide up to fill the gap (double-click its handle and it goes back into that same slot).
 // New messages land at the end of the column — the bottom of the conversation — with a handle ready.
-// Layout lives on the entry: free = { on, pos: { msgId: {x, y} }, size: { msgId: w }, links: [{ id, a, b }],
-//   shapes: [{ id, kind: 'box'|'ring', x, y, w, h }], cards: [{ id, x, y, w, text }], ink: [{ id, pts, arrow }] }
+// Layout lives on the entry: free = { on, pos: { msgId: {x, y} }, size: { msgId: {w, h} }, links: [{ id, a, b }],
+//   shapes: [{ id, kind: 'box'|'ring', x, y, w, h }], cards: [{ id, x, y, w, h, text }], ink: [{ id, pts, arrow }] }
+// (older layouts stored size as a bare width — still read.)
 // (ink is from the old pen; it still shows and can be erased).
 import { h, s } from '../core/dom.js';
 import { icon } from '../core/icons.js';
@@ -20,14 +23,17 @@ import { uid } from '../core/util.js';
 const scrollMem = new Map(); // entry id → { left, top } so a repaint doesn't throw you back
 const selMem = new Map();    // entry id → the selection, so it survives the chat repainting after a save
 const TOOLS = [
-  ['move', 'Select & move (drag empty space to select)', 'select'],
+  ['move', 'Select & move (V) — drag empty space to select', 'select'],
+  ['hand', 'Move around (H · hold Space · middle mouse)', 'hand'],
+  '-',
   ['link', 'Link messages', 'connector'],
   ['box', 'Draw a box', 'rect'],
   ['ring', 'Draw a circle', 'ellipse'],
   ['note', 'Add a note (only in free view)', 'sticky'],
   ['erase', 'Erase links, shapes and notes', 'eraser'],
 ];
-const MIN_W = 120, MAX_W = 1600, NOTE_W = 210;
+const MIN_W = 120, MAX_W = 1600, MIN_H = 40, MAX_H = 2400, NOTE_W = 210;
+const sizeOf = (v) => (v == null ? null : typeof v === 'number' ? { w: v } : v); // old saves: a bare width
 let lastTool = 'move';
 
 /**
@@ -43,7 +49,7 @@ export function mountFreeView(o) {
   const BUBBLE = o.bubble || '.sc-bubble';     // the part links attach to
   const noun = o.noun || 'message', home = o.home || 'the column';
   let x = o.entry();
-  let tool = TOOLS.some(([id]) => id === lastTool) ? lastTool : 'move';
+  let tool = TOOLS.some((t) => t[0] === lastTool) ? lastTool : 'move';
   let busy = false;
   const free = () => ({ on: true, pos: {}, size: {}, links: [], ink: [], shapes: [], cards: [], ...(x.free || {}) });
   const sel = selMem.get(x.id) || { msgs: new Set(), cards: new Set(), shapes: new Set() };
@@ -56,7 +62,9 @@ export function mountFreeView(o) {
   const board = h('div', { class: 'vr-fv-board' });
   const capture = h('div', { class: 'vr-fv-capture' });
   const scroller = h('div', { class: o.className || 'vr-msgs vr-fv', role: o.role || 'log', tabindex: -1 }, board);
-  const tools = h('div', { class: 'vr-fv-tools', role: 'toolbar', 'aria-label': 'Free view tools' });
+  // A real toolbar, docked to the canvas's left edge (Blueprint-style) — not floating over the content.
+  const tools = h('div', { class: 'vr-fv-dock', role: 'toolbar', 'aria-label': 'Free view tools', 'aria-orientation': 'vertical' });
+  const stage = h('div', { class: ['vr-fv-stage', o.stageClass] }, scroller, tools);
 
   const items = new Map(); // msg id → element (row)
   const cardEls = new Map(); // card id → element
@@ -95,10 +103,18 @@ export function mountFreeView(o) {
     requestAnimationFrame(() => { size(); draw(); });
   }
 
-  function itemWrap(id, at, w) {
-    const wrap = h('div', { class: ['vr-fv-item', w && 'is-sized'], 'data-id': id, style: { left: `${at.x}px`, top: `${at.y}px`, ...(w ? { width: `${w}px` } : {}) } });
-    const grab = h('span', { class: 'vr-fv-size', title: 'Drag to resize', 'aria-hidden': 'true' });
-    grab.addEventListener('pointerdown', (e) => resizeEl(e, wrap, (nw) => save({ size: { ...free().size, [id]: nw } })));
+  // Sized items take the width and a minimum height: content that needs more (a long name) still grows it.
+  function applySize(node, sz) {
+    const z = sizeOf(sz);
+    node.style.width = z?.w ? `${z.w}px` : '';
+    node.style.minHeight = z?.h ? `${z.h}px` : '';
+    if (o.baseW) node.style.setProperty('--fv-k', z?.w ? String(Math.max(0.6, z.w / o.baseW)) : '1');
+  }
+  function itemWrap(id, at, sz) {
+    const wrap = h('div', { class: ['vr-fv-item', sz && 'is-sized'], 'data-id': id, style: { left: `${at.x}px`, top: `${at.y}px` } });
+    applySize(wrap, sz);
+    const grab = h('span', { class: 'vr-fv-size', title: o.lockRatio ? 'Drag to resize (Shift: free)' : 'Drag to resize (Shift: keep shape)', 'aria-hidden': 'true' });
+    grab.addEventListener('pointerdown', (e) => resizeEl(e, wrap, (nz) => save({ size: { ...free().size, [id]: nz } })));
     grab.addEventListener('dblclick', (e) => { e.stopPropagation(); const sz = { ...free().size }; delete sz[id]; save({ size: sz }); });
     wrap.append(grab);
     return wrap;
@@ -140,9 +156,9 @@ export function mountFreeView(o) {
   function cardEl(c) {
     const text = h('div', { class: 'vr-fv-note-text' }, c.text || '');
     const grab = h('span', { class: 'vr-fv-size', title: 'Drag to resize', 'aria-hidden': 'true' });
-    const node = h('div', { class: 'vr-fv-note', 'data-card': c.id, style: { left: `${c.x}px`, top: `${c.y}px`, width: `${c.w || NOTE_W}px` } },
+    const node = h('div', { class: 'vr-fv-note', 'data-card': c.id, style: { left: `${c.x}px`, top: `${c.y}px`, width: `${c.w || NOTE_W}px`, ...(c.h ? { minHeight: `${c.h}px` } : {}) } },
       h('span', { class: 'vr-fv-note-tag' }, 'NOTE'), text, grab);
-    grab.addEventListener('pointerdown', (e) => resizeEl(e, node, (nw) => patchCard(c.id, { w: nw })));
+    grab.addEventListener('pointerdown', (e) => resizeEl(e, node, (nz) => patchCard(c.id, nz), { ratio: false }));
     node.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || text.isContentEditable || e.target === grab) return;
       if (tool === 'erase') { e.preventDefault(); e.stopPropagation(); removeCards([c.id]); return; }
@@ -222,17 +238,21 @@ export function mountFreeView(o) {
   /* ---------------- toolbar + selection ---------------- */
   function paintTools() {
     const n = selCount();
-    tools.replaceChildren(...TOOLS.map(([id, label, ic]) => h('button', {
-      type: 'button', class: ['vr-fv-tool', tool === id && 'is-on'], 'aria-label': label, title: label, 'aria-pressed': String(tool === id),
-      onclick: () => setTool(id),
-    }, icon(ic, 15))),
-    n ? h('span', { class: 'vr-fv-selbar' },
-      h('b', {}, String(n)),
-      sel.msgs.size ? h('button', { type: 'button', class: 'vr-fv-tool', title: `Back to ${home}`, 'aria-label': `Send selected back to ${home}`, onclick: () => unpinSel() }, icon('list', 14)) : null,
-      !o.remove && !(sel.cards.size + sel.shapes.size) ? null : h('button', { type: 'button', class: 'vr-fv-tool is-danger', title: 'Clear selected (Delete)', 'aria-label': 'Delete selected', onclick: () => deleteSel() }, icon('trash', 14)),
-      h('button', { type: 'button', class: 'vr-fv-tool', title: 'Deselect (Esc)', 'aria-label': 'Deselect', onclick: () => clearSel() }, icon('close', 13))) : '');
+    const btn = (label, ic, fn, cls = '', on = null) => h('button', {
+      type: 'button', class: ['vr-fv-tool', cls, on && 'is-on'], 'aria-label': label, 'data-tip': label, title: label, ...(on == null ? {} : { 'aria-pressed': String(on) }), onclick: fn,
+    }, icon(ic, 17));
+    const sep = () => h('span', { class: 'vr-fv-tsep', 'aria-hidden': 'true' });
+    tools.replaceChildren(
+      ...TOOLS.map((t) => (t === '-' ? sep() : btn(t[1], t[2], () => setTool(t[0]), '', tool === t[0]))),
+      ...(n ? [
+        sep(),
+        h('span', { class: 'vr-fv-count', title: `${n} selected` }, String(n)),
+        sel.msgs.size ? btn(`Back to ${home}`, 'list', () => unpinSel()) : null,
+        !o.remove && !(sel.cards.size + sel.shapes.size) ? null : btn('Clear selected (Delete)', 'trash', () => deleteSel(), 'is-danger'),
+        btn('Deselect (Esc)', 'close', () => clearSel()),
+      ].filter(Boolean) : []));
   }
-  function setTool(t) { tool = lastTool = t; board.dataset.tool = t; paintTools(); }
+  function setTool(t) { tool = lastTool = t; board.dataset.tool = t; scroller.dataset.tool = t; paintTools(); }
 
   function paintSel() {
     for (const [id, row] of items) row.classList.toggle('is-fv-picked', sel.msgs.has(id));
@@ -502,25 +522,64 @@ export function mountFreeView(o) {
     });
   }
 
-  /* ---------------- resize (pulled-out messages, photos, files, notes) ---------------- */
-  function resizeEl(e, node, done) {
+  /* ---------------- resize (pulled-out messages, tiles, photos, files, notes) ---------------- */
+  // The corner grows width and height together. Tiles keep their shape (o.lockRatio); messages and notes
+  // follow the pointer freely. Shift flips that for one drag.
+  function resizeEl(e, node, done, { ratio = !!o.lockRatio } = {}) {
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const start = local(e);
-    const w0 = node.offsetWidth;
-    let w = w0;
+    const w0 = node.offsetWidth, h0 = node.offsetHeight;
+    let w = w0, hh = h0;
     node.classList.add('is-sizing', 'is-sized');
     track((ev) => {
       const p = local(ev);
-      w = Math.round(Math.max(MIN_W, Math.min(MAX_W, w0 + p.x - start.x)));
-      node.style.width = `${w}px`;
+      const keep = ev.shiftKey ? !ratio : ratio;
+      let nw = w0 + p.x - start.x, nh = h0 + p.y - start.y;
+      if (keep) { const k = Math.max(nw / w0, nh / h0); nw = w0 * k; nh = h0 * k; }
+      w = Math.round(Math.max(MIN_W, Math.min(MAX_W, nw)));
+      hh = Math.round(Math.max(MIN_H, Math.min(MAX_H, keep ? h0 * (w / w0) : nh)));
+      applySize(node, { w, h: hh });
       autoScroll(ev);
       draw();
     }, () => {
       node.classList.remove('is-sizing');
-      if (w !== w0) done(w); else draw();
+      if (w !== w0 || hh !== h0) done({ w, h: hh }); else draw();
     });
   }
+
+  /* ---------------- move around: hand tool, middle mouse, or Space + drag ---------------- */
+  // Drag the canvas any way you like — diagonals and circles included, not one axis at a time.
+  let spaceHeld = false;
+  const onSpace = (e) => {
+    if (e.code !== 'Space' || e.target.closest?.('input, textarea, [contenteditable="true"]')) return;
+    if (!stage.isConnected || !stage.matches(':hover')) return;
+    if (e.type === 'keydown') { e.preventDefault(); e.stopPropagation(); if (!spaceHeld) { spaceHeld = true; scroller.classList.add('is-panready'); } }
+    else { spaceHeld = false; scroller.classList.remove('is-panready'); }
+  };
+  window.addEventListener('keydown', onSpace, true);
+  window.addEventListener('keyup', onSpace, true);
+  scroller.addEventListener('pointerdown', (e) => {
+    const handy = (e.button === 0 && (tool === 'hand' || spaceHeld)) || e.button === 1;
+    if (!handy) return;
+    if (e.button === 0 && tool === 'hand' && !spaceHeld && e.target.closest('button, a, input, textarea, [contenteditable="true"]')) return;
+    e.preventDefault(); e.stopPropagation();
+    const sx = e.clientX, sy = e.clientY, l0 = scroller.scrollLeft, t0 = scroller.scrollTop;
+    const k = scaleOf();
+    let moved = false;
+    scroller.classList.add('is-panning');
+    track((ev) => {
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 3) return;
+      moved = true;
+      scroller.scrollLeft = l0 - (ev.clientX - sx) / k;
+      scroller.scrollTop = t0 - (ev.clientY - sy) / k;
+    }, () => {
+      scroller.classList.remove('is-panning');
+      // A pan never doubles as a click on whatever it ended over.
+      if (moved) { const eat = (c) => { c.stopPropagation(); c.preventDefault(); }; window.addEventListener('click', eat, { capture: true, once: true }); setTimeout(() => window.removeEventListener('click', eat, true), 0); }
+    });
+  }, true);
+  scroller.addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault(); });
 
   function autoScroll(ev) {
     const r = scroller.getBoundingClientRect(), edge = 36;
@@ -532,7 +591,7 @@ export function mountFreeView(o) {
 
   /* ---------------- selection window ---------------- */
   board.addEventListener('pointerdown', (e) => {
-    if (tool !== 'move' || e.button !== 0) return;
+    if (tool !== 'move' || e.button !== 0 || spaceHeld) return;
     if (e.target.closest(`${ITEM}[data-id]`) || e.target.closest('.vr-fv-note, .vr-fv-size, button, a, input, textarea, [contenteditable="true"], [data-shape], [data-link], [data-ink]')) return;
     e.preventDefault();
     scroller.focus({ preventScroll: true });
@@ -636,6 +695,7 @@ export function mountFreeView(o) {
 
   scroller.addEventListener('keydown', (e) => {
     if (e.target.closest('input, textarea, [contenteditable="true"]')) return;
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'v' || e.key === 'h')) { e.preventDefault(); e.stopPropagation(); setTool(e.key === 'h' ? 'hand' : 'move'); return; }
     if (e.key === 'Escape' && (tool !== 'move' || selCount())) { e.preventDefault(); e.stopPropagation(); if (tool !== 'move') setTool('move'); else clearSel(); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selCount()) { e.preventDefault(); e.stopPropagation(); deleteSel(); }
   });
@@ -644,6 +704,7 @@ export function mountFreeView(o) {
   ro.observe(scroller);
 
   build();
+  setTool(tool);
   requestAnimationFrame(() => {
     const m = scrollMem.get(x.id);
     if (m) { scroller.scrollLeft = m.left; scroller.scrollTop = m.top; }
@@ -651,7 +712,8 @@ export function mountFreeView(o) {
   });
 
   return {
-    el: scroller,
+    el: stage,
+    scroller,
     tools,
     busy: () => busy,
     update(next) {
@@ -659,8 +721,9 @@ export function mountFreeView(o) {
       x = next;
       const keep = { left: scroller.scrollLeft, top: scroller.scrollTop };
       build();
+      setTool(tool);
       requestAnimationFrame(() => { scroller.scrollLeft = keep.left; scroller.scrollTop = atEnd ? scroller.scrollHeight : keep.top; });
     },
-    destroy() { ro.disconnect(); },
+    destroy() { ro.disconnect(); window.removeEventListener('keydown', onSpace, true); window.removeEventListener('keyup', onSpace, true); },
   };
 }

@@ -1,6 +1,6 @@
-// Side Chat — private chats that float at the edge of every page.
-// A launcher sits on the screen edge (drag it anywhere along either side); it opens a
-// panel you can move and resize. Each tab is one chat. Messages live on your Architect
+// Side Chat — private chats that float over every page.
+// A smiley launcher sits anywhere on screen (drag it). Click it and your chats drop down
+// beneath it; pick one and the panel grows out of the launcher, attached to it. Each row is one chat. Messages live on your Architect
 // account by default (supabase/sidechat.sql, owner-only), or in Anytype when you
 // connect it on this device (settings never leave this browser).
 import { h, isTypingTarget } from '../core/dom.js';
@@ -226,11 +226,11 @@ export function mountSideChat({ me }) {
   let pinCursor = 0;
 
   /* ---------- DOM ---------- */
-  const launch = h('button', { class: 'sc-launch', type: 'button', 'aria-label': 'Open side chat', title: 'Side chat' }, smiley());
-  const tabs = h('nav', { class: 'sc-tabs', role: 'tablist', 'aria-label': 'Chats' });
-  const moreBtn = h('button', { class: 'sc-hbtn', type: 'button', 'aria-label': 'Side chat options', title: 'Options', onclick: (e) => optionsMenu(e.currentTarget) }, icon('more', 16));
-  const minBtn = h('button', { class: 'sc-hbtn', type: 'button', 'aria-label': 'Collapse side chat', title: 'Collapse (Esc)', onclick: () => setOpen(false) }, icon('chevronDown', 16));
-  const head = h('header', { class: 'sc-head' }, h('span', { class: 'sc-grip', 'aria-hidden': 'true' }), tabs, moreBtn, minBtn);
+  // No title bar: an open chat is only messages + composer. The smiley launcher is the navigation —
+  // click it for the chat list (a dropdown right under it), drag it anywhere; the panel opens from it.
+  const launch = h('button', { class: 'sc-launch', type: 'button', 'aria-label': 'Side chat', 'aria-haspopup': 'menu', 'aria-expanded': 'false', title: 'Side chat' }, smiley());
+  const tabs = h('div', { class: 'sc-drop-list', role: 'menu', 'aria-label': 'Chats' });
+  const drop = h('div', { class: 'sc-drop', 'data-noptr': '', hidden: true }, tabs);
   const status = h('div', { class: 'sc-status', role: 'status', hidden: true });
   const pinbar = h('div', { class: 'sc-pinbar', hidden: true });
   const list = h('div', { class: 'sc-list', role: 'log', tabindex: -1, 'aria-label': 'Messages' });
@@ -252,95 +252,139 @@ export function mountSideChat({ me }) {
   const sendBtn = h('button', { class: 'sc-send', type: 'button', 'aria-label': 'Send', title: 'Send (Enter)', onclick: () => submit() }, icon('send', 15));
   const compose = h('div', { class: 'sc-compose' }, plus, input); // Enter sends — no send button
   const body = h('div', { class: 'sc-body' }, pinbar, list, chip, jump);
-  const handles = ['w', 'e', 'sw', 'se'].map((d) => h('span', { class: `sc-rs sc-rs-${d}`, 'data-dir': d, 'aria-hidden': 'true' }));
+  const handles = ['n', 's', 'w', 'e', 'nw', 'ne', 'sw', 'se'].map((d) => h('span', { class: `sc-rs sc-rs-${d}`, 'data-dir': d, 'aria-hidden': 'true' }));
   const panel = h('section', { class: 'sc-panel', role: 'dialog', 'aria-label': 'Side chat', 'data-noptr': '', hidden: true },
-    head, status, body, selbar, h('div', { class: 'sc-foot' }, modebar, compose), ...handles);
-  document.body.append(launch, panel);
+    status, body, selbar, h('div', { class: 'sc-foot' }, modebar, compose), ...handles);
+  document.body.append(panel, drop, launch);
 
-  /* ---------- geometry ---------- */
+  /* ---------- geometry: everything hangs off the launcher ---------- */
   const sheet = () => innerWidth < 720;
-  function placeLaunch() {
-    const p = store.get(K.launch, { side: 'right', y: 0.5 });
-    const y = Math.round(Math.max(70, Math.min(innerHeight - 56, p.y * innerHeight)));
-    launch.style.top = `${y - 20}px`;
-    launch.style.left = p.side === 'left' ? '10px' : '';
-    launch.style.right = p.side === 'left' ? '' : '10px';
-    launch.dataset.side = p.side;
+  const LS = 40, GAP = 10, M = 8;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(Math.max(lo, hi), v));
+  function launchPos() {
+    const p = store.get(K.launch, null) || {};
+    // older saves were { side, y } — pinned to an edge
+    const fx = Number.isFinite(p.x) ? p.x : p.side === 'left' ? 0 : 1;
+    const fy = Number.isFinite(p.y) ? p.y : 0.5;
+    return { x: clamp(fx * innerWidth - LS / 2, M, innerWidth - LS - M), y: clamp(fy * innerHeight - LS / 2, M, innerHeight - LS - M) };
   }
-  function geo() {
-    const g = store.get(K.geo, null);
-    const w = Math.max(320, Math.min(innerWidth - 16, g?.w || 440));
-    const hh = Math.max(300, Math.min(innerHeight - 16, g?.h || Math.min(600, innerHeight - 120)));
-    const x = Number.isFinite(g?.x) ? g.x : innerWidth - w - 28;
-    const y = Number.isFinite(g?.y) ? g.y : Math.max(64, innerHeight - hh - 28);
-    return { w, h: hh, x: Math.max(8, Math.min(innerWidth - w - 8, x)), y: Math.max(8, Math.min(innerHeight - hh - 8, y)) };
+  function placeLaunch(pos = launchPos()) {
+    launch.style.left = `${pos.x}px`; launch.style.top = `${pos.y}px`; launch.style.right = '';
+    launch.dataset.side = pos.x + LS / 2 < innerWidth / 2 ? 'left' : 'right';
+  }
+  const size = () => { const g = store.get(K.geo, null); return { w: g?.w || 420, h: g?.h || Math.min(600, innerHeight - 120) }; };
+  // Pick the roomiest side of the launcher, keep the panel touching it, never off screen.
+  function anchorBox(L, want, { minW = 280, minH = 260 } = {}) {
+    const right = L.left + L.width / 2 >= innerWidth / 2; // launcher on the right → grow leftwards
+    const below = innerHeight - L.bottom - GAP - M, above = L.top - GAP - M;
+    const down = below >= want.h || below >= above;
+    const w = clamp(want.w, Math.min(minW, innerWidth - 2 * M), innerWidth - 2 * M);
+    const h = clamp(want.h, Math.min(minH, Math.max(below, above)), Math.max(below, above, minH));
+    const x = clamp(right ? L.right - w : L.left, M, innerWidth - w - M);
+    const y = clamp(down ? L.bottom + GAP : L.top - GAP - h, M, innerHeight - h - M);
+    return { x, y, w, h, right, down };
   }
   function placePanel() {
     panel.classList.toggle('is-sheet', sheet());
     if (sheet()) { panel.style.cssText = ''; return; }
-    const g = geo();
-    Object.assign(panel.style, { left: `${g.x}px`, top: `${g.y}px`, width: `${g.w}px`, height: `${g.h}px` });
+    const L = launch.getBoundingClientRect();
+    const b = anchorBox(L, size());
+    Object.assign(panel.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
+    panel.style.setProperty('--ox', `${L.left + L.width / 2 - b.x}px`);
+    panel.style.setProperty('--oy', `${L.top + L.height / 2 - b.y}px`);
+    panel.dataset.side = `${b.down ? 's' : 'n'}${b.right ? 'w' : 'e'}`;
   }
-  const saveGeo = () => { if (sheet()) return; const r = panel.getBoundingClientRect(); store.set(K.geo, { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }); };
-  const onResize = () => { placeLaunch(); if (open) placePanel(); };
+  function placeDrop() {
+    const L = launch.getBoundingClientRect();
+    const w = 232;
+    const hh = Math.min(drop.scrollHeight || 320, innerHeight - 2 * M);
+    const b = anchorBox(L, { w, h: hh }, { minW: w, minH: Math.min(hh, 160) });
+    Object.assign(drop.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${w}px`, maxHeight: `${b.h}px` });
+    drop.style.setProperty('--ox', `${L.left + L.width / 2 - b.x}px`);
+    drop.style.setProperty('--oy', `${b.down ? -GAP : b.h + GAP}px`);
+  }
+  const onResize = () => { placeLaunch(); if (open) placePanel(); if (!drop.hidden) placeDrop(); };
   window.addEventListener('resize', onResize);
   placeLaunch();
 
-  // drag the panel by its header
-  head.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || sheet() || e.target.closest('button')) return;
-    e.preventDefault();
-    const r = panel.getBoundingClientRect();
-    const dx = e.clientX - r.left, dy = e.clientY - r.top;
-    panel.classList.add('is-moving');
-    const move = (ev) => {
-      panel.style.left = `${Math.max(8 - r.width + 120, Math.min(innerWidth - 120, ev.clientX - dx))}px`;
-      panel.style.top = `${Math.max(8, Math.min(innerHeight - 44, ev.clientY - dy))}px`;
-    };
-    const up = () => { panel.classList.remove('is-moving'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); saveGeo(); };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-  });
-  // resize from the sides and bottom corners
+  // resize from any edge; the panel stays attached to the launcher
   for (const hd of handles) hd.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || sheet()) return;
     e.preventDefault(); e.stopPropagation();
     const d = hd.dataset.dir;
     const r = panel.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY;
     panel.classList.add('is-moving');
     const move = (ev) => {
-      let { left, top, width, height } = r;
-      if (d.includes('e')) width = Math.max(320, Math.min(innerWidth - left - 8, ev.clientX - left));
-      if (d.includes('w')) { const right = r.right; width = Math.max(320, Math.min(right - 8, right - ev.clientX)); left = right - width; }
-      if (d.includes('s')) height = Math.max(300, Math.min(innerHeight - top - 8, ev.clientY - top));
-      Object.assign(panel.style, { left: `${left}px`, width: `${width}px`, height: `${height}px` });
+      let w = r.width, hh = r.height;
+      if (d.includes('e')) w = r.width + (ev.clientX - sx);
+      if (d.includes('w')) w = r.width - (ev.clientX - sx);
+      if (d.includes('s')) hh = r.height + (ev.clientY - sy);
+      if (d.includes('n')) hh = r.height - (ev.clientY - sy);
+      store.set(K.geo, { w: Math.round(clamp(w, 280, innerWidth - 2 * M)), h: Math.round(clamp(hh, 260, innerHeight - 2 * M)) });
+      placePanel();
     };
-    const up = () => { panel.classList.remove('is-moving'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); saveGeo(); };
+    const up = () => { panel.classList.remove('is-moving'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
   });
 
-  // the launcher: click to open, drag to move it along either edge
+  // the launcher: click for the chat list, drag it anywhere on screen (the chat travels with it)
   launch.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
+    const r = launch.getBoundingClientRect();
+    const dx = e.clientX - r.left, dy = e.clientY - r.top;
     const sx = e.clientX, sy = e.clientY;
     let moved = false;
     launch.setPointerCapture(e.pointerId);
     const move = (ev) => {
       if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
-      moved = true;
-      launch.classList.add('is-drag');
-      launch.style.left = `${Math.max(4, Math.min(innerWidth - 44, ev.clientX - 20))}px`;
-      launch.style.right = '';
-      launch.style.top = `${Math.max(60, Math.min(innerHeight - 50, ev.clientY - 20))}px`;
+      if (!moved) { moved = true; launch.classList.add('is-drag'); panel.classList.add('is-moving'); setDrop(false); }
+      placeLaunch({ x: clamp(ev.clientX - dx, M, innerWidth - LS - M), y: clamp(ev.clientY - dy, M, innerHeight - LS - M) });
+      if (open) placePanel();
     };
-    const up = (ev) => {
+    const up = () => {
       launch.removeEventListener('pointermove', move); launch.removeEventListener('pointerup', up); launch.removeEventListener('pointercancel', up);
-      launch.classList.remove('is-drag');
-      if (moved) { store.set(K.launch, { side: ev.clientX < innerWidth / 2 ? 'left' : 'right', y: (ev.clientY) / innerHeight }); placeLaunch(); return; }
-      setOpen(true);
+      launch.classList.remove('is-drag'); panel.classList.remove('is-moving');
+      if (moved) {
+        const b = launch.getBoundingClientRect();
+        store.set(K.launch, { x: (b.left + LS / 2) / innerWidth, y: (b.top + LS / 2) / innerHeight });
+        return;
+      }
+      setDrop(drop.hidden);
     };
     launch.addEventListener('pointermove', move); launch.addEventListener('pointerup', up); launch.addEventListener('pointercancel', up);
+  });
+  launch.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrop(drop.hidden); } });
+
+  /* ---------- the chat list under the launcher ---------- */
+  function setDrop(v) {
+    if (v === !drop.hidden) return;
+    launch.setAttribute('aria-expanded', String(v));
+    launch.classList.toggle('is-on', v);
+    if (!v) { drop.classList.remove('is-in'); setTimeout(() => { if (!launch.classList.contains('is-on')) drop.hidden = true; }, prefersReducedMotion() ? 0 : 140); return; }
+    closeFloating();
+    drop.hidden = false;
+    paintTabs();
+    placeDrop();
+    void drop.offsetWidth;
+    requestAnimationFrame(() => drop.classList.add('is-in'));
+    if (!loaded) ensureChats().then(() => { paintTabs(); placeDrop(); });
+    setTimeout(() => (drop.querySelector('.sc-drop-row.is-on') || drop.querySelector('.sc-drop-row'))?.focus({ preventScroll: true }), 30);
+  }
+  const onDocDown = (e) => {
+    if (drop.hidden) return;
+    if (drop.contains(e.target) || launch.contains(e.target) || e.target.closest?.('.menu, .popover, .dlg-overlay')) return;
+    setDrop(false);
+  };
+  window.addEventListener('pointerdown', onDocDown, true);
+  drop.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    const rows = [...drop.querySelectorAll('.sc-drop-row, .sc-drop-act')];
+    const i = rows.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); setDrop(false); launch.focus({ preventScroll: true }); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); rows[(i + 1) % rows.length]?.focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); rows[(i - 1 + rows.length) % rows.length]?.focus(); }
   });
 
   /* ---------- open / close ---------- */
@@ -348,16 +392,12 @@ export function mountSideChat({ me }) {
     if (v === open) return;
     open = v;
     store.set(K.open, v);
+    launch.classList.toggle('is-open', v);
     if (v) {
       placePanel();
-      const lr = launch.getBoundingClientRect(), pr = panel.getBoundingClientRect();
-      panel.style.setProperty('--ox', `${lr.left + lr.width / 2 - pr.left}px`);
-      panel.style.setProperty('--oy', `${lr.top + lr.height / 2 - pr.top}px`);
       panel.classList.remove('is-in');
       panel.hidden = false;
-      launch.classList.add('is-away');
-      // Start from the launcher on every screen: commit the closed state first, then animate open
-      // (without this, desktop browsers merged both steps and the panel just appeared).
+      // Start from the launcher on every screen: commit the closed state first, then animate open.
       void panel.offsetWidth;
       requestAnimationFrame(() => requestAnimationFrame(() => { if (open) panel.classList.add('is-in'); }));
       start();
@@ -365,7 +405,6 @@ export function mountSideChat({ me }) {
     } else {
       closeFloating();
       panel.classList.remove('is-in');
-      launch.classList.remove('is-away');
       stopPoll();
       setTimeout(() => { if (!open) panel.hidden = true; }, prefersReducedMotion() ? 0 : 190);
       if (panel.contains(document.activeElement)) launch.focus({ preventScroll: true });
@@ -393,16 +432,31 @@ export function mountSideChat({ me }) {
   }
   function paintTabs() {
     const linked = src().kind === 'anytype';
-    tabs.replaceChildren(...chats.map((c) => {
+    const c0 = activeChat();
+    input.placeholder = c0 ? `Message ${c0.name}` : 'Enter your message';
+    if (drop.hidden) return;
+    const pick = (id) => { setDrop(false); if (id !== active) select(id); setOpen(true); };
+    const rows = chats.map((c) => {
       const face = c.photo ? urlOf(c.photo, paintTabs) : null;
-      return h('button', {
-        class: ['sc-tab', c.id === active && 'is-on', linked && !c.anytype_id && 'is-unlinked'], type: 'button', role: 'tab', 'aria-selected': String(c.id === active), title: c.name,
-        onclick: () => select(c.id),
-        ondblclick: () => renameChat(c),
+      const on = c.id === active && open;
+      return h('div', {
+        class: ['sc-drop-row', on && 'is-on', linked && !c.anytype_id && 'is-unlinked'], role: 'menuitemradio', tabindex: 0, 'aria-checked': String(on), title: c.name,
+        onclick: (e) => { if (!e.target.closest('.sc-drop-more')) pick(c.id); },
+        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(c.id); } },
+        ondblclick: () => { setDrop(false); renameChat(c); },
         oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); tabMenu({ x: e.clientX, y: e.clientY }, c); },
-      }, c.photo ? h('span', { class: 'sc-face' }, face ? h('img', { src: face, alt: '' }) : null) : null, h('span', {}, c.name));
-    }), h('button', { class: 'sc-tab sc-tab-add', type: 'button', 'aria-label': 'New chat', title: 'New chat', onclick: () => addChat() }, icon('plus', 13)));
-    tabs.querySelector('.is-on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      },
+      h('span', { class: 'sc-drop-ic' }, c.photo ? h('span', { class: 'sc-face' }, face ? h('img', { src: face, alt: '' }) : null) : h('i', { class: 'sc-drop-dot' })),
+      h('span', { class: 'sc-drop-name' }, c.name),
+      h('button', { class: 'sc-drop-more', type: 'button', tabindex: -1, 'aria-label': `${c.name} options`, onclick: (e) => { e.stopPropagation(); tabMenu(e.currentTarget, c); } }, icon('more', 14)));
+    });
+    const act = (ic, label, fn, extra = {}) => h('button', { class: 'sc-drop-act', type: 'button', onclick: (e) => fn(e.currentTarget), ...extra }, icon(ic, 14), h('span', {}, label));
+    tabs.replaceChildren(
+      ...(rows.length ? rows : [h('p', { class: 'sc-drop-empty' }, loaded ? 'No chats yet.' : 'Loading…')]),
+      h('div', { class: 'sc-drop-sep' }),
+      act('plus', 'New chat', () => { setDrop(false); addChat(); }),
+      act('more', 'Options', (b) => optionsMenu(b)),
+      ...(open ? [act('chevronDown', 'Close chat', () => { setDrop(false); setOpen(false); }, { title: 'Esc' })] : []));
   }
   function select(id) {
     if (id === active) return;
@@ -427,6 +481,7 @@ export function mountSideChat({ me }) {
       const c = await acct.addChat({ id: newId(), name, position: (chats.at(-1)?.position ?? -1) + 1 });
       chats.push(c);
       select(c.id);
+      setOpen(true);
     } catch (e) { toast(e.message, { tone: 'error' }); }
   }
   async function renameChat(c) {
@@ -494,7 +549,7 @@ export function mountSideChat({ me }) {
       { label: 'New chat', icon: 'plus', onSelect: addChat },
       activeChat() ? { label: `Export ${activeChat().name}`, icon: 'download', onSelect: exportChat } : null,
       '-',
-      { label: 'Reset position', icon: 'fit', onSelect: () => { store.set(K.geo, null); placePanel(); } },
+      { label: 'Reset size & position', icon: 'fit', onSelect: () => { store.set(K.geo, null); store.set(K.launch, null); placeLaunch(); if (open) placePanel(); if (!drop.hidden) placeDrop(); } },
     ], { align: 'end' });
   }
 
@@ -903,6 +958,7 @@ export function mountSideChat({ me }) {
   /* ---------- keyboard, paste, drop — handled before the canvas sees them ---------- */
   const inPanel = (t) => t instanceof Node && panel.contains(t);
   const onKey = (e) => {
+    if (!drop.hidden && e.key === 'Escape' && !document.querySelector('.menu, .popover, .dlg-overlay')) { e.preventDefault(); e.stopImmediatePropagation(); setDrop(false); return; }
     if (!open || !inPanel(e.target) || document.querySelector('.menu, .popover, .dlg-overlay')) return;
     e.stopImmediatePropagation();
     const mod = isMac ? e.metaKey : e.ctrlKey;
@@ -950,7 +1006,8 @@ export function mountSideChat({ me }) {
       window.removeEventListener('paste', onPaste, true);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      launch.remove(); panel.remove();
+      window.removeEventListener('pointerdown', onDocDown, true);
+      launch.remove(); panel.remove(); drop.remove();
     },
   };
 }

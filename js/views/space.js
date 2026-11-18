@@ -429,7 +429,7 @@ export function mountSpace(root) {
       space: { icon: 'home', label: mode === 'personal' ? 'Shared' : 'Personal', run: () => toggleSpace() },
       fit: { icon: 'fit', label: 'Fit all', run: () => ed.zoomToFit() },
       views: { icon: 'target', label: 'Views', run: () => cameraDialog() },
-      add: { icon: 'plus', label: 'Add', run: (b) => { const r = b.getBoundingClientRect(); const all = spaceItems(ed.viewCenter()); menu({ x: r.right, y: r.top - 8 }, all.slice(0, all.indexOf('-')), { side: 'top', align: 'end' }); } },
+      add: { icon: 'plus', label: 'Add', run: (b) => { const r = b.getBoundingClientRect(); const all = spaceItems(ed.viewCenter()); const from = all.findIndex((i) => i?.header === 'Add'); menu({ x: r.right, y: r.top - 8 }, all.slice(from, all.indexOf('-', from)), { side: 'top', align: 'end' }); } },
     };
   }
   const dockItems = (cat) => {
@@ -707,12 +707,39 @@ export function mountSpace(root) {
     return [...items.slice(0, at), '-', ...extra, ...items.slice(at)];
   }
 
+  /* ---------------- Blueprint shortcuts: one press in the menu opens the board ---------------- */
+  // Kept warm in the background so the (synchronous) menu can list them instantly, from either space.
+  let bpShortcuts = [];
+  async function loadShortcuts() {
+    try {
+      const rows = await api.db.select('blueprints', { columns: 'id,name,kind,pinned,updated_at', order: 'updated_at.desc' })
+        .catch(() => api.db.select('blueprints', { columns: 'id,name,pinned,updated_at', order: 'updated_at.desc' }));
+      bpShortcuts = rows
+        .filter((b) => !['space', 'personal', 'er', 'er-chat'].includes(b.kind))
+        .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0))
+        .slice(0, 12);
+    } catch { /* offline — keep the last list */ }
+  }
+  loadShortcuts();
+  window.addEventListener('architect:blueprints-changed', loadShortcuts);
+  const bpPoll = setInterval(() => { if (!document.hidden) loadShortcuts(); }, 90_000);
+  offs.push(() => { window.removeEventListener('architect:blueprints-changed', loadShortcuts); clearInterval(bpPoll); });
+  function shortcutItems() {
+    if (!bpShortcuts.length) return [];
+    return [
+      { header: 'Blueprints' },
+      ...bpShortcuts.map((b) => ({ label: b.name || 'Untitled', icon: b.pinned ? 'pin' : 'frame', onSelect: () => openBoard(b.id) })),
+      '-',
+    ];
+  }
+
   function spaceItems(world) {
     const ed = editor();
     const at = world || ed?.viewCenter();
     const tool = (name, opt) => () => { if (opt) ed.setOpt(...opt); ed.setTool(name); toast('Drag on the canvas', { ms: 1200 }); };
     const chrome = t?.page.classList.contains('show-chrome');
     return [
+      ...shortcutItems(),
       { header: 'Add' },
       { label: 'Sticky note', icon: 'sticky', kbd: 'N', onSelect: () => ed.addEls([ed.makeEl('sticky', null, at)], { edit: true }) },
       { label: 'Text', icon: 'text', kbd: 'T', onSelect: () => ed.addEls([ed.makeEl('text', null, at)], { edit: true }) },

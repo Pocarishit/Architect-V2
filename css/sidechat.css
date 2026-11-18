@@ -1,9 +1,9 @@
 /* ============================================================
-   Side Chat — edge launcher + floating private chat panel
+   Side Chat — movable launcher · chat list dropdown · panel attached to the launcher
    ============================================================ */
 
 .sc-launch {
-  position: fixed; z-index: 850; top: 50%; right: 10px;
+  position: fixed; z-index: 852; top: 50%; right: 10px;
   width: 40px; height: 40px; border-radius: 13px;
   display: grid; place-items: center;
   background: var(--s1); color: var(--fg-2);
@@ -14,7 +14,8 @@
 .sc-launch:hover { color: var(--fg); border-color: var(--fg-3); }
 .sc-launch:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
 .sc-launch.is-drag { cursor: grabbing; transition: none; transform: scale(1.06); }
-.sc-launch.is-away { opacity: 0; transform: scale(.6); pointer-events: none; }
+.sc-launch.is-on, .sc-launch.is-open { color: var(--fg); border-color: var(--fg-3); }
+.sc-launch.is-on { transform: scale(.94); }
 .sc-launch svg { shape-rendering: crispEdges; }
 
 .sc-panel {
@@ -32,45 +33,52 @@
 .sc-panel.is-moving { transition: none; user-select: none; }
 .sc-panel.is-selecting { user-select: none; }
 .sc-panel.is-drop::after {
-  content: 'Drop to send'; position: absolute; inset: 52px 10px 10px; z-index: 30;
+  content: 'Drop to send'; position: absolute; inset: 10px; z-index: 30;
   border: 1.5px dashed var(--fg-3); border-radius: 14px; display: grid; place-items: center;
   font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-2);
   background: color-mix(in srgb, var(--bg) 78%, transparent); pointer-events: none;
 }
 
-/* header: grip · tabs · options · collapse */
-.sc-head {
-  flex: none; height: 44px; display: flex; align-items: center; gap: 4px;
-  padding: 0 6px 0 10px; border-bottom: 1px solid var(--line); background: var(--s1);
-  cursor: grab; touch-action: none; user-select: none;
-}
-.sc-panel.is-moving .sc-head { cursor: grabbing; }
-.sc-grip {
-  flex: none; width: 8px; height: 14px; margin-right: 4px; opacity: .9;
-  background-image: radial-gradient(circle, var(--fg-4) 1.2px, transparent 1.4px); background-size: 4px 4px;
-}
-.sc-tabs {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px;
-  overflow-x: auto; scrollbar-width: none; mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
-}
-.sc-tabs::-webkit-scrollbar { display: none; }
-.sc-tab {
-  flex: none; height: 30px; padding: 0 10px; border-radius: 9px;
-  display: inline-flex; align-items: center; gap: 6px;
-  font-family: var(--f-mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
-  color: var(--fg-3); cursor: pointer; white-space: nowrap; transition: color .12s, background .12s;
-}
-.sc-tab:hover { color: var(--fg-2); background: var(--s2); }
-.sc-tab.is-on { color: var(--fg); background: var(--s3); }
-.sc-tab.is-unlinked > span:last-child { text-decoration: line-through; text-decoration-color: var(--fg-4); }
-.sc-tab-add { padding: 0 8px; color: var(--fg-4); }
 .sc-face { width: 18px; height: 18px; border-radius: 50%; overflow: hidden; background: var(--s3); flex: none; }
 .sc-face img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.sc-hbtn {
-  flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
-  color: var(--fg-3); cursor: pointer;
+
+/* chat list: drops out of the launcher */
+.sc-drop {
+  position: fixed; z-index: 853; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--s1); color: var(--fg); border: 1px solid var(--line-2); border-radius: 14px;
+  box-shadow: 0 24px 60px -24px rgba(0, 0, 0, .7), var(--shadow);
+  opacity: 0; transform: scale(.9) translateY(-4px); transform-origin: var(--ox, 50%) var(--oy, 0);
+  transition: opacity .12s, transform .16s var(--ease);
 }
-.sc-hbtn:hover, .sc-hbtn.is-open { color: var(--fg); background: var(--s3); }
+.sc-drop[hidden] { display: none; }
+.sc-drop.is-in { opacity: 1; transform: none; }
+.sc-drop-list { overflow-y: auto; overscroll-behavior: contain; padding: 5px; display: grid; gap: 1px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.sc-drop-row {
+  position: relative; height: 34px; padding: 0 4px 0 10px; border-radius: 9px; outline: none;
+  display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--fg-2);
+  transition: background .1s, color .1s;
+}
+.sc-drop-row:hover, .sc-drop-row:focus-visible { background: var(--s3); color: var(--fg); }
+.sc-drop-row.is-on { color: var(--fg); }
+.sc-drop-row.is-on::after { content: ''; position: absolute; right: 34px; width: 5px; height: 5px; border-radius: 50%; background: var(--fg); }
+.sc-drop-row.is-unlinked .sc-drop-name { text-decoration: line-through; text-decoration-color: var(--fg-4); }
+.sc-drop-ic { flex: none; width: 18px; display: grid; place-items: center; }
+.sc-drop-dot { width: 6px; height: 6px; border-radius: 2px; background: var(--fg-4); }
+.sc-drop-row.is-on .sc-drop-dot { background: var(--fg); }
+.sc-drop-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-drop-more { flex: none; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; color: var(--fg-4); opacity: 0; transition: opacity .1s; }
+.sc-drop-row:hover .sc-drop-more, .sc-drop-row:focus-visible .sc-drop-more { opacity: 1; }
+.sc-drop-more:hover { color: var(--fg); background: var(--s2); }
+@media (hover: none) { .sc-drop-more { opacity: 1; } }
+.sc-drop-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+.sc-drop-act {
+  height: 32px; padding: 0 10px; border-radius: 9px; display: flex; align-items: center; gap: 10px; text-align: left;
+  font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3); cursor: pointer;
+}
+.sc-drop-act svg { flex: none; width: 18px; }
+.sc-drop-act:hover, .sc-drop-act:focus-visible { color: var(--fg); background: var(--s3); outline: none; }
+.sc-drop-empty { margin: 0; padding: 10px; font-size: 12px; color: var(--fg-3); }
 
 .sc-status {
   flex: none; padding: 8px 14px; border-bottom: 1px solid var(--line);
@@ -207,17 +215,17 @@
 .sc-input:focus { border-color: var(--line-2); }
 .sc-input:disabled { opacity: .5; }
 
-/* resize handles */
+/* resize handles — every edge; the panel stays attached to the launcher */
 .sc-rs { position: absolute; z-index: 20; }
-.sc-rs-w { left: 0; top: 44px; bottom: 16px; width: 6px; cursor: ew-resize; }
-.sc-rs-e { right: 0; top: 44px; bottom: 16px; width: 6px; cursor: ew-resize; }
-.sc-rs-sw { left: 0; bottom: 0; width: 16px; height: 16px; cursor: nesw-resize; }
-.sc-rs-se { right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; }
-.sc-rs-sw, .sc-rs-se { height: 16px; }
-.sc-rs-sw::after, .sc-rs-se::after { content: ''; position: absolute; bottom: 4px; width: 7px; height: 7px; border-bottom: 1.5px solid var(--fg-4); opacity: 0; transition: opacity .12s; }
-.sc-rs-se::after { right: 4px; border-right: 1.5px solid var(--fg-4); border-bottom-right-radius: 3px; }
-.sc-rs-sw::after { left: 4px; border-left: 1.5px solid var(--fg-4); border-bottom-left-radius: 3px; }
-.sc-panel:hover .sc-rs-sw::after, .sc-panel:hover .sc-rs-se::after { opacity: 1; }
+.sc-rs-n { top: 0; left: 16px; right: 16px; height: 6px; cursor: ns-resize; }
+.sc-rs-s { bottom: 0; left: 16px; right: 16px; height: 6px; cursor: ns-resize; }
+.sc-rs-w { left: 0; top: 16px; bottom: 16px; width: 6px; cursor: ew-resize; }
+.sc-rs-e { right: 0; top: 16px; bottom: 16px; width: 6px; cursor: ew-resize; }
+.sc-rs-nw, .sc-rs-ne, .sc-rs-sw, .sc-rs-se { width: 16px; height: 16px; }
+.sc-rs-nw { left: 0; top: 0; cursor: nwse-resize; }
+.sc-rs-ne { right: 0; top: 0; cursor: nesw-resize; }
+.sc-rs-sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.sc-rs-se { right: 0; bottom: 0; cursor: nwse-resize; }
 
 /* Anytype dialog */
 .sc-hint { margin: 0; font-size: 12px; line-height: 1.45; color: var(--fg-3); }
@@ -231,15 +239,15 @@
   inset: 0; width: auto; height: auto; border-radius: 0; border: 0;
   padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
 }
-.sc-panel.is-sheet .sc-head { cursor: default; }
-.sc-panel.is-sheet .sc-grip, .sc-panel.is-sheet .sc-rs { display: none; }
+.sc-panel.is-sheet .sc-rs { display: none; }
+.sc-panel.is-sheet .sc-list { padding-top: 58px; } /* room for the launcher floating over the sheet */
 .sc-panel.is-sheet .sc-input { font-size: 16px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .sc-panel, .sc-launch, .sc-chip { transition: none; }
+  .sc-panel, .sc-launch, .sc-chip, .sc-drop { transition: none; }
   .sc-clock { animation: none; }
 }
-@media print { .sc-launch, .sc-panel { display: none !important; } }
+@media print { .sc-launch, .sc-panel, .sc-drop { display: none !important; } }
 
 /* Cleaner composer: no scrollbar arrow buttons on the chat boxes (Side Chat, Architect chats, Variables) */
 .sc-input, .ch-input { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }

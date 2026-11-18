@@ -43,6 +43,24 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   const timesArg = () => (readOnly ? (ownerTimes?.pathTimes || {}) : undefined);
   const stOf = (col) => stateOf(col, columns, new Date(), timesArg());
   const winOf = (col) => windowOf(col, timesArg());
+  // Every setpoint leads with its goal: the block's name and purpose, checked off once it delivered.
+  // The words stay; the check is for today only (a new day starts every goal open again).
+  const goals = () => (readOnly ? (ownerTimes?.pathGoals || {}) : (getPref('pathGoals', {}) || {}));
+  const goalOf = (col) => { const g = goals()[col.id] || {}; return { text: g.text || '', done: !!g.text && g.doneDay === todayKey() }; };
+  async function saveGoal(col, patch) {
+    const all = { ...goals() };
+    const cur = all[col.id] || {};
+    const next = { ...cur };
+    if ('text' in patch) next.text = patch.text;
+    if ('done' in patch) next.doneDay = patch.done ? todayKey() : null;
+    if (!next.text) delete all[col.id]; else all[col.id] = next;
+    render();
+    try {
+      await setPref('pathGoals', all);
+      window.dispatchEvent(new CustomEvent('architect:paths-changed', { detail: { owner, from: instance } }));
+    } catch (e) { fail(e); }
+    render();
+  }
   let columns = [];
   let tasks = [];
   let loading = true;
@@ -289,6 +307,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   function detailBody(col) {
     return h('section', { class: 'pcol is-full', 'data-col': col.id, 'aria-label': col.title },
       h('div', { class: 'pcol-list', 'data-list': col.id },
+        goalView(col),
         tasksOf(col.id).map(taskView),
         composerFor === col.id ? composerView(col) : null),
       composerFor !== col.id
@@ -324,8 +343,8 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
         timerView(col),
         list.length && !readOnly ? h('button', { class: ['icon-btn', 'sm', allPicked && 'is-on'], 'data-act': 'select-col', 'aria-label': `Select all in ${col.title}`, 'aria-pressed': String(!!allPicked), 'data-tip': 'Select all' }, icon('selectAll', 16)) : null,
         readOnly ? null : h('button', { class: 'icon-btn sm', 'data-act': 'col-menu', 'aria-label': `${col.title} options` }, icon('more', 16))),
-      list.length ? h('div', { class: 'pcol-dots', 'aria-hidden': 'true' }, list.slice(0, 40).map((t) => h('i', { class: t.done ? 'on' : null }))) : null,
       h('div', { class: 'pcol-list', 'data-list': col.id },
+        goalView(col),
         list.map(taskView),
         composerFor === col.id ? composerView(col) : null),
       composerFor !== col.id && !readOnly
@@ -339,6 +358,22 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     return parts.map((part) => (/^#\d{1,5}$/.test(part)
       ? h('span', { class: 'ptask-ticket', 'data-act': 'open-ticket', 'data-no': String(Number(part.slice(1))), title: 'Open ticket' }, `#${part.slice(1).padStart(3, '0')}`)
       : part));
+  }
+
+  function goalView(col) {
+    if (!winOf(col)) return null;
+    const g = goalOf(col);
+    const ed = editing?.id === `goal:${col.id}`;
+    if (readOnly && !g.text) return null;
+    return h('article', { class: ['ptask', 'is-goal', g.done && 'is-done', ed && 'is-editing', !g.text && 'is-unset'], 'data-goal': col.id },
+      h('button', {
+        class: 'pcheck', 'data-act': 'goal-toggle', role: 'checkbox', 'aria-checked': String(g.done), disabled: !g.text,
+        'aria-label': g.text ? `${g.done ? 'Goal not met yet' : 'Goal met'}: ${g.text}` : 'Set a goal first',
+      }, icon('check', 12, { weight: 2.4 })),
+      h('div', { class: 'ptask-body' },
+        ed
+          ? h('textarea', { class: 'ptask-input', rows: 1, 'data-editor': 'goal', maxlength: 140, placeholder: `What is ${col.title} for?`, 'aria-label': `${col.title} goal`, value: g.text })
+          : h('div', { class: 'ptask-title', 'data-act': 'edit-goal', title: readOnly ? null : 'Click to set this setpoint’s goal' }, g.text || `Goal — what is ${col.title} for?`)));
   }
 
   function taskView(t) {
@@ -709,6 +744,8 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       togglePick(task, { range: e.shiftKey });
       return;
     }
+    if (act === 'goal-toggle' && col) { const g = goalOf(col); if (g.text) saveGoal(col, { done: !g.done }); return; }
+    if (act === 'edit-goal' && col) { editing = { id: `goal:${col.id}`, field: 'goal' }; composerFor = null; render(); return; }
     if (act === 'toggle' && task) patchTask(task, { done: !task.done });
     else if ((act === 'edit-title' || act === 'open-ticket') && task) { editing = { id: task.id, field: 'title' }; composerFor = null; render(); }
     else if (act === 'edit-note' && task) { editing = { id: task.id, field: 'note' }; composerFor = null; render(); }
@@ -879,6 +916,11 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       const colId = t.dataset.composer;
       composerFor = null;
       if (v) addTask(colId, v); else render();
+    } else if (t.dataset.editor === 'goal' && editing?.field === 'goal') {
+      const col = columns.find((c) => `goal:${c.id}` === editing.id);
+      editing = null;
+      const v = t.value.replace(/\s+/g, ' ').trim();
+      if (col && v !== goalOf(col).text) saveGoal(col, { text: v, ...(v ? {} : { done: false }) }); else render();
     } else if (t.dataset.editor && editing) {
       const task = tasks.find((x) => x.id === editing.id);
       const field = editing.field;
@@ -902,7 +944,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   el.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || e.pointerType === 'touch' || readOnly) return;
     if (e.target.closest('button, textarea, input')) return;
-    const card = e.target.closest('.ptask:not(.is-composer):not(.is-editing)');
+    const card = e.target.closest('.ptask:not(.is-composer):not(.is-editing):not(.is-goal)');
     if (card) {
       drag = { card, id: card.dataset.task, x0: e.clientX, y0: e.clientY, started: false };
       listen(onDragMove, onDragEnd);
@@ -980,7 +1022,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     const colEl = under?.closest('.pcol');
     if (colEl) {
       const list = colEl.querySelector('.pcol-list');
-      const cards = [...list.querySelectorAll('.ptask:not(.is-composer)')].filter((c) => !drag.group.has(c.dataset.task));
+      const cards = [...list.querySelectorAll('.ptask:not(.is-composer):not(.is-goal)')].filter((c) => !drag.group.has(c.dataset.task));
       const before = cards.find((c) => {
         const r = c.getBoundingClientRect();
         return e.clientY < r.top + r.height / 2;
@@ -1147,7 +1189,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   el.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1) { cancelPress(); return; }
     const tch = e.touches[0];
-    const card = e.target.closest('.ptask:not(.is-composer):not(.is-editing)');
+    const card = e.target.closest('.ptask:not(.is-composer):not(.is-editing):not(.is-goal)');
     const tile = e.target.closest('.ptile:not(.is-new)');
     if (!card && !tile) return;
     if (card && e.target.closest('button')) return;

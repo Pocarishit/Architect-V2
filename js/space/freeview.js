@@ -37,6 +37,11 @@ let lastTool = 'move';
  *  idle(): a gesture ended without saving (lets the chat catch up on anything it held back)
  */
 export function mountFreeView(o) {
+  // Nov 18: also runs at the object level, where the "messages" are subsection tiles and variable cards
+  // and the "column" is the grid. These options say what an item is and what it's called.
+  const ITEM = o.item || '.sc-msg';            // an item's element (carries data-id)
+  const BUBBLE = o.bubble || '.sc-bubble';     // the part links attach to
+  const noun = o.noun || 'message', home = o.home || 'the column';
   let x = o.entry();
   let tool = TOOLS.some(([id]) => id === lastTool) ? lastTool : 'move';
   let busy = false;
@@ -50,7 +55,7 @@ export function mountFreeView(o) {
   const svg = s('svg', { class: 'vr-fv-svg', 'aria-hidden': 'true' });
   const board = h('div', { class: 'vr-fv-board' });
   const capture = h('div', { class: 'vr-fv-capture' });
-  const scroller = h('div', { class: 'vr-msgs vr-fv', role: 'log', tabindex: -1 }, board);
+  const scroller = h('div', { class: o.className || 'vr-msgs vr-fv', role: o.role || 'log', tabindex: -1 }, board);
   const tools = h('div', { class: 'vr-fv-tools', role: 'toolbar', 'aria-label': 'Free view tools' });
 
   const items = new Map(); // msg id → element (row)
@@ -70,7 +75,7 @@ export function mountFreeView(o) {
     // The column holds every message in order; the ones you've moved out stay as invisible
     // placeholders, so nothing slides up and new messages always arrive at the bottom.
     flow = h('div', { class: 'vr-fv-flow' }, o.flowRows(notes));
-    for (const row of [...flow.querySelectorAll('.sc-msg[data-id]')]) {
+    for (const row of [...flow.querySelectorAll(`${ITEM}[data-id]`)]) {
       if (f.pos[row.dataset.id]) ghost(row);
       else { items.set(row.dataset.id, row); addGrip(row, row.dataset.id); }
     }
@@ -109,7 +114,8 @@ export function mountFreeView(o) {
   }
 
   function addGrip(row, id) {
-    const grip = h('button', { type: 'button', class: 'vr-fv-grip', 'aria-label': 'Drag this message', title: 'Drag anywhere · click to select · double-click to send it back to the column' }, icon('grip', 12));
+    const grip = h('button', { type: 'button', class: 'vr-fv-grip', 'aria-label': `Drag this ${noun}`, title: `Drag anywhere · click to select · double-click to send it back to ${home}` }, icon('grip', 12));
+    grip.addEventListener('click', (e) => e.stopPropagation()); // never opens what it's sitting on
     grip.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       if (e.shiftKey || e.ctrlKey || e.metaKey) { e.preventDefault(); e.stopPropagation(); toggleSel('msgs', id); return; }
@@ -121,7 +127,7 @@ export function mountFreeView(o) {
       e.preventDefault(); e.stopPropagation();
       const many = isSel('msgs', id) && selCount() > 1;
       menu({ x: e.clientX, y: e.clientY }, many ? selItems() : [
-        free().pos[id] ? { label: 'Back to the column', icon: 'list', onSelect: () => unpin(id) } : null,
+        free().pos[id] ? { label: `Back to ${home}`, icon: 'list', onSelect: () => unpin(id) } : null,
         free().size[id] ? { label: 'Original size', icon: 'fit', onSelect: () => { const sz = { ...free().size }; delete sz[id]; save({ size: sz }); } } : null,
         { label: 'Remove its links', icon: 'connector', onSelect: () => save({ links: free().links.filter((l) => l.a !== id && l.b !== id) }) },
       ].filter(Boolean));
@@ -222,8 +228,8 @@ export function mountFreeView(o) {
     }, icon(ic, 15))),
     n ? h('span', { class: 'vr-fv-selbar' },
       h('b', {}, String(n)),
-      sel.msgs.size ? h('button', { type: 'button', class: 'vr-fv-tool', title: 'Back to the column', 'aria-label': 'Send selected messages back to the column', onclick: () => unpinSel() }, icon('list', 14)) : null,
-      h('button', { type: 'button', class: 'vr-fv-tool is-danger', title: 'Clear selected (Delete)', 'aria-label': 'Delete selected', onclick: () => deleteSel() }, icon('trash', 14)),
+      sel.msgs.size ? h('button', { type: 'button', class: 'vr-fv-tool', title: `Back to ${home}`, 'aria-label': `Send selected back to ${home}`, onclick: () => unpinSel() }, icon('list', 14)) : null,
+      !o.remove && !(sel.cards.size + sel.shapes.size) ? null : h('button', { type: 'button', class: 'vr-fv-tool is-danger', title: 'Clear selected (Delete)', 'aria-label': 'Delete selected', onclick: () => deleteSel() }, icon('trash', 14)),
       h('button', { type: 'button', class: 'vr-fv-tool', title: 'Deselect (Esc)', 'aria-label': 'Deselect', onclick: () => clearSel() }, icon('close', 13))) : '');
   }
   function setTool(t) { tool = lastTool = t; board.dataset.tool = t; paintTools(); }
@@ -239,8 +245,8 @@ export function mountFreeView(o) {
   function clearSel(paint = true) { sel.msgs.clear(); sel.cards.clear(); sel.shapes.clear(); if (paint) paintSel(); }
   function selItems() {
     return [
-      sel.msgs.size ? { label: `Back to the column (${sel.msgs.size})`, icon: 'list', onSelect: unpinSel } : null,
-      { label: `Clear ${selCount()} selected`, icon: 'trash', danger: true, kbd: 'Del', onSelect: deleteSel },
+      sel.msgs.size ? { label: `Back to ${home} (${sel.msgs.size})`, icon: 'list', onSelect: unpinSel } : null,
+      o.remove || sel.cards.size + sel.shapes.size ? { label: `Clear ${o.remove ? selCount() : sel.cards.size + sel.shapes.size} selected`, icon: 'trash', danger: true, kbd: 'Del', onSelect: deleteSel } : null,
     ].filter(Boolean);
   }
   function unpinSel() {
@@ -249,8 +255,10 @@ export function mountFreeView(o) {
     save({ pos, size: sz });
   }
   async function deleteSel() {
-    const msgs = [...sel.msgs];
-    if (msgs.length && !(await confirmDialog(`Delete ${msgs.length} message${msgs.length === 1 ? '' : 's'}?`, `${msgs.length === 1 ? 'It leaves' : 'They leave'} the chat too, not just free view.`))) return;
+    // Where items can't be deleted from here (tiles and variables), Delete clears only notes and shapes.
+    const msgs = o.remove ? [...sel.msgs] : [];
+    if (!o.remove && !(sel.cards.size + sel.shapes.size)) return;
+    if (msgs.length && !(await confirmDialog(`Delete ${msgs.length} ${noun}${msgs.length === 1 ? '' : 's'}?`, `${msgs.length === 1 ? 'It leaves' : 'They leave'} the chat too, not just free view.`))) return;
     const patch = {
       cards: free().cards.filter((c) => !sel.cards.has(c.id)),
       shapes: free().shapes.filter((c) => !sel.shapes.has(c.id)),
@@ -268,7 +276,7 @@ export function mountFreeView(o) {
   function rectOf(id) {
     const el = items.get(id);
     if (!el?.isConnected) return null;
-    const b = el.querySelector('.sc-bubble') || el;
+    const b = el.querySelector(BUBBLE) || el;
     const r = b.getBoundingClientRect(), br = board.getBoundingClientRect(), k = scaleOf();
     return { x: (r.left - br.left) / k, y: (r.top - br.top) / k, w: r.width / k, h: r.height / k };
   }
@@ -371,7 +379,8 @@ export function mountFreeView(o) {
     let wrap = row.closest('.vr-fv-item');
     if (wrap) return wrap;
     const r0 = rectOf(id);
-    const gx = row.querySelector('.vr-fv-grip')?.offsetWidth || 0;
+    const g = row.querySelector('.vr-fv-grip');
+    const gx = g && getComputedStyle(g).position !== 'absolute' ? g.offsetWidth : 0;
     row.before(ghost(row.cloneNode(true)));
     wrap = itemWrap(id, { x: Math.max(0, Math.round(r0.x - gx)), y: Math.max(0, Math.round(r0.y)) }, null);
     board.insertBefore(wrap, capture);
@@ -524,7 +533,7 @@ export function mountFreeView(o) {
   /* ---------------- selection window ---------------- */
   board.addEventListener('pointerdown', (e) => {
     if (tool !== 'move' || e.button !== 0) return;
-    if (e.target.closest('.sc-msg[data-id], .vr-fv-note, .vr-fv-size, button, a, input, textarea, [contenteditable="true"], [data-shape], [data-link], [data-ink]')) return;
+    if (e.target.closest(`${ITEM}[data-id]`) || e.target.closest('.vr-fv-note, .vr-fv-size, button, a, input, textarea, [contenteditable="true"], [data-shape], [data-link], [data-ink]')) return;
     e.preventDefault();
     scroller.focus({ preventScroll: true });
     const start = local(e);
@@ -553,7 +562,7 @@ export function mountFreeView(o) {
   });
 
   /* ---------------- link / shapes / notes / erase ---------------- */
-  const msgAt = (e) => document.elementsFromPoint(e.clientX, e.clientY).map((n) => n.closest?.('.sc-msg[data-id]')).find((n) => n && board.contains(n))?.dataset.id || null;
+  const msgAt = (e) => document.elementsFromPoint(e.clientX, e.clientY).map((n) => n.closest?.(`${ITEM}[data-id]`)).find((n) => n && board.contains(n))?.dataset.id || null;
 
   capture.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
@@ -572,11 +581,11 @@ export function mountFreeView(o) {
       const p = local(ev);
       autoScroll(ev);
       draw(s('path', { class: 'vr-fv-live', d: `M${from.x},${from.y} L${p.x},${p.y}` }));
-      for (const n of board.querySelectorAll('.sc-msg.is-target')) n.classList.remove('is-target');
+      for (const n of board.querySelectorAll(`${ITEM}.is-target`)) n.classList.remove('is-target');
       const b = msgAt(ev);
       if (b && b !== a) items.get(b)?.classList.add('is-target');
     }, (ev, how) => {
-      for (const n of board.querySelectorAll('.sc-msg.is-target')) n.classList.remove('is-target');
+      for (const n of board.querySelectorAll(`${ITEM}.is-target`)) n.classList.remove('is-target');
       const b = how === 'up' ? msgAt(ev) : null;
       const links = free().links;
       if (b && b !== a && !links.some((l) => (l.a === a && l.b === b) || (l.a === b && l.b === a))) save({ links: [...links, { id: uid(), a, b }] });
@@ -638,7 +647,7 @@ export function mountFreeView(o) {
   requestAnimationFrame(() => {
     const m = scrollMem.get(x.id);
     if (m) { scroller.scrollLeft = m.left; scroller.scrollTop = m.top; }
-    else scroller.scrollTop = scroller.scrollHeight;
+    else if (!o.top) scroller.scrollTop = scroller.scrollHeight;
   });
 
   return {

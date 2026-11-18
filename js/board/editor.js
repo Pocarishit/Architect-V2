@@ -783,8 +783,37 @@ export class Editor {
   }
 
   /* ================= pointer gestures ================= */
+  /* ================= view mode (phones) ================= */
+  // Objects go untouchable: every finger lands on the canvas, so getting around never grabs a tile,
+  // opens a chat or drags something out of place. Everything stays visible; pinch still zooms.
+  setViewOnly(on) {
+    on = !!on;
+    if (this.viewOnly === on) return;
+    this.viewOnly = on;
+    this.vp.classList.toggle('is-viewonly', on);
+    if (!on) return;
+    this.cancelLongPress?.();
+    if (this.editingId) this.finishEditing();
+    if (this.activeId) this.deactivate();
+    if (this.sel.size) this.clearSel();
+    this.setActiveWidget(null);
+    if (isTypingTarget(document.activeElement)) document.activeElement.blur();
+  }
+
+  viewDown(e) {
+    this.inWidget = false;
+    if (e.pointerType === 'touch' && e.isPrimary && this.pointers.size) this.resetPointers();
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.pointers.size === 2) { this.startPinch(); return; }
+    if (this.pointers.size > 1) return;
+    e.preventDefault();
+    try { this.vp.setPointerCapture(e.pointerId); } catch {}
+    this.beginPan({ cx: e.clientX, cy: e.clientY, p: this.toWorld(e.clientX, e.clientY), pointerId: e.pointerId });
+  }
+
   onDown(e) {
     if (!(e.target instanceof Element)) return;
+    if (this.viewOnly) { this.viewDown(e); return; }
     // Moving the screen never depends on what's under the pointer:
     // right-drag, middle-drag or Space+drag pan from anywhere — objects and widgets included.
     if ((e.button === 1 || e.button === 2 || (this.space && e.button === 0)) && e.pointerType !== 'touch' && !e.target.closest('[contenteditable="true"]')) {
@@ -1536,6 +1565,7 @@ export class Editor {
   }
 
   onContextMenu(e) {
+    if (this.viewOnly) { e.preventDefault(); return; } // view mode: no menus, nothing to grab
     const target = this.targetAt(e);
     if (!target || target.closest('[contenteditable="true"]')) return;
     e.preventDefault();

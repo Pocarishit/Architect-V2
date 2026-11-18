@@ -51,7 +51,7 @@ export function loadMyVars() {
       if (configured && !missing(e)) console.warn('Variables: falling back to this browser', e);
       if (local) data = normal(local); else fresh = true;
     }
-    data ||= { sections: null, entries: [], ideas: null, rev: 0 };
+    data ||= { sections: null, entries: [], ideas: null, vfree: false, rev: 0 };
     if (remote && !poller) {
       poller = setInterval(pull, POLL_MS);
       document.addEventListener('visibilitychange', () => { if (!document.hidden) pull(); });
@@ -67,6 +67,7 @@ const normal = (d) => ({
   sections: Array.isArray(d.sections) && d.sections.length ? d.sections : null,
   entries: Array.isArray(d.entries) ? d.entries : [],
   ideas: Array.isArray(d.ideas) ? d.ideas : null, // null: never saved (your old personal-Space ideas move in once)
+  vfree: !!d.vfree, // Variables' object-level Free View is on (Nov 18)
   rev: Number(d.rev) || 0,
 });
 

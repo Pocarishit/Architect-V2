@@ -438,9 +438,23 @@ export function mountSpace(root) {
     return [...new Set(list)].slice(0, DOCK_MAX);
   };
 
+  // View mode (phones): objects go untouchable so a finger only ever moves the canvas. Lives for the
+  // session and follows you between the shared and personal Space.
+  let viewMode = false;
+  function setViewMode(on) {
+    viewMode = !!on;
+    for (const sl of Object.values(slots)) sl?.t?.editor?.setViewOnly?.(viewMode);
+    page.classList.toggle('is-viewmode', viewMode);
+    const b = page.querySelector('.sd-view');
+    if (b) { b.classList.toggle('is-on', viewMode); b.setAttribute('aria-pressed', String(viewMode)); b.querySelector('span').textContent = viewMode ? 'Viewing' : 'View'; }
+    navigator.vibrate?.(8);
+    toast(viewMode ? 'View mode — look around, nothing moves.' : 'View mode off — the board is interactive again.', { ms: 1800 });
+  }
+
   function mountDock() {
     page.querySelector('.space-dock')?.remove();
     const ed = editor();
+    ed?.setViewOnly?.(viewMode);
     const cat = dockCatalog(ed);
     let suppress = false; // a long-press opened the customizer: the release isn't a tap
     const item = (ic, label, fn, extra = {}) => h('button', { class: 'sd-btn', type: 'button', 'aria-label': label, onclick: (e) => { if (suppress) { suppress = false; return; } fn(e.currentTarget); }, ...extra }, icon(ic, 20), h('span', {}, label));
@@ -448,7 +462,10 @@ export function mountSpace(root) {
       const r = b.getBoundingClientRect();
       menu({ x: r.left, y: r.top - 8 }, [{ label: 'Customize navigation bar…', icon: 'settings', onSelect: customizeDock }, '-', ...spaceItems(ed.viewCenter())], { side: 'top' });
     });
-    const dock = h('nav', { class: 'space-dock', 'aria-label': 'Space' }, menuBtn,
+    const viewBtn = item('eye', viewMode ? 'Viewing' : 'View', () => setViewMode(!viewMode), {
+      class: ['sd-btn sd-view', viewMode && 'is-on'], 'aria-pressed': String(viewMode), 'aria-label': 'View mode: touch nothing, just move around',
+    });
+    const dock = h('nav', { class: 'space-dock', 'aria-label': 'Space' }, menuBtn, viewBtn,
       ...dockItems(cat).map((k) => item(cat[k].icon, cat[k].label, cat[k].run, { 'data-dock': k })));
     // Hold the bar to rearrange it.
     let hold = null;

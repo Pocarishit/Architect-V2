@@ -3,6 +3,8 @@
 //            Where an idea sits is its classification, and its glass takes that side's colour.
 //            Two views: Mine (default — your own ideas, on your account, the same in every Space)
 //            and Shared (the pool on the shared Space's object: ideas shared with you or made there).
+//            Shared runs on its own axis (Nov 18): PRODUCE (teal, left) and CONSUME (coral, right) —
+//            the pool read as what's being put out versus what's being taken in.
 //            Grab one and it freezes; drop it on the canvas to park it, or on your Path to make it a task.
 //   Story    the day as a timeline (GM → Afternoon → Nighttime → Second Wind → new morning).
 //            Drop photos, paste videos, type narration; each fragment carries its Set-Point.
@@ -75,7 +77,16 @@ const glassOf = (id) => { const n = hashOf(id); return { hue: GLASS_HUES[n % GLA
 // Influence colours: two families instead of a rainbow. Each idea keeps its own shade within the family.
 const EXT_HUES = [30, 38, 24, 44, 34];      // amber — external
 const INT_HUES = [266, 276, 258, 284, 270]; // violet — internal
-const shadesOf = (id) => { const n = hashOf(id); return { ext: EXT_HUES[n % EXT_HUES.length], int: INT_HUES[(n >>> 4) % INT_HUES.length] }; };
+// The shared pool's axis: teal produce, coral consume. Coral sits past 360 so a flip sweeps through blue
+// and magenta instead of muddy greens and yellows.
+const PRO_HUES = [174, 180, 168, 186, 176];  // teal — produce
+const CON_HUES = [367, 372, 363, 376, 369];  // coral — consume
+const shadesOf = (id) => {
+  const n = hashOf(id);
+  return { ext: EXT_HUES[n % EXT_HUES.length], int: INT_HUES[(n >>> 4) % INT_HUES.length], pro: PRO_HUES[(n >>> 8) % PRO_HUES.length], con: CON_HUES[(n >>> 12) % CON_HUES.length] };
+};
+// Each view's two sides: [left, right] labels. Mine reads influence; the shared pool reads output vs input.
+const AXES = { mine: ['EXTERNAL', 'INTERNAL'], shared: ['PRODUCE', 'CONSUME'] };
 const tf = (x, y, tilt = 0, lift = false) => `translate(${x}px, ${y}px) rotate(${lift ? 0 : tilt}deg)${lift ? ' scale(1.04)' : ''}`;
 const fold = (v) => { v = ((v % 2) + 2) % 2; return v > 1 ? 2 - v : v; };
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
@@ -279,11 +290,12 @@ export function mountFleeting(root, el0, w) {
 
   function mountIdeas() {
     field = h('div', { class: 'fi-field', 'data-view': ideaView });
-    // The influence split: external on the left, internal on the right. Purely visual — clicks and the
-    // selection window pass straight through to the field.
-    stage.append(h('div', { class: 'fi-zones', 'aria-hidden': 'true' },
-      h('div', { class: 'fi-zone is-ext' }, h('span', { class: 'fi-zone-label' }, 'EXTERNAL')),
-      h('div', { class: 'fi-zone is-int' }, h('span', { class: 'fi-zone-label' }, 'INTERNAL'))));
+    // The split: external | internal in Mine, produce | consume in the shared pool. Purely visual — clicks
+    // and the selection window pass straight through to the field.
+    const [L, R] = AXES[ideaView] || AXES.mine;
+    stage.append(h('div', { class: 'fi-zones', 'data-axis': ideaView, 'aria-hidden': 'true' },
+      h('div', { class: 'fi-zone is-ext' }, h('span', { class: 'fi-zone-label' }, L)),
+      h('div', { class: 'fi-zone is-int' }, h('span', { class: 'fi-zone-label' }, R))));
     stage.append(field);
     field.addEventListener('pointerdown', marquee);
     nodes.clear();
@@ -305,14 +317,16 @@ export function mountFleeting(root, el0, w) {
       let n = nodes.get(i.id);
       if (!n) {
         const g = glassOf(i.id), sh = shadesOf(i.id);
-        const node = h('div', { class: 'fi-idea', tabindex: 0, 'data-id': i.id, style: { '--he': sh.ext, '--hi': sh.int } });
+        const node = h('div', { class: 'fi-idea', tabindex: 0, 'data-id': i.id, style: { '--he': sh.ext, '--hi': sh.int, '--hp': sh.pro, '--hc': sh.con } });
         bindIdea(node, i.id);
         field.append(node);
         n = { node, w: 0, h: 0, tilt: g.tilt };
         nodes.set(i.id, n);
       }
       if (n.node.textContent !== i.text) n.node.textContent = i.text;
-      n.node.title = 'Left: external · right: internal — drag across to reclassify · drop on your Path to make it a task';
+      n.node.title = ideaView === 'shared'
+        ? 'Left: produce · right: consume — drag across to flip it · drop on your Path to make it a task'
+        : 'Left: external · right: internal — drag across to reclassify · drop on your Path to make it a task';
       n.node.classList.toggle('is-sel', selIdeas.has(i.id));
       n.w = n.node.offsetWidth; n.h = n.node.offsetHeight;
     }

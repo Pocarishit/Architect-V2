@@ -2,6 +2,10 @@
 // Sections (School, Family, Business, Friends… all renamable) hold entries: a person, a group,
 // a commitment. Each entry opens into its own running chat of notes, so you can reflect and
 // track how it changes over time. Lives on the widget object, synced like the rest of the Space.
+// Nov 18: subsections nest to any depth (a subsection can hold its own subsections) and each can carry
+// an image. Free View works at the object level too: tiles and variables loosen from the grid onto a
+// canvas with links, boxes, circles and notes — a layer per subsection (section.free), on top of the same
+// data. Toggle it off and the standard grid is back.
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { menu, toast, dialog, confirmDialog, promptDialog } from '../core/ui.js';
@@ -95,7 +99,8 @@ export function mountVariables(root, el0, w) {
   let sending = false;
   let dragging = false;
   let free = null; // Free View of the open chat, when it's on
-  const freeBusy = () => !!free?.busy();
+  let gfree = null; // Free View of the grid (object level), when it's on
+  const freeBusy = () => !!free?.busy() || !!gfree?.busy();
   let finding = false, query = '', hit = 0; // the open chat's search bar
   const remember = () => store.set(memKey, { section, sub, open });
 
@@ -114,8 +119,14 @@ export function mountVariables(root, el0, w) {
   const secById = (id) => sections().find((s) => s.id === id);
   const entries = () => acct().entries || [];
   const inSec = (id) => entries().filter((x) => x.section === id);
-  const countIn = (id) => inSec(id).length + kids(id).reduce((n, k) => n + inSec(k.id).length, 0);
-  const pathOf = (id) => { const s = secById(id); if (!s) return ''; const p = s.parent && secById(s.parent); return p ? `${p.name} › ${s.name}` : s.name; };
+  const countIn = (id, seen = new Set()) => { if (seen.has(id)) return 0; seen.add(id); return inSec(id).length + kids(id).reduce((n, k) => n + countIn(k.id, seen), 0); };
+  // Root → this section (guarded against a broken parent loop).
+  const chainOf = (id) => { const out = []; let s = secById(id); const seen = new Set(); while (s && !seen.has(s.id)) { seen.add(s.id); out.unshift(s); s = s.parent && secById(s.parent); } return out; };
+  const topOf = (id) => chainOf(id)[0]?.id || null;
+  const pathOf = (id) => chainOf(id).map((x) => x.name).join(' › ');
+  const descOf = (id) => { const out = new Set([id]); let grew = true; while (grew) { grew = false; for (const x of sections()) if (x.parent && out.has(x.parent) && !out.has(x.id)) { out.add(x.id); grew = true; } } return out; };
+  const goTo = (id) => { const t = topOf(id); if (!t) return; section = t; sub = id === t ? null : id; remember(); };
+  const freeOn = () => !!acct().vfree;
   const save = (p) => setMyVars({ sections: sections(), entries: entries(), ...p });
   const legacyNew = () => {
     const have = new Set(entries().map((x) => x.id));
@@ -152,11 +163,12 @@ export function mountVariables(root, el0, w) {
     pending = false;
     const t = tops();
     if (!t.some((s) => s.id === section)) section = t[0]?.id || null;
-    if (sub && secById(sub)?.parent !== section) sub = null;
+    if (sub && (sub === section || topOf(sub) !== section)) sub = null;
     const entry = open && entries().find((x) => x.id === open);
     if (open && !entry) open = null;
     const keep = box.querySelector('.vr-grid')?.scrollTop;
     free?.destroy(); free = null;
+    gfree?.destroy(); gfree = null;
     box.replaceChildren(entry ? chat(entry) : grid(t));
     if (keep && !entry) box.querySelector('.vr-grid').scrollTop = keep;
     if (entry && !free && !query) requestAnimationFrame(() => { const l = box.querySelector('.vr-msgs'); if (l) l.scrollTop = l.scrollHeight; });
@@ -229,53 +241,112 @@ export function mountVariables(root, el0, w) {
   function closeFind() { finding = false; query = ''; hit = 0; busy = false; render(); }
 
   /* ---------------- sections + grid ---------------- */
+  // A section's face: its image as a thumbnail, when it has one.
+  function secImg(sec, cls) {
+    if (!sec?.img) return null;
+    const url = urlOf(sec.img, render);
+    return h('span', { class: cls, 'aria-hidden': 'true' }, url ? h('img', { src: url, alt: '', draggable: false }) : null);
+  }
+
   function grid(t) {
     const tabs = h('div', { class: 'vr-tabs', role: 'tablist' },
       t.map((s) => h('button', {
-        type: 'button', role: 'tab', class: ['vr-tab', s.id === section && 'is-on'], 'aria-selected': String(s.id === section), 'data-sec': s.id,
+        type: 'button', role: 'tab', class: ['vr-tab', s.id === section && 'is-on', s.img && 'has-img'], 'aria-selected': String(s.id === section), 'data-sec': s.id,
         onclick: () => { section = s.id; sub = null; remember(); render(); },
         ondblclick: () => renameSection(s),
         oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, s); },
-      }, s.name.toUpperCase())),
+      }, secImg(s, 'vr-tab-img'), s.name.toUpperCase())),
       h('button', { type: 'button', class: 'vr-tab-add', title: 'Add', 'aria-label': 'Add a section or import', onclick: (e) => addMenu(e.currentTarget) }, icon('plus', 14)));
 
     const cur = here();
-    const cats = sub ? [] : kids(section);
+    const fvOn = freeOn();
+    const cats = kids(cur);
     const list = inSec(cur);
-    const body = [];
+
+    // The bar under the tabs: where you are (School › Student › Cadets), then Free View.
+    const bar = [];
     if (sub) {
+      const chain = chainOf(sub).slice(1); // below the tab
       const s = secById(sub);
-      body.push(h('div', { class: 'vr-crumb' },
-        h('button', { type: 'button', class: 'vr-crumb-back', onclick: () => { sub = null; remember(); render(); } }, icon('chevronLeft', 14), 'SECTIONS'),
-        h('span', { class: 'vr-crumb-name', style: { '--h': hue(s?.name || '') }, oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); if (s) sectionMenu({ x: e.clientX, y: e.clientY }, s); }, ondblclick: () => s && renameSection(s) }, (s?.name || '').toUpperCase())));
+      const up = s?.parent || section;
+      bar.push(h('button', { type: 'button', class: 'vr-crumb-back', title: `Back to ${secById(up)?.name || 'sections'}`, onclick: () => { goTo(up); render(); } }, icon('chevronLeft', 14), 'BACK'));
+      chain.forEach((c, i) => {
+        const last = i === chain.length - 1;
+        if (i) bar.push(h('span', { class: 'vr-crumb-sep', 'aria-hidden': 'true' }, '›'));
+        bar.push(h(last ? 'span' : 'button', {
+          ...(last ? {} : { type: 'button', onclick: () => { goTo(c.id); render(); } }),
+          class: ['vr-crumb-name', !last && 'is-link'], style: { '--h': hue(c.name) },
+          oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, c); },
+          ondblclick: () => renameSection(c),
+        }, secImg(c, 'vr-crumb-img'), c.name.toUpperCase()));
+      });
     }
-    const tiles = cats.map((c) => h('button', {
-      type: 'button', class: 'vr-cat', 'data-sec': c.id, style: { '--h': hue(c.name) },
-      onclick: () => { sub = c.id; remember(); render(); },
-      ondblclick: (e) => { e.preventDefault(); renameSection(c); },
-      oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, c); },
-    }, h('span', { class: 'vr-cat-name' }, c.name.toUpperCase()), h('small', {}, String(countIn(c.id)))));
-    const cards = list.map((x) => card(x));
-    cards.push(h('button', { type: 'button', class: 'vr-card vr-new', onclick: () => addEntry() }, icon('plus', 18), h('span', {}, 'Add')));
-    const gridEl = h('div', { class: 'vr-grid' }, ...tiles, ...cards);
-    gridEl.addEventListener('contextmenu', (e) => {
-      if (e.target !== gridEl) return;
+    const fvToggle = h('button', {
+      type: 'button', class: ['vr-fv-toggle', fvOn && 'is-on'], 'aria-pressed': String(fvOn),
+      title: fvOn ? 'Back to the grid' : 'Free view: drag tiles anywhere, link them, draw, add notes',
+      onclick: () => setMyVars({ vfree: !fvOn }),
+    }, h('i'), 'FREE VIEW');
+
+    const tiles = (only) => (only || cats).map((c) => tile(c));
+    const cards = (only) => (only || list).map((x) => card(x));
+    const addCard = h('button', { type: 'button', class: 'vr-card vr-new', onclick: () => addEntry() }, icon('plus', 18), h('span', {}, 'Add'));
+    const gridMenu = (e) => {
       e.preventDefault(); e.stopPropagation();
       menu({ x: e.clientX, y: e.clientY }, [
         { label: `Add variable to ${secById(cur)?.name || 'here'}`, icon: 'plus', onSelect: () => addEntry() },
-        !sub ? { label: `Add sub-section in ${secById(section)?.name || 'here'}`, icon: 'folder', onSelect: () => addSection(section) } : null,
+        { label: `Add sub-section in ${secById(cur)?.name || 'here'}`, icon: 'folder', onSelect: () => addSection(cur) },
         { label: 'Add section', icon: 'folder', onSelect: () => addSection(null) },
         '-',
         { label: 'Import from Variables file…', icon: 'upload', onSelect: importFile },
-      ].filter(Boolean));
-    });
+      ]);
+    };
+
+    let main;
+    if (fvOn) {
+      // Object-level Free View: every tile and variable is an item; the grid is the "column" they leave.
+      const items = () => [...kids(here()).map((k) => ({ id: k.id })), ...inSec(here()).map((x) => ({ id: x.id }))];
+      gfree = mountFreeView({
+        item: '.vr-it', bubble: ':scope', noun: 'tile', home: 'the grid', top: true,
+        className: 'vr-fv vr-fv-grid', role: 'region',
+        entry: () => ({ id: `sec:${cur}`, notes: items(), free: secById(cur)?.free || {} }),
+        flowRows: () => {
+          const g = h('div', { class: 'vr-grid is-fv' }, ...tiles(kids(cur)), ...cards(inSec(cur)), addCard);
+          g.addEventListener('contextmenu', (e) => { if (e.target === g) gridMenu(e); });
+          return [g];
+        },
+        one: (m) => { const c = secById(m.id); if (c) return tile(c); const x = entries().find((y) => y.id === m.id); return x ? card(x) : h('div'); },
+        save: (f) => save({ sections: sections().map((x) => (x.id === cur ? { ...x, free: { ...f, on: true } } : x)) }),
+        idle: () => { if (pending) setTimeout(render, 0); },
+      });
+      gfree.el.addEventListener('contextmenu', (e) => { if (e.target.classList?.contains('vr-fv-board') || e.target === gfree.el) gridMenu(e); });
+      main = gfree.el;
+    } else {
+      main = h('div', { class: 'vr-grid' }, ...tiles(), ...cards(), addCard);
+      main.addEventListener('contextmenu', (e) => { if (e.target === main) gridMenu(e); });
+    }
+
     const old = store.get(`${memKey}.legacy`, null) ? [] : legacyNew();
     const banner = old.length ? h('div', { class: 'vr-legacy' },
       h('span', {}, `Variables are now private to each account. ${old.length} saved on this object from before ${old.length === 1 ? 'isn’t' : 'aren’t'} in yours.`),
       h('button', { type: 'button', class: 'btn btn-primary sm', onclick: bringIn }, 'Bring in'),
       h('button', { type: 'button', class: 'btn sm', onclick: () => { store.set(`${memKey}.legacy`, 'dismissed'); render(); } }, 'Not mine')) : null;
-    return h('div', { class: 'vr-home' }, tabs, banner, ...body, gridEl,
-      !list.length && !cats.length ? h('p', { class: 'vr-hint' }, 'A teacher, a committee, your family, the office — every influence gets its own space. Right-click here to add one.') : null);
+    return h('div', { class: ['vr-home', fvOn && 'is-free'] }, tabs, banner,
+      h('div', { class: 'vr-bar' }, h('div', { class: 'vr-crumb' }, ...bar), gfree ? gfree.tools : null, fvToggle),
+      main,
+      !list.length && !cats.length && !fvOn ? h('p', { class: 'vr-hint' }, 'A teacher, a committee, your family, the office — every influence gets its own space. Right-click here to add one.') : null);
+  }
+
+  // A subsection tile: its image (if any), its name, how many variables live inside (all depths).
+  function tile(c) {
+    const node = h('div', {
+      class: ['vr-cat vr-it', c.img && 'has-img'], role: 'button', tabindex: 0, 'data-sec': c.id, 'data-id': c.id, style: { '--h': hue(c.name) },
+      'aria-label': `Open ${c.name}`,
+      onclick: (e) => { if (e.target.closest('.vr-fv-grip, .vr-fv-size')) return; goTo(c.id); render(); },
+      onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); goTo(c.id); render(); } if (e.key === 'F2') renameSection(c); },
+      ondblclick: (e) => { e.preventDefault(); renameSection(c); },
+      oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, c); },
+    }, secImg(c, 'vr-cat-img'), h('span', { class: 'vr-cat-name' }, c.name.toUpperCase()), kids(c.id).length ? h('span', { class: 'vr-cat-nest', title: `${kids(c.id).length} sub-section${kids(c.id).length === 1 ? '' : 's'} inside` }, icon('folder', 11), String(kids(c.id).length)) : null, h('small', {}, String(countIn(c.id))));
+    return node;
   }
 
   function card(x) {
@@ -285,7 +356,7 @@ export function mountVariables(root, el0, w) {
     const name = h('span', { class: 'vr-name', title: 'Double-click to rename' }, x.name);
     const hh = hue(x.name);
     const node = h('div', {
-      class: 'vr-card', role: 'button', tabindex: 0, 'aria-label': `Open ${x.name}`, 'data-id': x.id,
+      class: 'vr-card vr-it', role: 'button', tabindex: 0, 'aria-label': `Open ${x.name}`, 'data-id': x.id,
       onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) openEntry(x.id); if (e.key === 'F2') renameInline(name, x); },
       oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); entryMenu({ x: e.clientX, y: e.clientY }, x); },
     },
@@ -388,7 +459,7 @@ export function mountVariables(root, el0, w) {
   function addMenu(anchor) {
     menu(anchor, [
       { label: 'New section', icon: 'folder', onSelect: () => addSection(null) },
-      section ? { label: `New sub-section in ${secById(section)?.name}`, icon: 'folder', onSelect: () => addSection(section) } : null,
+      here() ? { label: `New sub-section in ${secById(here())?.name}`, icon: 'folder', onSelect: () => addSection(here()) } : null,
       '-',
       { label: 'Import from Variables file…', icon: 'upload', onSelect: importFile },
     ].filter(Boolean));
@@ -400,9 +471,8 @@ export function mountVariables(root, el0, w) {
     const dup = sections().some((x) => (x.parent || null) === (parent || null) && x.name.toLowerCase() === name.trim().toLowerCase());
     if (dup) { toast('There’s already a section with that name.', { tone: 'error' }); return; }
     const s = parent ? { id: uid(), name: name.trim(), parent } : { id: uid(), name: name.trim() };
-    if (parent) { section = parent; sub = s.id; } else { section = s.id; sub = null; }
-    remember();
     save({ sections: [...sections(), s] });
+    goTo(s.id); render();
   }
 
   async function renameSection(s) {
@@ -421,9 +491,11 @@ export function mountVariables(root, el0, w) {
     const prev = s.parent ? 'Move up' : 'Move left', next = s.parent ? 'Move down' : 'Move right';
     menu(anchor, [
       { header: pathOf(s.id) },
-      { label: 'Add variable here', icon: 'plus', onSelect: () => { if (s.parent) { section = s.parent; sub = s.id; } else { section = s.id; sub = null; } remember(); render(); addEntry(); } },
-      !s.parent ? { label: 'Add sub-section', icon: 'folder', onSelect: () => addSection(s.id) } : null,
+      { label: 'Add variable here', icon: 'plus', onSelect: () => { goTo(s.id); render(); addEntry(); } },
+      { label: 'Add sub-section', icon: 'folder', onSelect: () => addSection(s.id) },
       { label: 'Rename', icon: 'edit', onSelect: () => renameSection(s) },
+      { label: s.img ? 'Replace image' : 'Add an image', icon: 'image', onSelect: async () => { const [f] = await pickMedia({ multiple: false, accept: 'image/*' }); if (f) setSecImg(s.id, f); } },
+      s.img ? { label: 'Remove image', icon: 'eyeOff', onSelect: () => save({ sections: sections().map((x) => (x.id === s.id ? { ...x, img: null } : x)) }) } : null,
       { label: prev, icon: 'chevronLeft', disabled: i === 0, onSelect: () => swap(i - 1) },
       { label: next, icon: 'chevronRight', disabled: i === siblings.length - 1, onSelect: () => swap(i + 1) },
       '-',
@@ -431,17 +503,24 @@ export function mountVariables(root, el0, w) {
     ].filter(Boolean));
   }
 
+  async function setSecImg(id, f) {
+    try {
+      const up = await uploadMedia(f);
+      save({ sections: sections().map((x) => (x.id === id ? { ...x, img: up.path } : x)) });
+    } catch (e) { toast(e?.message || friendlyError(e), { tone: 'error' }); }
+  }
+
   async function deleteSection(s) {
-    const ids = new Set([s.id, ...kids(s.id).map((k) => k.id)]);
+    const ids = descOf(s.id);
     const inside = entries().filter((x) => ids.has(x.section));
     const subs = ids.size - 1;
     if ((inside.length || subs) && !(await confirmDialog(`Delete ${s.name}?`, [subs ? `${subs} sub-section${subs === 1 ? '' : 's'}` : '', inside.length ? `${inside.length} entr${inside.length === 1 ? 'y' : 'ies'} and their notes` : ''].filter(Boolean).join(' and ') + ' go with it.'))) return;
-    if (ids.has(sub)) sub = null;
+    if (ids.has(sub)) { const up = s.parent; if (up && up !== section) sub = up; else sub = null; }
     save({ sections: sections().filter((x) => !ids.has(x.id)), entries: entries().filter((x) => !ids.has(x.section)) });
   }
 
   // Every section as "School › Student" for pickers.
-  const allSecs = () => tops().flatMap((t) => [t, ...kids(t.id)]);
+  const allSecs = () => { const out = [], seen = new Set(); const walk = (x) => { if (seen.has(x.id)) return; seen.add(x.id); out.push(x); kids(x.id).forEach(walk); }; tops().forEach(walk); return out; };
 
   async function addEntry() {
     const name = h('input', { class: 'input', placeholder: 'A person, a group, a commitment', maxlength: 48, 'aria-label': 'Name' });
@@ -472,9 +551,7 @@ export function mountVariables(root, el0, w) {
     const n = name.value.trim();
     if (!ok || !n) return;
     const x = { id: uid(), section: secSel.value, name: n, photo: null, notes: [], at: Date.now() };
-    const s = secById(x.section);
-    if (s?.parent) { section = s.parent; sub = s.id; } else { section = x.section; sub = null; }
-    remember();
+    goTo(x.section);
     setEntries([...entries(), x]);
     if (file) setPhoto(x.id, file);
   }

@@ -711,3 +711,40 @@ body.is-space .shell-head { display: none; }
 .tmr[data-mode="setpoint"] .tmr-ctl { display: none; }
 .tmr.is-still .tmr-colon, .tmr.is-still .tmr-ring circle { animation: none; transition: none; }
 @media (prefers-reduced-motion: reduce) { .tmr-colon { animation: none !important; } .tmr-ring circle { transition: none; } }
+/* Timer — add-time popover */
+.tmr-add { display: grid; gap: 10px; width: 280px; padding: 12px; }
+.tmr-add-chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.tmr-add-chip {
+  height: 34px; border: 1px solid var(--line); border-radius: 9px; background: transparent; cursor: pointer;
+  font-family: var(--f-mono); font-size: 11.5px; letter-spacing: .04em; color: var(--fg-2); transition: color .12s, background .12s, border-color .12s;
+}
+.tmr-add-chip:hover { color: var(--fg); background: var(--s3); border-color: var(--line-2); }
+.tmr-add-row { display: flex; align-items: center; gap: 6px; }
+.tmr-add-row label { display: flex; align-items: center; gap: 4px; font-family: var(--f-mono); font-size: 11px; color: var(--fg-3); }
+.tmr-add-in {
+  width: 46px; height: 32px; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 8px; background: transparent; color: var(--fg);
+  font-family: var(--f-mono); font-size: 13px; text-align: center; outline: none; -moz-appearance: textfield;
+}
+.tmr-add-in::-webkit-outer-spin-button, .tmr-add-in::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.tmr-add-in:focus { border-color: var(--fg-3); }
+.tmr-add-row .btn { margin-left: auto; }
+.tmr-add-row .btn + .btn { margin-left: 0; }
+.tmr-add-hint { margin: 0; font-family: var(--f-mono); font-size: 9.5px; letter-spacing: .04em; color: var(--fg-4); line-height: 1.5; }
+
+/* ---------------- View mode (phones, Nov 18) ----------------
+   Objects stay visible but untouchable: taps and drags fall through to the canvas. */
+.bp-viewport.is-viewonly .bp-world, .bp-viewport.is-viewonly .bp-world * { pointer-events: none !important; }
+.bp-viewport.is-viewonly { cursor: grab; touch-action: none; }
+.bp-viewport.is-viewonly.is-panning { cursor: grabbing; }
+.space-host.is-viewmode .bp-tools, .space-host.is-viewmode .bp-ctx { display: none !important; }
+@media (hover: none), (max-width: 720px) {
+  .sd-btn.sd-view { position: relative; }
+  .sd-btn.sd-view.is-on { background: var(--fg); color: var(--bg); }
+  .sd-btn.sd-view.is-on:active { background: var(--fg); color: var(--bg); opacity: .85; }
+  .space-host.is-viewmode::after {
+    content: 'VIEW MODE'; position: fixed; z-index: 29; left: 50%; transform: translateX(-50%);
+    bottom: calc(84px + env(safe-area-inset-bottom)); padding: 5px 12px; border-radius: 999px;
+    font-family: var(--f-dot, var(--f-mono)); font-weight: 700; font-size: 10px; letter-spacing: .22em;
+    color: var(--fg-2); background: var(--s1); border: 1px solid var(--line-2); pointer-events: none;
+  }
+}

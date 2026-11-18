@@ -911,3 +911,70 @@ body.fi-dragging .fi-wk-arrow.is-over { opacity: 1; }
 .vr-msgs.is-ordering { position: relative; }
 .vr-msgs.is-ordering .sc-msg.is-lifted { opacity: .3; }
 .vr-ord-line { position: absolute; left: 14px; right: 14px; height: 2px; border-radius: 2px; background: var(--fg); box-shadow: 0 0 10px color-mix(in srgb, var(--fg) 50%, transparent); pointer-events: none; z-index: 3; }
+
+/* ============================================================
+   Nov 18 — Fleeting Ideas: the shared pool reads PRODUCE | CONSUME
+   Teal glass on the producing half, coral on the consuming half; crossing the divider flips the colour.
+   ============================================================ */
+.fi-zones[data-axis="shared"] .fi-zone.is-ext { background: radial-gradient(90% 70% at 0% 100%, hsl(176 80% 46% / .11), transparent 70%), linear-gradient(90deg, hsl(176 70% 42% / .05), transparent); }
+.fi-zones[data-axis="shared"] .fi-zone.is-int { background: radial-gradient(90% 70% at 100% 100%, hsl(8 88% 64% / .11), transparent 70%), linear-gradient(270deg, hsl(8 80% 60% / .05), transparent); }
+.fi-zones[data-axis="shared"] .fi-zone.is-ext .fi-zone-label { color: hsl(176 70% 60% / .6); }
+.fi-zones[data-axis="shared"] .fi-zone.is-int .fi-zone-label { color: hsl(10 90% 72% / .6); }
+[data-theme="light"] .fi-zones[data-axis="shared"] .fi-zone.is-ext .fi-zone-label { color: hsl(178 70% 28% / .75); }
+[data-theme="light"] .fi-zones[data-axis="shared"] .fi-zone.is-int .fi-zone-label { color: hsl(8 70% 42% / .75); }
+.fi-field[data-view="shared"] .fi-idea { --fh: var(--hc, 368); }
+.fi-field[data-view="shared"] .fi-idea[data-side="ext"] { --fh: var(--hp, 176); }
+.fi-field[data-view="shared"] .fi-idea[data-side="int"] { --fh: var(--hc, 368); }
+
+/* ============================================================
+   Nov 18 — Variables: nested subsections, subsection images, Free View at the object level
+   ============================================================ */
+.vr-bar { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 42px; padding: 8px 12px 4px 10px; }
+.vr-bar .vr-crumb { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; overflow-x: auto; scrollbar-width: none; }
+.vr-bar .vr-crumb::-webkit-scrollbar { display: none; }
+.vr-crumb-sep { flex: none; color: var(--fg-4); font-family: var(--f-dot); font-size: 13px; }
+.vr-crumb-name { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+.vr-crumb-name.is-link { color: var(--fg-3); cursor: pointer; transition: color .12s; }
+.vr-crumb-name.is-link:hover { color: var(--fg); }
+.vr-crumb-img, .vr-tab-img { flex: none; display: inline-block; width: 18px; height: 18px; border-radius: 5px; overflow: hidden; background: var(--s3); box-shadow: 0 0 0 1px var(--line-2); }
+.vr-crumb-img img, .vr-tab-img img, .vr-cat-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vr-tab.has-img { display: inline-flex; align-items: center; gap: 7px; }
+.vr-tab-img { width: 16px; height: 16px; }
+
+/* A subsection's face */
+.vr-cat-img {
+  position: relative; z-index: 1; flex: none; width: 52px; height: 52px; border-radius: 13px; overflow: hidden; margin-bottom: 4px;
+  background: rgba(0, 0, 0, .25);
+  box-shadow: 0 0 0 1px hsl(var(--g, 210) 85% 80% / .5), inset 0 1px 0 rgba(255, 255, 255, .2), 0 8px 16px -8px rgba(0, 0, 0, .8);
+}
+[data-theme="light"] .vr-cat-img { background: #fff; box-shadow: 0 0 0 1px hsl(var(--g, 210) 50% 50% / .35), 0 6px 12px -8px rgba(0, 0, 0, .35); }
+.vr-cat.has-img { gap: 10px; }
+.vr-cat-nest {
+  position: absolute; z-index: 1; left: 12px; bottom: 10px; display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--f-dot); font-weight: 700; font-size: 12px; letter-spacing: .08em; color: hsl(var(--g, 210) 70% 86% / .8);
+}
+[data-theme="light"] .vr-cat-nest { color: hsl(var(--g, 210) 40% 30% / .7); }
+.vr-cat:focus-visible { outline: none; }
+
+/* Free View on the object: the grid becomes a canvas */
+.vr-home.is-free .vr-fv-grid { flex: 1 1 auto; min-height: 0; display: block; position: relative; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.vr-fv-grid:focus { outline: none; }
+.vr-fv-grid .vr-fv-flow { padding: 8px; }
+.vr-fv-grid .vr-grid.is-fv { overflow: visible; padding: 0; flex: none; }
+.vr-fv-grid .vr-fv-item { width: 170px; max-width: none; }
+.vr-fv-grid .vr-fv-item > .vr-it { flex: 1 1 auto; min-width: 0; min-height: 150px; margin: 0; }
+.vr-fv-grid .vr-fv-item.is-held > .vr-it { transform: scale(1.02); }
+.vr-fv-grid .vr-it.has-grip > .vr-fv-grip {
+  position: absolute; left: 6px; top: 6px; z-index: 3; width: 22px; height: 22px; margin: 0; border-radius: 7px;
+  background: rgba(0, 0, 0, .28); color: #fff; opacity: 0;
+}
+.vr-fv-grid .vr-it:hover > .vr-fv-grip, .vr-fv-grid .vr-fv-grip:focus-visible { opacity: 1; }
+.vr-fv-grid .vr-fv-grip:hover { background: rgba(0, 0, 0, .5); }
+[data-theme="light"] .vr-fv-grid .vr-it.has-grip > .vr-fv-grip { background: rgba(0, 0, 0, .08); color: var(--fg); }
+@media (hover: none) { .vr-fv-grid .vr-it.has-grip > .vr-fv-grip { opacity: .85; } }
+.vr-fv-grid .vr-card.has-grip .vr-count { left: 34px; }
+.vr-it.is-fv-picked { outline: 1.5px solid var(--fg); outline-offset: 3px; }
+.vr-it.is-target { outline: 2px dashed var(--fg); outline-offset: 3px; }
+.vr-fv-grid .vr-fv-board[data-tool="move"] .vr-it { cursor: pointer; }
+.vr-home.is-free .vr-bar .vr-fv-tools { margin-left: auto; }
+@media (max-width: 719px) { .vr-fv-grid .vr-fv-item { width: 150px; } }

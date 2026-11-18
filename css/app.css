@@ -550,32 +550,42 @@ body.is-lassoing, body.is-lassoing * { user-select: none !important; cursor: cro
 .subtabs + .view { padding-top: 22px; }
 @media (max-width: 720px) { .subtabs { margin: 16px 16px 0; } .subtabs + .view { padding-top: 18px; } }
 
-/* Setpoint goal — shaped like a task, gold glass, always first in the list.
-   Bright yellow-gold (the sticky-note gold), not bronze. */
+/* Setpoint goal — shaped like a task, always first in the list. Nov 19: true yellow-gold glass (not
+   bronze): saturated gold body, a soft glow halo, clean white text, gold checkbox. One renderer, so every
+   setpoint's goal looks identical — the setpoint's own tint never reaches it. */
 .ptask.is-goal {
-  --gold: #f5b82e; --gold-hi: #ffd766; --gold-ink: #241a00;
-  cursor: default;
+  --gold: #ffc414; --gold-hi: #ffe066; --gold-deep: #f0a800; --gold-ink: #2a1d00;
+  cursor: default; color: #fff;
   background:
-    linear-gradient(140deg, color-mix(in srgb, var(--gold-hi) 34%, transparent) 0%, color-mix(in srgb, var(--gold) 20%, transparent) 50%, color-mix(in srgb, var(--gold) 28%, transparent) 100%),
-    color-mix(in srgb, var(--s2) 55%, transparent);
-  border-color: color-mix(in srgb, var(--gold) 80%, transparent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 30%, transparent), 0 10px 26px -14px color-mix(in srgb, var(--gold) 85%, transparent);
-  -webkit-backdrop-filter: blur(10px) saturate(1.5); backdrop-filter: blur(10px) saturate(1.5);
+    linear-gradient(180deg, rgba(255, 255, 255, .22) 0%, rgba(255, 255, 255, .04) 46%, rgba(255, 255, 255, 0) 52%),
+    linear-gradient(135deg, color-mix(in srgb, var(--gold-hi) 96%, transparent) 0%, color-mix(in srgb, var(--gold) 93%, transparent) 48%, color-mix(in srgb, var(--gold-deep) 92%, transparent) 100%);
+  border: 1px solid color-mix(in srgb, var(--gold-hi) 85%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .55),
+    inset 0 -1px 0 color-mix(in srgb, var(--gold-deep) 60%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--gold) 22%, transparent),
+    0 0 18px -2px color-mix(in srgb, var(--gold) 55%, transparent),
+    0 8px 22px -10px color-mix(in srgb, var(--gold) 80%, transparent);
+  -webkit-backdrop-filter: blur(10px) saturate(1.6); backdrop-filter: blur(10px) saturate(1.6);
   overflow: hidden;
 }
 .ptask.is-goal::before { /* the glass sheen */
-  content: ''; position: absolute; inset: 0 0 50% 0; pointer-events: none;
-  background: linear-gradient(180deg, color-mix(in srgb, #fff 18%, transparent), transparent);
+  content: ''; position: absolute; inset: 0 0 55% 0; pointer-events: none; border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .28), transparent);
 }
-.ptask.is-goal:hover { border-color: var(--gold-hi); }
-.ptask.is-goal.is-editing { border-color: var(--gold-hi); }
-.ptask.is-goal .ptask-title { color: var(--gold-hi); font-weight: 600; }
-.ptask.is-goal.is-unset .ptask-title { color: color-mix(in srgb, var(--gold-hi) 75%, transparent); font-weight: 500; }
-.ptask.is-goal .pcheck { border-color: var(--gold); }
-.ptask.is-goal .pcheck:hover { border-color: var(--gold-hi); }
-.ptask.is-goal .pcheck:disabled { border-style: dashed; opacity: .7; cursor: default; }
-.ptask.is-goal.is-done .pcheck { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
-.ptask.is-goal.is-done .ptask-title { color: color-mix(in srgb, var(--gold-hi) 70%, transparent); text-decoration-color: var(--gold); }
-.ptask.is-goal .ptask-input { color: var(--gold-hi); caret-color: var(--gold-hi); }
-.ptask.is-goal .ptask-input::placeholder { color: color-mix(in srgb, var(--gold-hi) 55%, transparent); }
-[data-theme="light"] .ptask.is-goal { --gold: #e8a70f; --gold-hi: #9a6c00; }
+.ptask.is-goal:hover, .ptask.is-goal.is-editing {
+  border-color: #fff3c2;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), inset 0 -1px 0 color-mix(in srgb, var(--gold-deep) 60%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--gold) 30%, transparent), 0 0 24px 0 color-mix(in srgb, var(--gold) 60%, transparent), 0 8px 22px -10px color-mix(in srgb, var(--gold) 85%, transparent);
+}
+.ptask.is-goal .ptask-title { color: #fff; font-weight: 600; text-shadow: 0 1px 2px rgba(120, 72, 0, .45); }
+.ptask.is-goal.is-unset .ptask-title { color: rgba(255, 255, 255, .82); font-weight: 500; }
+.ptask.is-goal .pcheck { border-color: #fff; background: color-mix(in srgb, var(--gold-deep) 45%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--gold-deep) 50%, transparent); }
+.ptask.is-goal .pcheck:hover { border-color: #fff; background: color-mix(in srgb, var(--gold-deep) 65%, transparent); }
+.ptask.is-goal .pcheck:disabled { border-style: dashed; opacity: .75; cursor: default; }
+.ptask.is-goal.is-done .pcheck { background: #fff; border-color: #fff; color: var(--gold-deep); }
+.ptask.is-goal.is-done .ptask-title { color: rgba(255, 255, 255, .78); text-decoration-color: rgba(255, 255, 255, .85); }
+.ptask.is-goal .ptask-input { color: #fff; caret-color: #fff; }
+.ptask.is-goal .ptask-input::placeholder { color: rgba(255, 255, 255, .7); }
+.ptask.is-goal :is(.ptask-meta, .ptask-sub, small, .icon-btn) { color: rgba(255, 255, 255, .85); }
+[data-theme="light"] .ptask.is-goal { --gold: #ffbf0f; --gold-hi: #ffd84d; --gold-deep: #d18e00; }

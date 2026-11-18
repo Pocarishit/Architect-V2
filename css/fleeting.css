@@ -1045,3 +1045,127 @@ body.fi-dragging .fi-wk-arrow.is-over { opacity: 1; }
 .vr-chat .vr-mode { margin: 0 14px 0; }
 .vr-chat .vr-compose.is-editing .sc-input { border-color: var(--line-2); }
 .vr-chat-head .vr-chat-name { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.25; min-width: 0; }
+
+/* ============================================================
+   Nov 19 — Free View rebuilt: the Blueprint toolbar, objects fully in hand, one wall on the right
+   ============================================================ */
+/* The canvas: layout space ("world") sits inside the board, shifted right by however far things go left */
+.vr-fv-world { position: absolute; left: 0; top: 0; }
+.vr-fv-board { overflow-x: clip; } /* the wall: nothing (not even a handle) makes the canvas scroll right */
+.vr-fv-world > .vr-fv-flow { position: relative; }
+.vr-fv-board:not(.has-grid) { background-image: none; }
+.vr-fv-board.has-grid { background-image: radial-gradient(color-mix(in srgb, var(--fg) 11%, transparent) 1px, transparent 1px); background-size: 22px 22px; }
+
+/* The Blueprint toolbar: vertical pill, floating on the left of the canvas, collapsible */
+.vr-fv-rail {
+  position: absolute; left: 10px; top: 10px; z-index: 8;
+  display: flex; flex-direction: column; gap: 2px; padding: 5px;
+  background: var(--s1); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow);
+  max-height: calc(100% - 20px); overflow: visible;
+  transition: opacity .16s, transform .2s cubic-bezier(.2, .8, .2, 1);
+}
+.vr-fv-rail.is-scroll { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.vr-fv-rail.is-scroll::-webkit-scrollbar { display: none; }
+.vr-fv-rail .bp-tool { width: 38px; height: 38px; border-radius: 12px; border: 0; background: transparent; cursor: pointer; }
+.vr-fv-rail .bp-tool:hover { background: var(--s3); color: var(--fg); }
+.vr-fv-rail .bp-tool.is-on { background: var(--fg); color: var(--bg); }
+.vr-fv-rail .bp-tool:disabled { opacity: .3; cursor: default; }
+.vr-fv-rail .bp-tool:disabled:hover { background: transparent; color: var(--fg-2); }
+.vr-fv-rail .bp-tool:first-child { height: 30px; color: var(--fg-3); }
+.vr-fv-rail .bp-tool:first-child:hover { color: var(--fg); }
+.vr-fv-rail .bp-tsep { height: 1px; margin: 3px 8px; }
+.vr-fv-stage.is-rail-off .vr-fv-rail { opacity: 0; transform: translateX(-16px); pointer-events: none; visibility: hidden; }
+.vr-fv-railtab {
+  position: absolute; left: 10px; top: 10px; z-index: 8; width: 30px; height: 30px; display: none; place-items: center;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--s1); color: var(--fg-2); box-shadow: var(--shadow); cursor: pointer;
+}
+.vr-fv-railtab:hover { color: var(--fg); border-color: var(--line-2); }
+.vr-fv-stage.is-rail-off .vr-fv-railtab { display: grid; }
+/* The column clears the rail while it's out; it reclaims the room when it's tucked away */
+.vr-fv-stage:not(.is-rail-off) .vr-fv-flow { padding-left: 66px; }
+.vr-fv-flow { transition: padding-left .2s cubic-bezier(.2, .8, .2, 1); }
+/* The older strip and grips are gone */
+.vr-fv-dock, .vr-fv-grip, .vr-fv-size { display: none !important; }
+
+/* Selection: a small pill at the bottom of the canvas */
+.vr-fv-selbar {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 8;
+  display: none; align-items: center; gap: 2px; padding: 4px;
+  background: var(--s1); border: 1px solid var(--line); border-radius: 999px; box-shadow: var(--shadow);
+}
+.vr-fv-stage.has-sel .vr-fv-selbar { display: flex; }
+.vr-fv-sb { width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 999px; background: transparent; color: var(--fg-2); cursor: pointer; }
+.vr-fv-sb:hover { background: var(--s3); color: var(--fg); }
+.vr-fv-sb.is-danger:hover { color: var(--red); }
+
+/* Objects: the whole thing is the handle */
+.vr-fv-board[data-tool="move"] .is-fv-obj, .vr-fv-board[data-tool="move"] .vr-fv-note { cursor: grab; }
+.vr-fv-board[data-tool="move"] .is-fv-obj { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.vr-fv-board[data-tool="move"] .is-fv-obj img { -webkit-user-drag: none; }
+.vr-fv-board[data-tool="move"] .vr-fv-item, .vr-fv-board[data-tool="move"] .vr-fv-note { touch-action: none; }
+.vr-fv-item.is-held .is-fv-obj, .vr-fv-note.is-held { cursor: grabbing; }
+.sc-msg.is-lifting .sc-bubble { transform: scale(1.03); box-shadow: 0 0 0 1.5px var(--fg), 0 18px 30px -14px rgba(0, 0, 0, .8); transition: transform .15s; }
+.sc-msg.is-fv-picked .sc-bubble { box-shadow: 0 0 0 1.5px var(--fg), 0 0 18px -6px color-mix(in srgb, var(--fg) 50%, transparent); }
+.vr-fv-note.is-target, .vr-it.is-target { outline: 2px dashed var(--fg); outline-offset: 3px; }
+
+/* Resize from every edge and corner */
+.vr-fv-h { position: absolute; z-index: 3; touch-action: none; }
+.vr-fv-h.is-n, .vr-fv-h.is-s { left: 10px; right: 10px; height: 10px; }
+.vr-fv-h.is-n { top: -5px; } .vr-fv-h.is-s { bottom: -5px; }
+.vr-fv-h.is-e, .vr-fv-h.is-w { top: 10px; bottom: 10px; width: 10px; }
+.vr-fv-h.is-e { right: -5px; } .vr-fv-h.is-w { left: -5px; }
+.vr-fv-h.is-ne, .vr-fv-h.is-nw, .vr-fv-h.is-se, .vr-fv-h.is-sw { width: 14px; height: 14px; z-index: 4; }
+.vr-fv-h.is-ne { top: -7px; right: -7px; } .vr-fv-h.is-nw { top: -7px; left: -7px; }
+.vr-fv-h.is-se { bottom: -7px; right: -7px; } .vr-fv-h.is-sw { bottom: -7px; left: -7px; }
+.vr-fv-h.is-ne::after, .vr-fv-h.is-nw::after, .vr-fv-h.is-se::after, .vr-fv-h.is-sw::after {
+  content: ''; position: absolute; inset: 3px; border-radius: 3px; background: var(--bg); border: 1.5px solid var(--fg);
+  opacity: 0; transform: scale(.6); transition: opacity .12s, transform .12s;
+}
+.vr-fv-item:hover > .vr-fv-h::after, .vr-fv-note:hover > .vr-fv-h::after,
+.vr-fv-item:has(> .is-fv-picked) > .vr-fv-h::after, .vr-fv-note.is-picked > .vr-fv-h::after,
+.is-sizing > .vr-fv-h::after { opacity: 1; transform: none; }
+.vr-fv-item:has(> .is-fv-picked)::before, .is-sizing.vr-fv-item::before {
+  content: ''; position: absolute; inset: -3px; z-index: 2; pointer-events: none; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--fg) 55%, transparent);
+}
+@media (hover: none) { .vr-fv-item:has(> .is-fv-picked) > .vr-fv-h::after, .vr-fv-note.is-picked > .vr-fv-h::after { opacity: 1; transform: none; } }
+.vr-fv-board:not([data-tool="move"]) .vr-fv-h { pointer-events: none; }
+.vr-fv-board:not([data-tool="move"]) .vr-fv-h::after { opacity: 0 !important; }
+
+/* Text and image objects */
+.vr-fv-note.is-text { padding: 4px 6px; background: transparent; border: 1px dashed transparent; box-shadow: none; }
+.vr-fv-note.is-text .vr-fv-note-text { font-size: 18px; font-weight: 500; line-height: 1.35; letter-spacing: -.01em; }
+.vr-fv-note.is-text:hover, .vr-fv-note.is-text.is-editing { border-color: color-mix(in srgb, var(--fg) 30%, transparent); }
+.vr-fv-note.is-text.is-picked { border: 1px solid var(--fg); box-shadow: none; }
+.vr-fv-note.is-img { padding: 0; min-width: 60px; overflow: visible; border: 0; background: var(--s2); }
+.vr-fv-note.is-img > img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 12px; pointer-events: none; }
+.vr-fv-note.is-img.is-picked { box-shadow: 0 0 0 1.5px var(--fg), 0 12px 24px -16px rgba(0, 0, 0, .8); }
+.vr-fv-img-ph { display: grid; place-items: center; width: 100%; height: 100%; min-height: 80px; color: var(--fg-3); }
+
+/* Canvas tools */
+.vr-fv-board:is([data-tool="note"], [data-tool="text"], [data-tool="shape"], [data-tool="link"], [data-tool="pen"], [data-tool="erase"], [data-tool="lasso"]) .vr-fv-capture { display: block; }
+.vr-fv-board[data-tool="note"] .vr-fv-capture { cursor: copy; }
+.vr-fv-board[data-tool="text"] .vr-fv-capture { cursor: text; }
+.vr-fv-board:is([data-tool="shape"], [data-tool="pen"], [data-tool="lasso"]) .vr-fv-capture { cursor: crosshair; }
+.vr-fv-board[data-tool="link"] .vr-fv-capture { cursor: alias; }
+.vr-fv-board[data-tool="erase"] .vr-fv-capture { cursor: cell; }
+.vr-fv-board:is([data-tool="shape"], [data-tool="pen"], [data-tool="erase"], [data-tool="lasso"], [data-tool="link"]) .vr-fv-svg { z-index: 4; }
+.vr-fv-shape path { stroke: var(--fg); stroke-width: 1.8; }
+.vr-fv-shape path.hit { stroke: transparent; stroke-width: 16; }
+.vr-fv-svg g[data-shape]:hover path:not(.hit) { stroke-width: 2.4; }
+.vr-fv-svg g.is-picked path:not(.hit) { stroke-dasharray: 6 4; }
+.vr-fv-shape.is-live path { stroke-dasharray: 5 5; }
+.vr-fv-ink.is-live path { stroke: var(--fg); stroke-width: 2.2; }
+.vr-fv-lasso { stroke: var(--fg) !important; stroke-width: 1.4 !important; stroke-dasharray: 5 5; fill: color-mix(in srgb, var(--fg) 5%, transparent) !important; }
+.vr-fv-svg .is-erasing path:not(.hit), .vr-fv-svg .is-erasing rect, .vr-fv-svg .is-erasing ellipse { stroke: var(--red) !important; opacity: .5; }
+.vr-fv-note.is-erasing { border-color: var(--red); opacity: .45; }
+
+@media (max-width: 719px) {
+  .vr-fv-rail { left: 6px; top: 6px; padding: 4px; }
+  .vr-fv-rail .bp-tool { width: 36px; height: 36px; }
+  .vr-fv-stage:not(.is-rail-off) .vr-fv-flow { padding-left: 56px; }
+}
+@media (max-width: 720px) { /* the board's phone dock rules don't apply to this rail: it stays vertical */
+  .vr-fv-rail .bp-tool[aria-label^="Hand"] { display: grid; }
+  .vr-fv-rail .bp-tsep { width: auto; height: 1px; margin: 3px 8px; }
+  .vr-fv-rail .bp-tspace { display: block; width: auto; height: 6px; }
+}

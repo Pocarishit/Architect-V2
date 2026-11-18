@@ -309,7 +309,8 @@ export function mountVariables(root, el0, w) {
       gfree = mountFreeView({
         item: '.vr-it', bubble: ':scope', noun: 'tile', home: 'the grid', top: true,
         className: 'vr-fv vr-fv-grid', role: 'region', stageClass: 'is-grid',
-        lockRatio: true, baseW: 170, // a tile grows in width and height together, its face and name with it
+        lockRatio: true, baseW: 170, // corners keep a tile's shape; its face and name grow with it
+        media: { pick: pickMedia, upload: uploadMedia, url: urlOf },
         entry: () => ({ id: `sec:${cur}`, notes: items(), free: secById(cur)?.free || {} }),
         flowRows: () => {
           const g = h('div', { class: 'vr-grid is-fv' }, ...tiles(kids(cur)), ...cards(inSec(cur)), addCard);
@@ -343,7 +344,7 @@ export function mountVariables(root, el0, w) {
     const node = h('div', {
       class: ['vr-cat vr-it', c.img && 'has-img'], role: 'button', tabindex: 0, 'data-sec': c.id, 'data-id': c.id, style: { '--h': hue(c.name) },
       'aria-label': `Open ${c.name}`,
-      onclick: (e) => { if (e.target.closest('.vr-fv-grip, .vr-fv-size')) return; goTo(c.id); render(); },
+      onclick: (e) => { if (e.target.closest('.vr-fv-h')) return; goTo(c.id); render(); },
       onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); goTo(c.id); render(); } if (e.key === 'F2') renameSection(c); },
       ondblclick: (e) => { e.preventDefault(); renameSection(c); },
       oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, c); },
@@ -366,7 +367,12 @@ export function mountVariables(root, el0, w) {
       name,
       more);
     name.addEventListener('dblclick', (e) => { e.stopPropagation(); clearTimeout(node._open); renameInline(name, x); });
-    node.addEventListener('pointerdown', (e) => dragCard(e, node, x));
+    // In Free View the whole card is the handle (Free View moves it); a click still opens it.
+    node.addEventListener('pointerdown', (e) => { if (!node.closest('.vr-fv')) dragCard(e, node, x); });
+    node.addEventListener('click', (e) => {
+      if (!node.closest('.vr-fv') || e.target.closest('button, [contenteditable="true"]')) return;
+      if (e.target.closest('.vr-name')) node._open = setTimeout(() => openEntry(x.id), 230); else openEntry(x.id);
+    });
     return node;
   }
 
@@ -703,6 +709,7 @@ export function mountVariables(root, el0, w) {
         entry: () => entries().find((e) => e.id === x.id) || x,
         flowRows: (list) => msgRows(x, list),
         one: (m) => bubble(x, m),
+        media: { pick: pickMedia, upload: uploadMedia, url: urlOf },
         save: (f) => patchEntry(x.id, () => ({ free: f })),
         // Clearing messages from free view deletes them from the chat, and tidies their layout.
         remove: (ids, fp = {}) => {

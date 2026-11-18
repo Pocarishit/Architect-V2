@@ -104,6 +104,7 @@ const P = {
   dotted: '<path d="M4 12h.01M8 12h.01M12 12h.01M16 12h.01M20 12h.01" stroke-width="2.4"/>',
   solid: '<path d="M3 12h18"/>',
   toPaths: '<path d="M4 6h10M4 12h7M4 18h10"/><path d="m16 9 4 3-4 3"/>',
+  lasso: '<path d="M8.2 15.6C5.4 14.6 3.5 12.6 3.5 10.2 3.5 6.8 7.3 4 12 4s8.5 2.8 8.5 6.2-3.8 6.2-8.5 6.2c-1.1 0-2.2-.2-3.2-.4"/><circle cx="8" cy="17" r="1.6"/><path d="M8 18.6c0 1.2.6 1.9 1.6 1.9"/>',
   grid: '<path d="M6 6h.01M12 6h.01M18 6h.01M6 12h.01M12 12h.01M18 12h.01M6 18h.01M12 18h.01M18 18h.01" stroke-width="2.4"/>',
   magnet: '<path d="M6 4v8a6 6 0 0 0 12 0V4h-4v8a2 2 0 0 1-4 0V4z"/><path d="M6 8h4M14 8h4"/>',
   mouse: '<rect x="6.5" y="3.5" width="11" height="17" rx="5.5"/><path d="M12 7v3"/>',

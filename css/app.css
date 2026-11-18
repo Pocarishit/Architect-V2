@@ -550,31 +550,32 @@ body.is-lassoing, body.is-lassoing * { user-select: none !important; cursor: cro
 .subtabs + .view { padding-top: 22px; }
 @media (max-width: 720px) { .subtabs { margin: 16px 16px 0; } .subtabs + .view { padding-top: 18px; } }
 
-/* Setpoint goal — shaped like a task, gold glass, always first in the list */
+/* Setpoint goal — shaped like a task, gold glass, always first in the list.
+   Bright yellow-gold (the sticky-note gold), not bronze. */
 .ptask.is-goal {
-  --gold: #d8b25a; --gold-hi: #f3dc9a;
+  --gold: #f5b82e; --gold-hi: #ffd766; --gold-ink: #241a00;
   cursor: default;
   background:
-    linear-gradient(135deg, color-mix(in srgb, var(--gold-hi) 26%, transparent), color-mix(in srgb, var(--gold) 10%, transparent) 55%, color-mix(in srgb, var(--gold) 18%, transparent)),
-    color-mix(in srgb, var(--s2) 70%, transparent);
-  border-color: color-mix(in srgb, var(--gold) 55%, transparent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--gold-hi) 45%, transparent), 0 8px 22px -14px color-mix(in srgb, var(--gold) 70%, transparent);
-  -webkit-backdrop-filter: blur(10px) saturate(1.4); backdrop-filter: blur(10px) saturate(1.4);
+    linear-gradient(140deg, color-mix(in srgb, var(--gold-hi) 34%, transparent) 0%, color-mix(in srgb, var(--gold) 20%, transparent) 50%, color-mix(in srgb, var(--gold) 28%, transparent) 100%),
+    color-mix(in srgb, var(--s2) 55%, transparent);
+  border-color: color-mix(in srgb, var(--gold) 80%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 30%, transparent), 0 10px 26px -14px color-mix(in srgb, var(--gold) 85%, transparent);
+  -webkit-backdrop-filter: blur(10px) saturate(1.5); backdrop-filter: blur(10px) saturate(1.5);
   overflow: hidden;
 }
 .ptask.is-goal::before { /* the glass sheen */
-  content: ''; position: absolute; inset: 0 0 52% 0; pointer-events: none;
-  background: linear-gradient(180deg, color-mix(in srgb, #fff 14%, transparent), transparent);
+  content: ''; position: absolute; inset: 0 0 50% 0; pointer-events: none;
+  background: linear-gradient(180deg, color-mix(in srgb, #fff 18%, transparent), transparent);
 }
-.ptask.is-goal:hover { border-color: var(--gold); }
+.ptask.is-goal:hover { border-color: var(--gold-hi); }
 .ptask.is-goal.is-editing { border-color: var(--gold-hi); }
-.ptask.is-goal .ptask-title { color: color-mix(in srgb, var(--gold-hi) 82%, var(--fg)); font-weight: 600; }
-.ptask.is-goal.is-unset .ptask-title { color: color-mix(in srgb, var(--gold) 70%, transparent); font-weight: 500; }
+.ptask.is-goal .ptask-title { color: var(--gold-hi); font-weight: 600; }
+.ptask.is-goal.is-unset .ptask-title { color: color-mix(in srgb, var(--gold-hi) 75%, transparent); font-weight: 500; }
 .ptask.is-goal .pcheck { border-color: var(--gold); }
 .ptask.is-goal .pcheck:hover { border-color: var(--gold-hi); }
-.ptask.is-goal .pcheck:disabled { border-style: dashed; opacity: .6; cursor: default; }
-.ptask.is-goal.is-done .pcheck { background: var(--gold); border-color: var(--gold); color: #1a1406; }
-.ptask.is-goal.is-done .ptask-title { color: color-mix(in srgb, var(--gold) 75%, transparent); text-decoration-color: var(--gold); }
+.ptask.is-goal .pcheck:disabled { border-style: dashed; opacity: .7; cursor: default; }
+.ptask.is-goal.is-done .pcheck { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+.ptask.is-goal.is-done .ptask-title { color: color-mix(in srgb, var(--gold-hi) 70%, transparent); text-decoration-color: var(--gold); }
 .ptask.is-goal .ptask-input { color: var(--gold-hi); caret-color: var(--gold-hi); }
-.ptask.is-goal .ptask-input::placeholder { color: color-mix(in srgb, var(--gold) 55%, transparent); }
-[data-theme="light"] .ptask.is-goal { --gold: #a77c1d; --gold-hi: #7a5a12; }
+.ptask.is-goal .ptask-input::placeholder { color: color-mix(in srgb, var(--gold-hi) 55%, transparent); }
+[data-theme="light"] .ptask.is-goal { --gold: #e8a70f; --gold-hi: #9a6c00; }

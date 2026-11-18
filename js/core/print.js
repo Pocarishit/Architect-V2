@@ -15,6 +15,8 @@ let busy = false;
  */
 export async function printToPdf({ content, width, height, title = 'Architect', background = null }) {
   if (busy) return;
+  width = Math.max(1, Number(width) || 0); height = Math.max(1, Number(height) || 0);
+  if (!(width > 1 && height > 1)) { toast('Nothing to export yet.', { tone: 'error' }); return; }
   busy = true;
   const k = Math.min(1, MAX_SIDE / Math.max(width, height));
   const pw = Math.ceil(width * k);

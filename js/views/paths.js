@@ -44,16 +44,29 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   const stOf = (col) => stateOf(col, columns, new Date(), timesArg());
   const winOf = (col) => windowOf(col, timesArg());
   // Every setpoint leads with its goal: the block's name and purpose, checked off once it delivered.
-  // The words stay; the check is for today only (a new day starts every goal open again).
+  // A goal belongs to the day it was set on — Tomorrow's tab starts empty and writes its own.
+  // Stored as pathGoals[colId].days[YYYY-MM-DD] = { text, done } (an older { text, doneDay } counts as today's).
   const goals = () => (readOnly ? (ownerTimes?.pathGoals || {}) : (getPref('pathGoals', {}) || {}));
-  const goalOf = (col) => { const g = goals()[col.id] || {}; return { text: g.text || '', done: !!g.text && g.doneDay === todayKey() }; };
+  const goalDay = () => viewDay || todayKey();
+  function goalOf(col, day = goalDay()) {
+    const g = goals()[col.id];
+    if (!g) return { text: '', done: false };
+    if (g.days) { const d = g.days[day] || {}; return { text: d.text || '', done: !!d.text && !!d.done }; }
+    if (day !== todayKey() || !g.text) return { text: '', done: false }; // the old single goal: today only
+    return { text: g.text, done: g.doneDay === todayKey() };
+  }
   async function saveGoal(col, patch) {
+    const day = goalDay();
+    const today = todayKey();
     const all = { ...goals() };
-    const cur = all[col.id] || {};
-    const next = { ...cur };
-    if ('text' in patch) next.text = patch.text;
-    if ('done' in patch) next.doneDay = patch.done ? todayKey() : null;
-    if (!next.text) delete all[col.id]; else all[col.id] = next;
+    const raw = all[col.id] || {};
+    const days = { ...(raw.days || (raw.text ? { [today]: { text: raw.text, done: raw.doneDay === today } } : {})) };
+    const cur = { ...goalOf(col, day) };
+    if ('text' in patch) cur.text = patch.text;
+    if ('done' in patch) cur.done = !!patch.done;
+    if (cur.text) days[day] = { text: cur.text, done: !!cur.done }; else delete days[day];
+    for (const k of Object.keys(days)) if (k < addDays(today, -7)) delete days[k]; // keep a week of history, not forever
+    if (Object.keys(days).length) all[col.id] = { days }; else delete all[col.id];
     render();
     try {
       await setPref('pathGoals', all);
@@ -372,8 +385,8 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       }, icon('check', 12, { weight: 2.4 })),
       h('div', { class: 'ptask-body' },
         ed
-          ? h('textarea', { class: 'ptask-input', rows: 1, 'data-editor': 'goal', maxlength: 140, placeholder: `What is ${col.title} for?`, 'aria-label': `${col.title} goal`, value: g.text })
-          : h('div', { class: 'ptask-title', 'data-act': 'edit-goal', title: readOnly ? null : 'Click to set this setpoint’s goal' }, g.text || `Goal — what is ${col.title} for?`)));
+          ? h('textarea', { class: 'ptask-input', rows: 1, 'data-editor': 'goal', maxlength: 140, placeholder: 'Add a goal', 'aria-label': `${col.title} goal`, value: g.text })
+          : h('div', { class: 'ptask-title', 'data-act': 'edit-goal', title: readOnly ? null : 'Click to set this setpoint’s goal' }, g.text || 'Add a goal')));
   }
 
   function taskView(t) {

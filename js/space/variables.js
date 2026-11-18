@@ -347,13 +347,12 @@ export function mountVariables(root, el0, w) {
       onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); goTo(c.id); render(); } if (e.key === 'F2') renameSection(c); },
       ondblclick: (e) => { e.preventDefault(); renameSection(c); },
       oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, c); },
-    }, secImg(c, 'vr-cat-img'), h('span', { class: 'vr-cat-name' }, c.name.toUpperCase()), kids(c.id).length ? h('span', { class: 'vr-cat-nest', title: `${kids(c.id).length} sub-section${kids(c.id).length === 1 ? '' : 's'} inside` }, icon('folder', 11), String(kids(c.id).length)) : null, h('small', {}, String(countIn(c.id))));
+    }, secImg(c, 'vr-cat-img'), h('span', { class: 'vr-cat-name' }, c.name.toUpperCase())); // the picture and the name — no counters
     return node;
   }
 
   function card(x) {
     const url = x.photo ? urlOf(x.photo, render) : null;
-    const notes = x.notes?.length || 0;
     const more = h('button', { type: 'button', class: 'vr-card-more', 'aria-label': `Options for ${x.name}`, onclick: (e) => { e.stopPropagation(); entryMenu(e.currentTarget, x); } }, icon('more', 14));
     const name = h('span', { class: 'vr-name', title: 'Double-click to rename' }, x.name);
     const hh = hue(x.name);
@@ -365,7 +364,6 @@ export function mountVariables(root, el0, w) {
       h('span', { class: ['vr-face', !x.photo && 'is-initials'], style: x.photo ? null : { background: `hsl(${hh},32%,26%)`, color: `hsl(${hh},60%,78%)` } },
         x.photo ? (url ? h('img', { src: url, alt: '', draggable: false }) : null) : initials(x.name)),
       name,
-      notes ? h('span', { class: 'vr-count', title: `${notes} note${notes === 1 ? '' : 's'}` }, String(notes)) : null,
       more);
     name.addEventListener('dblclick', (e) => { e.stopPropagation(); clearTimeout(node._open); renameInline(name, x); });
     node.addEventListener('pointerdown', (e) => dragCard(e, node, x));

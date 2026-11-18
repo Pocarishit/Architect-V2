@@ -22,6 +22,7 @@ import { uid } from '../core/util.js';
 
 const scrollMem = new Map(); // entry id → { left, top } so a repaint doesn't throw you back
 const selMem = new Map();    // entry id → the selection, so it survives the chat repainting after a save
+const histMem = new Map();   // entry id → { undo: [], redo: [] } layout history, kept across repaints
 const TOOLS = [
   ['move', 'Select & move (V) — drag empty space to select', 'select'],
   ['hand', 'Move around (H · hold Space · middle mouse)', 'hand'],
@@ -62,8 +63,10 @@ export function mountFreeView(o) {
   const board = h('div', { class: 'vr-fv-board' });
   const capture = h('div', { class: 'vr-fv-capture' });
   const scroller = h('div', { class: o.className || 'vr-msgs vr-fv', role: o.role || 'log', tabindex: -1 }, board);
-  // A real toolbar, docked to the canvas's left edge (Blueprint-style) — not floating over the content.
-  const tools = h('div', { class: 'vr-fv-dock', role: 'toolbar', 'aria-label': 'Free view tools', 'aria-orientation': 'vertical' });
+  // The Architect toolbar, docked above the canvas (Blueprint-style) — not a thin strip clinging to the side.
+  const tools = h('div', { class: 'vr-fv-dock', role: 'toolbar', 'aria-label': 'Free view tools', 'aria-orientation': 'horizontal' });
+  const hist = histMem.get(x.id) || { undo: [], redo: [] };
+  histMem.set(x.id, hist);
   const stage = h('div', { class: ['vr-fv-stage', o.stageClass] }, scroller, tools);
 
   const items = new Map(); // msg id → element (row)
@@ -242,8 +245,15 @@ export function mountFreeView(o) {
       type: 'button', class: ['vr-fv-tool', cls, on && 'is-on'], 'aria-label': label, 'data-tip': label, title: label, ...(on == null ? {} : { 'aria-pressed': String(on) }), onclick: fn,
     }, icon(ic, 17));
     const sep = () => h('span', { class: 'vr-fv-tsep', 'aria-hidden': 'true' });
+    const f = free();
+    const laidOut = Object.keys(f.pos || {}).length || (f.links || []).length || (f.shapes || []).length || (f.cards || []).length || (f.ink || []).length;
+    const undoB = btn('Undo (Ctrl+Z)', 'undo', () => history(true)); undoB.disabled = !hist.undo.length;
+    const redoB = btn('Redo (Ctrl+Shift+Z)', 'redo', () => history(false)); redoB.disabled = !hist.redo.length;
+    const resetB = btn(`Everything back to ${home}`, 'list', () => resetAll()); resetB.disabled = !laidOut;
     tools.replaceChildren(
       ...TOOLS.map((t) => (t === '-' ? sep() : btn(t[1], t[2], () => setTool(t[0]), '', tool === t[0]))),
+      sep(), undoB, redoB,
+      sep(), btn('Back to the start', 'home', () => scroller.scrollTo({ left: 0, top: 0, behavior: 'smooth' })), resetB,
       ...(n ? [
         sep(),
         h('span', { class: 'vr-fv-count', title: `${n} selected` }, String(n)),
@@ -372,7 +382,22 @@ export function mountFreeView(o) {
   }
 
   /* ---------------- save ---------------- */
-  function save(p) { o.save({ ...free(), ...p, on: true }); }
+  function save(p, { record = true } = {}) {
+    if (record) { hist.undo.push(JSON.parse(JSON.stringify(free()))); if (hist.undo.length > 60) hist.undo.shift(); hist.redo.length = 0; }
+    o.save({ ...free(), ...p, on: true });
+  }
+  function history(back) {
+    const from = back ? hist.undo : hist.redo, to = back ? hist.redo : hist.undo;
+    const snap = from.pop();
+    if (!snap) return;
+    to.push(JSON.parse(JSON.stringify(free())));
+    clearSel(false);
+    save(snap, { record: false });
+  }
+  function resetAll() {
+    clearSel(false);
+    save({ pos: {}, size: {}, links: [], shapes: [], cards: [], ink: [] });
+  }
   function unpin(id) { const pos = { ...free().pos }, sz = { ...free().size }; delete pos[id]; delete sz[id]; save({ pos, size: sz }); }
 
   // One pointer-drag helper: move(ev) on every move, up(ev, how) once at the end.
@@ -695,6 +720,8 @@ export function mountFreeView(o) {
 
   scroller.addEventListener('keydown', (e) => {
     if (e.target.closest('input, textarea, [contenteditable="true"]')) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.stopPropagation(); history(!e.shiftKey); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); e.stopPropagation(); history(false); return; }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'v' || e.key === 'h')) { e.preventDefault(); e.stopPropagation(); setTool(e.key === 'h' ? 'hand' : 'move'); return; }
     if (e.key === 'Escape' && (tool !== 'move' || selCount())) { e.preventDefault(); e.stopPropagation(); if (tool !== 'move') setTool('move'); else clearSel(); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selCount()) { e.preventDefault(); e.stopPropagation(); deleteSel(); }

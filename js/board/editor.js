@@ -435,14 +435,24 @@ export class Editor {
   // A static copy of the whole board, laid out at 1:1 around its content — for PDF export.
   printable(pad = 64) {
     if (!this.els.length) return null;
-    const rects = this.els.map((e) => {
-      const r = { ...rectOf(e, this.byId) };
+    // Bounds from what's actually drawn. One element with a missing size (an auto-height text, a connector
+    // whose end lost its object) used to make the page NaN × NaN — the browser then printed a blank white page.
+    const ok = (v) => Number.isFinite(v);
+    const rects = this.els.filter((e) => !this.isHidden(e)).map((e) => {
+      let r;
+      try { r = { ...rectOf(e, this.byId) }; } catch { r = { x: e.x, y: e.y, w: e.w, h: e.h }; }
       const n = this.nodes.get(e.id);
-      if (n && e.type !== 'line') { r.w = Math.max(r.w, n.offsetWidth); r.h = Math.max(r.h, n.offsetHeight); }
+      if (n && e.type !== 'line') {
+        r.w = Math.max(ok(r.w) ? r.w : 0, n.offsetWidth || 0);
+        r.h = Math.max(ok(r.h) ? r.h : 0, n.offsetHeight || 0);
+      }
+      if (!ok(r.x) || !ok(r.y)) return null;
+      if (!ok(r.w)) r.w = 0;
+      if (!ok(r.h)) r.h = 0;
       return r;
     });
     const b = unionRects(rects);
-    if (!b) return null;
+    if (!b || !ok(b.w) || !ok(b.h)) return null;
     const world = h('div', { class: 'bp-world', style: { transform: `translate(${pad - b.x}px, ${pad - b.y}px)` } });
     // Draw every object fresh from the board as it is right now. Copying the live layers picked up
     // stale or half-drawn nodes (the white-page exports); only widgets, which can't redraw off-canvas, are copied.

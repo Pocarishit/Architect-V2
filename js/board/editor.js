@@ -429,9 +429,9 @@ export class Editor {
           : ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
       dirs.forEach((d) => o.append(handle(d, r)));
       // Connection dots: drag one to draw a connector, click one to add a connected item.
-      // Nov 19: notes and text keep a quiet editing surface — just the object and its frame, no rings around
-      // it inviting accidental drags. Connect them with the connector tool (or from the other end) as before.
-      if (CONNECTABLE.has(el.type) && !busy && el.type !== 'sticky' && el.type !== 'text') {
+      // Connector dots show on any selected object (notes and text included); they hide only while you're
+      // typing inside it — the early return above for an element being edited.
+      if (CONNECTABLE.has(el.type) && !busy) {
         const off = 20 / z;
         const spots = { e: [r.x + r.w + off, r.y + r.h / 2], w: [r.x - off, r.y + r.h / 2], s: [r.x + r.w / 2, r.y + r.h + off], n: [r.x + r.w / 2, r.y - off] };
         for (const [d, [x, y]] of Object.entries(spots)) {

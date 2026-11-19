@@ -1169,3 +1169,189 @@ body.fi-dragging .fi-wk-arrow.is-over { opacity: 1; }
   .vr-fv-rail .bp-tsep { width: auto; height: 1px; margin: 3px 8px; }
   .vr-fv-rail .bp-tspace { display: block; width: auto; height: 6px; }
 }
+
+/* ============================================================
+   Nov 19 — Fleeting Ideas: ideas in glass, not neon
+   The oversaturated fills are gone. Every idea is a compact Path-sized body of dark glass with a subtle
+   tint, a crisp glowing border in its side's colour (amber external / violet internal in MINE, teal
+   produce / coral consume in SHARED) and clean white text. The glow lives in the edge, not the fill.
+   ============================================================ */
+.fi-field .fi-idea {
+  max-width: 300px; padding: 8px 14px; border-radius: 10px;
+  font-size: 14px; line-height: 1.3; font-weight: 500; letter-spacing: 0; color: #fff; text-shadow: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .04), rgba(255, 255, 255, 0) 60%),
+    linear-gradient(135deg, hsl(var(--h) 30% 13% / .9), hsl(var(--h) 18% 9% / .92));
+  border: 1px solid hsl(var(--h) 85% 64% / .92);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .05),
+    inset 0 0 10px -5px hsl(var(--h) 90% 62% / .55),
+    0 0 12px -3px hsl(var(--h) 90% 60% / .55),
+    0 8px 18px -12px rgba(0, 0, 0, .8);
+  -webkit-backdrop-filter: none; backdrop-filter: none; /* the field is opaque: blur would cost frames for nothing */
+}
+.fi-field .fi-idea:hover, .fi-field .fi-idea:focus-visible {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, 0) 60%),
+    linear-gradient(135deg, hsl(var(--h) 32% 15% / .92), hsl(var(--h) 20% 10% / .94));
+  border-color: hsl(var(--h) 95% 74%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), inset 0 0 12px -5px hsl(var(--h) 90% 64% / .65), 0 0 16px -3px hsl(var(--h) 92% 62% / .7), 0 8px 18px -12px rgba(0, 0, 0, .8);
+}
+.fi-field .fi-idea.is-held, .fi-ghost.fi-idea {
+  border-color: hsl(var(--h) 95% 76%);
+  box-shadow: inset 0 0 12px -5px hsl(var(--h) 90% 64% / .7), 0 0 20px -2px hsl(var(--h) 92% 62% / .75), 0 18px 30px -16px rgba(0, 0, 0, .9);
+}
+.fi-field .fi-idea.is-sel {
+  border-color: #fff;
+  box-shadow: 0 0 0 1px #fff, inset 0 0 12px -5px hsl(var(--h) 90% 64% / .6), 0 0 16px -3px hsl(var(--h) 92% 62% / .7);
+}
+.fi-field .fi-idea.is-editing { border-color: #fff; box-shadow: 0 0 0 1px #fff, 0 8px 18px -12px rgba(0, 0, 0, .8); }
+.fi-ghost.fi-idea {
+  max-width: 300px; padding: 8px 14px; border-radius: 10px; font-size: 14px; font-weight: 500; color: #fff; text-shadow: none;
+  background: linear-gradient(135deg, hsl(var(--h) 30% 13% / .94), hsl(var(--h) 18% 9% / .96));
+}
+[data-theme="light"] .fi-field .fi-idea, [data-theme="paper"] .fi-field .fi-idea {
+  color: #fff; background: linear-gradient(135deg, hsl(var(--h) 26% 18% / .94), hsl(var(--h) 16% 12% / .96));
+}
+@media (max-width: 720px) { .fi-field .fi-idea { font-size: 14px; padding: 8px 13px; } }
+
+/* ============================================================
+   Nov 19 — Weekly answers to the goal
+   One owner for the configuration (the goal and its menu), one gesture for the daily edits. The weeks
+   run down a gold timeline; the week in focus opens into a card with nothing bolted to it.
+   ============================================================ */
+.fi-weekly.is-line {
+  --tl: #f2b733; --tl-hi: #ffd56b;
+  display: block; min-height: 100cqh; padding: clamp(16px, 3cqh, 34px) clamp(12px, 3cqw, 40px) clamp(28px, 6cqh, 64px);
+}
+.fi-weekly.is-line .fi-wl-head { display: grid; justify-items: center; gap: 4px; margin: 0 auto clamp(14px, 3cqh, 28px); max-width: 720px; }
+.fi-weekly.is-line .fi-wl-goal {
+  font-family: var(--f-dot, var(--f-mono)); font-weight: 700; font-size: clamp(15px, 2.6cqh, 22px); letter-spacing: .08em;
+  color: var(--tl); text-shadow: 0 0 14px color-mix(in srgb, var(--tl) 45%, transparent);
+  padding: 4px 10px; border-radius: 8px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fi-weekly.is-line .fi-wl-goal:hover, .fi-weekly.is-line .fi-wl-goal[aria-expanded="true"] { background: color-mix(in srgb, var(--tl) 10%, transparent); color: var(--tl-hi); }
+.fi-weekly.is-line .fi-wl-goal.is-unset { color: var(--fg-3); text-shadow: none; }
+.fi-weekly.is-line .fi-goal-input { font-family: var(--f-dot, var(--f-mono)); font-size: clamp(15px, 2.6cqh, 22px); color: var(--tl); text-align: center; }
+.fi-wl-left { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .14em; color: color-mix(in srgb, var(--tl) 70%, var(--fg-3)); }
+.fi-wl-left.is-over { color: var(--red); }
+
+.fi-wl { list-style: none; margin: 0 auto; padding: 0; max-width: 720px; position: relative; display: grid; gap: 10px; }
+.fi-wl::before { /* the spine */
+  content: ''; position: absolute; top: 14px; bottom: 14px; left: calc(var(--wl-when) + var(--wl-node) / 2 - 1px); width: 2px; border-radius: 2px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--tl) 75%, transparent), color-mix(in srgb, var(--fg-4) 70%, transparent) var(--wl-fill, 40%));
+}
+.fi-weekly.is-line { --wl-when: 92px; --wl-node: 28px; }
+.fi-wl-row { display: grid; grid-template-columns: var(--wl-when) var(--wl-node) minmax(0, 1fr); align-items: start; column-gap: 12px; position: relative; }
+.fi-wl-when { display: flex; gap: 10px; justify-content: flex-end; align-items: center; height: 38px; font-family: var(--f-mono); font-size: 11px; letter-spacing: .1em; color: var(--fg-3); white-space: nowrap; }
+.fi-wl-when b { font-weight: 400; color: var(--fg-2); }
+.fi-wl-node {
+  justify-self: center; margin-top: 10px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--wk-bg, var(--bg)); border: 1.5px solid var(--fg-4); color: #141414; position: relative; z-index: 1;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.fi-wl-row.is-complete .fi-wl-node { background: var(--tl); border-color: var(--tl); box-shadow: 0 0 10px -1px color-mix(in srgb, var(--tl) 70%, transparent); }
+.fi-wl-row.is-now .fi-wl-node { border-color: var(--tl); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tl) 22%, transparent), 0 0 12px color-mix(in srgb, var(--tl) 55%, transparent); }
+.fi-wl-row.is-now .fi-wl-node::after { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--tl); }
+.fi-wl-row.is-now .fi-wl-when, .fi-wl-row.is-focus .fi-wl-when { color: var(--tl); }
+.fi-wl-row.is-now .fi-wl-when b, .fi-wl-row.is-focus .fi-wl-when b { color: var(--tl-hi); }
+.fi-wl-row.is-past:not(.is-complete) .fi-wl-when { color: var(--fg-4); }
+
+/* collapsed weeks: one quiet bar each */
+.fi-wl-bar {
+  width: 100%; min-height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 12px; text-align: left;
+  border: 1px solid var(--line-2); border-radius: 10px; background: color-mix(in srgb, var(--s2) 55%, transparent); color: var(--fg-2);
+  cursor: pointer; transition: border-color .15s, background .15s;
+}
+.fi-wl-bar:hover { border-color: var(--fg-3); background: var(--s2); }
+.fi-wl-bar.is-over { border-color: var(--tl); background: color-mix(in srgb, var(--tl) 8%, var(--s2)); }
+.fi-wl-ring { flex: none; width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--fg-4); }
+.fi-wl-ring.is-done { border-color: var(--tl); background: var(--tl); }
+.fi-wl-bar-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--f-mono); font-size: 11.5px; letter-spacing: .08em; color: var(--fg-2); }
+.fi-wl-bar-title:empty::before { content: ''; }
+.fi-wl-bar-title .fi-wk-name-input { font-size: 12px; height: 26px; padding: 0 6px; text-align: left; }
+.fi-wl-count { flex: none; font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .06em; color: var(--fg-3); }
+.fi-wl-due { flex: none; font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .12em; color: var(--tl); }
+.fi-wl-row.is-due .fi-wl-bar { border-color: color-mix(in srgb, var(--tl) 45%, var(--line-2)); }
+.fi-wl-row.is-past:not(.is-focus) .fi-wl-bar { opacity: .75; }
+
+/* the week in focus: a card with nothing but its own content */
+.fi-weekly.is-line .fi-wl-card {
+  display: grid; gap: 8px; padding: 14px 14px 12px; border-radius: 14px; text-align: left;
+  border: 1px solid color-mix(in srgb, var(--tl) 80%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--tl) 6%, var(--s1, #161616)), color-mix(in srgb, var(--tl) 3%, var(--bg)));
+  box-shadow: inset 0 0 14px -8px color-mix(in srgb, var(--tl) 60%, transparent), 0 0 18px -6px color-mix(in srgb, var(--tl) 45%, transparent);
+}
+.fi-weekly.is-line .fi-wl-card:not(.is-now) { border-color: color-mix(in srgb, var(--tl) 45%, var(--line-2)); box-shadow: none; }
+.fi-weekly.is-line .fi-wl-card.is-over { background: color-mix(in srgb, var(--tl) 10%, var(--s2)); }
+.fi-weekly.is-line .fi-wl-title, .fi-weekly.is-line .fi-wl-card .fi-wk-name-input {
+  justify-self: start; text-align: left; padding: 2px 4px; margin: 0 -4px; border-radius: 6px;
+  font-family: var(--f-dot, var(--f-mono)); font-weight: 700; font-size: clamp(20px, 3.4cqh, 30px); line-height: 1.1; letter-spacing: .05em;
+  color: var(--tl); cursor: default;
+}
+.fi-weekly.is-line .fi-wl-card .fi-wk-name-input { width: 100%; cursor: text; }
+.fi-weekly.is-line .fi-wl-sub { margin: 0 0 4px; text-align: left; font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .14em; color: var(--fg-3); }
+.fi-weekly.is-line .fi-wl-card .fi-wk-list { display: grid; gap: 7px; }
+.fi-weekly.is-line .fi-wl-card .fi-task {
+  display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border-radius: 10px;
+  background: color-mix(in srgb, var(--s2) 70%, transparent); border: 1px solid var(--line-2);
+}
+.fi-weekly.is-line .fi-wl-card .fi-task:hover { border-color: var(--fg-3); }
+.fi-weekly.is-line .fi-wl-card .fi-task.is-sel { box-shadow: 0 0 0 1.5px var(--fg); }
+.fi-weekly.is-line .fi-wl-card .fi-task-text { font-size: 14px; }
+.fi-weekly.is-line .fi-wl-card .fi-check { margin-top: 1px; }
+.fi-weekly.is-line .fi-wl-card .fi-task.is-done .fi-check { background: var(--tl); border-color: var(--tl); color: #141414; }
+.fi-weekly.is-line .fi-wl-card .fi-slot {
+  height: 38px; justify-content: flex-start; border: 1px dashed var(--line-2); border-radius: 10px; color: var(--fg-3); background: transparent;
+}
+.fi-weekly.is-line .fi-wl-card .fi-slot:hover { border-color: var(--fg-3); }
+.fi-weekly.is-line .fi-wl-card .fi-slot:focus-within { border-style: solid; border-color: var(--tl); background: var(--s2); }
+.fi-weekly.is-line .fi-wl-card .fi-slot .fi-add-input { text-align: left; font-family: var(--f-sans); font-size: 13.5px; }
+.fi-weekly.is-line .fi-wl-card .fi-slot:not(.is-lead) { display: none; }
+.fi-weekly.is-line .fi-wl-card .fi-slot .fi-add-input::placeholder { color: var(--fg-3); opacity: 1; }
+.fi-wl-due.is-in-card { justify-self: end; margin-top: 2px; }
+.fi-weekly.is-line.has-bg .fi-wl-card, .fi-weekly.is-line.has-bg .fi-wl-bar { backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.fi-weekly[data-wk-theme="paper"].is-line { --tl: #b8860b; --tl-hi: #8a6408; }
+@media (max-width: 560px) {
+  .fi-weekly.is-line { --wl-when: 54px; --wl-node: 20px; }
+  .fi-wl-when { flex-direction: column; gap: 0; align-items: flex-end; justify-content: center; font-size: 9.5px; }
+  .fi-wl-row { column-gap: 8px; }
+}
+
+/* Edit weeks dialog */
+.fi-ew { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 52vh; overflow-y: auto; }
+.fi-ew-row { display: grid; grid-template-columns: 96px 1fr 28px 28px 28px; align-items: center; gap: 6px; }
+.fi-ew-when { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .08em; color: var(--fg-3); }
+.fi-ew-n { text-align: center; font-family: var(--f-mono); font-size: 11px; color: var(--fg-3); }
+.fi-ew-hint { margin: 0; font-size: 12.5px; }
+
+/* ============================================================
+   Nov 19 — Story opens to the sides
+   No hard side borders: the canvas runs past the columns and grows sideways to hold entries pulled off
+   the spine. Faint connectors tie every off-spine entry back to its point in the day.
+   ============================================================ */
+.fi-stage.is-story { overflow-x: auto; scrollbar-width: thin; }
+.fi-stage.is-story::-webkit-scrollbar { height: 6px; width: 6px; }
+.fi-stage.is-story::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 6px; }
+.fi-tl { box-sizing: border-box; flex: none; }
+.fi-link { border-top-color: color-mix(in srgb, var(--fg-4) 70%, transparent); }
+.fi-link::after { background: color-mix(in srgb, var(--fg-3) 80%, transparent); }
+.fi-frag.is-off .fi-link { border-top-style: dotted; opacity: .7; }
+.fi-frag.is-off .fi-card { box-shadow: inset 3px 0 0 var(--sp, var(--fg-3)), 0 16px 34px -18px rgba(0, 0, 0, .85); }
+.fi-frag.is-moving .fi-card { rotate: 0deg; }
+
+/* ============================================================
+   Nov 19 — Variables: zoom that listens
+   The board scales inside a sizer that carries its zoomed size (so scrollbars stay honest).
+   Ctrl + middle-mouse drag, Ctrl/⌘ + wheel, or a trackpad pinch.
+   ============================================================ */
+.vr-fv-sizer { position: relative; }
+.vr-fv-sizer > .vr-fv-board { position: absolute; left: 0; top: 0; min-width: 0; min-height: 0; transform-origin: 0 0; }
+.vr-fv.is-zooming, .vr-fv.is-zooming * { cursor: zoom-in !important; }
+.vr-fv-zoomchip {
+  position: absolute; right: 14px; bottom: 14px; z-index: 30; pointer-events: none;
+  padding: 5px 10px; border-radius: var(--pill, 999px); background: var(--s2); border: 1px solid var(--line-2);
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; color: var(--fg-2);
+  opacity: 0; transform: translateY(4px); transition: opacity .18s, transform .18s var(--ease);
+}
+.vr-fv-zoomchip.is-on { opacity: 1; transform: none; }

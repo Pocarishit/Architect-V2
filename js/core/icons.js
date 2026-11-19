@@ -114,6 +114,7 @@ const P = {
   eyeOff: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/><path d="M4 4l16 16"/>',
   underline: '<path d="M7 4v7a5 5 0 0 0 10 0V4M5 20h14"/>',
   strike: '<path d="M16.5 7.5c-.6-1.8-2.3-3-4.5-3-2.6 0-4.5 1.5-4.5 3.6 0 1.4.8 2.3 2 2.9M14.8 13.4c1.1.6 1.7 1.4 1.7 2.6 0 2.2-2 3.9-4.7 3.9-2.4 0-4.3-1.2-5-3.2M4 12h16"/>',
+  burger: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   list: '<path d="M9.5 6H20M9.5 12H20M9.5 18H20"/><circle cx="4.8" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.8" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.8" cy="18" r="1.2" fill="currentColor" stroke="none"/>',
   textColor: '<path d="M6.5 15.5 11.2 4h1.6l4.7 11.5M8.3 11.5h7.4"/>',
   turnInto: '<path d="M5 19 12 6l7 13z"/><circle cx="17" cy="7" r="3.2"/>',

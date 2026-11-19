@@ -4,7 +4,7 @@
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { toast, dialog } from '../core/ui.js';
-import { uid } from '../core/util.js';
+import { uid, store } from '../core/util.js';
 import { go } from '../core/router.js';
 import { api, friendlyError } from '../data/api.js';
 import { mountPaths } from '../views/paths.js';
@@ -32,7 +32,7 @@ export const WIDGETS = {
   custom: { label: 'Custom widget', icon: 'code', w: 420, h: 320 },
   chat: { label: 'Chat', icon: 'chat', w: 380, h: 480, hint: 'A thread — connect it to any object, export it' },
   tts: { label: 'Voice chat', icon: 'speaker', w: 380, h: 460, hint: 'Messages are read out loud for everyone' },
-  radio: { label: 'Radio', icon: 'radio', w: 400, h: 500, hint: 'Your YouTube playlist — solo or live stream' },
+  radio: { label: 'Radio', icon: 'radio', w: 400, h: 500, hint: 'Your YouTube playlist, streamed live to the Space' },
 };
 
 const possessive = (name) => `${name || 'Someone'}’${/s$/i.test(name || '') ? '' : 's'}`;
@@ -178,13 +178,27 @@ const KINDS = {
     let boards = [];
     let q = '';
     let state = 'loading';
+    // Nov 19 — two faces: the compact list, or a grid of big canvas previews. One switch in the header.
+    const viewKey = `architect.bs.view.${el.id}`;
+    let view = store.get(viewKey, 'list') === 'grid' ? 'grid' : 'list';
     const list = h('div', { class: 'bs-list' });
     const search = h('input', { class: 'input sm', type: 'search', placeholder: 'Find a blueprint', 'aria-label': 'Find a blueprint', oninput: (e) => { q = e.target.value.trim().toLowerCase(); paint(); } });
-    body.append(h('div', { class: 'bs' },
-      h('div', { class: 'bs-top' }, search,
+    const viewBtn = (id, ic, label) => h('button', { type: 'button', role: 'radio', class: 'bs-view', 'data-v': id, 'aria-label': label, title: label, onclick: () => setView(id) }, icon(ic, 15));
+    const views = h('div', { class: 'bs-views', role: 'radiogroup', 'aria-label': 'View' }, viewBtn('list', 'list', 'List view'), viewBtn('grid', 'grid', 'Grid view'));
+    const root = h('div', { class: 'bs' },
+      h('div', { class: 'bs-top' }, search, views,
         h('button', { class: 'btn btn-primary sm', type: 'button', onclick: create }, icon('plus', 14), h('span', {}, 'New'))),
       list,
-      h('a', { class: 'bs-archive', href: '#/blueprint' }, icon('folder', 14), 'All in Archives')));
+      h('a', { class: 'bs-archive', href: '#/blueprint' }, icon('folder', 14), 'All in Archives'));
+    body.append(root);
+    function setView(v) {
+      view = v; store.set(viewKey, v);
+      paint();
+    }
+    const paintViews = () => {
+      root.dataset.view = view;
+      views.querySelectorAll('.bs-view').forEach((b) => { const on = b.dataset.v === view; b.classList.toggle('is-on', on); b.setAttribute('aria-checked', String(on)); });
+    };
     async function load() {
       try {
         const rows = await api.db.select('blueprints', { columns: 'id,name,kind,preview,updated_at', order: 'updated_at.desc' })
@@ -197,7 +211,18 @@ const KINDS = {
     function paint() {
       if (state === 'loading') { list.replaceChildren(h('span', { class: 'dots-loader' }, h('i'), h('i'), h('i'))); return; }
       if (state !== 'ok') { list.replaceChildren(h('p', { class: 'wg-empty' }, state)); return; }
+      paintViews();
       const shown = boards.filter((b) => !q || String(b.name).toLowerCase().includes(q)).slice(0, 60);
+      const pin = (b) => h('button', { class: 'icon-btn xs bs-pin', type: 'button', title: 'Put a portal on the canvas', 'aria-label': `Put ${b.name} on the canvas`, onclick: (e) => { e.stopPropagation(); w.host.addPortal(b, el.id); } }, icon('pin', 14));
+      if (view === 'grid') {
+        list.replaceChildren(...(shown.length ? shown.map((b) => h('div', { class: 'bs-card' },
+          h('button', { class: 'bs-card-open', type: 'button', onclick: () => w.host.openBoard(b.id), 'aria-label': `Open ${b.name || 'Untitled'}` },
+            h('span', { class: 'bs-card-pv' }, previewSvg(b.preview) || icon('frame', 26)),
+            h('span', { class: 'bs-card-name' }, b.name || 'Untitled')),
+          pin(b)))
+          : [h('p', { class: 'wg-empty' }, q ? 'No matches.' : 'No blueprints yet.')]));
+        return;
+      }
       list.replaceChildren(...(shown.length ? shown.map((b) => h('div', { class: 'bs-row' },
         h('button', { class: 'bs-open', type: 'button', onclick: () => w.host.openBoard(b.id) },
           h('span', { class: 'bs-thumb' }, previewSvg(b.preview) || icon('frame', 16)),

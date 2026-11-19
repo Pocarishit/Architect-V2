@@ -640,3 +640,12 @@ body.bp-busy .el.is-live .el-media { pointer-events: none; }
 .ov-guide { background: var(--red); pointer-events: none; }
 .ov-guide.is-v { width: calc(1px * var(--iz)); margin-left: calc(-.5px * var(--iz)); }
 .ov-guide.is-h { height: calc(1px * var(--iz)); margin-top: calc(-.5px * var(--iz)); }
+
+/* ============================================================
+   Nov 19 — Shared space, built for speed
+   While the view moves, glass stops sampling what's behind it (the widgets are opaque anyway) and
+   off-screen objects skip rendering; everything stays live and keeps animating.
+   ============================================================ */
+.bp-viewport.is-moving .bp-world :is(.vr-cat, .fi-idea, .fi-wk, .fi-wk-card, .fi-wl-card, .fi-wl-bar, .tmr, .ptask) {
+  -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+}

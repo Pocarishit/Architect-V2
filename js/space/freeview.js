@@ -68,7 +68,12 @@ export function mountFreeView(o) {
   const world = h('div', { class: 'vr-fv-world' });        // layout space: x = 0 is the column's left edge
   const capture = h('div', { class: 'vr-fv-capture' });
   const board = h('div', { class: ['vr-fv-board', gridOn && 'has-grid'] }, world, capture);
-  const scroller = h('div', { class: o.className || 'vr-msgs vr-fv', role: o.role || 'log', tabindex: -1 }, board);
+  // Zoom (Nov 19): the board scales inside a sizer that carries its zoomed size, so scrolling stays true.
+  // Ctrl + middle-mouse drag, Ctrl/⌘ + wheel, or a trackpad pinch drive it — same gesture as every canvas.
+  const ZMIN = 0.25, ZMAX = 3;
+  let zoom = Math.min(ZMAX, Math.max(ZMIN, Number(store.get(`vr.fv.zoom.${x.id}`, 1)) || 1));
+  const sizer = h('div', { class: 'vr-fv-sizer' }, board);
+  const scroller = h('div', { class: o.className || 'vr-msgs vr-fv', role: o.role || 'log', tabindex: -1 }, sizer);
   const tools = h('div', { class: 'vr-fv-rail', role: 'toolbar', 'aria-label': 'Free view tools', 'aria-orientation': 'vertical' });
   const railTab = h('button', { type: 'button', class: 'vr-fv-railtab', 'aria-label': 'Show tools', 'data-tip': 'Show tools', onclick: () => setRail(true) }, icon('chevronRight', 16));
   const selbar = h('div', { class: 'vr-fv-selbar', role: 'toolbar', 'aria-label': 'Selection' });
@@ -258,7 +263,7 @@ export function mountFreeView(o) {
     const btn = (key, ic, label, fn, extra = {}) => h('button', {
       type: 'button', class: ['bp-tool vr-fv-tool', extra.fly && 'has-fly', (extra.on ?? (key && tool === key)) && 'is-on'],
       'aria-label': label, 'data-tip': label, ...(key || extra.on != null ? { 'aria-pressed': String(!!(extra.on ?? tool === key)) } : {}),
-      onclick: (e) => fn(e.currentTarget),
+      onclick: (e) => { fn(e.currentTarget); if (!e.currentTarget.classList.contains('has-fly')) scroller.focus({ preventScroll: true }); },
     }, icon(ic, 20));
     const sep = () => h('span', { class: 'bp-tsep' });
     const f = free();
@@ -285,7 +290,7 @@ export function mountFreeView(o) {
       h('span', { class: 'bp-tspace' }),
       undoB, redoB,
       sep(),
-      btn(null, 'home', 'Back to the start', () => scroller.scrollTo({ left: L, top: 0, behavior: 'smooth' })),
+      btn(null, 'home', 'Back to the start', () => scroller.scrollTo({ left: L * zoom, top: 0, behavior: 'smooth' })),
       resetB].filter(Boolean));
     paintSelbar();
   }
@@ -331,6 +336,29 @@ export function mountFreeView(o) {
     scroller.dataset.tool = t;
     paintTools();
   }
+  function selectAll() {
+    const f = free();
+    clearSel(false);
+    for (const id of Object.keys(f.pos || {})) if (items.has(id)) sel.msgs.add(id);
+    for (const c of f.cards) sel.cards.add(c.id);
+    for (const q of f.shapes) sel.shapes.add(q.id);
+    paintSel();
+    if (selCount() && tool !== 'move') setTool('move');
+  }
+  // Arrow keys nudge what's selected (Shift = 10px), one undo step per press — as on the Blueprint.
+  function nudge(key, step) {
+    const [dx, dy] = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[key] || [0, 0];
+    const f = free(), W = wall();
+    const mv = (o2, w = 0) => ({ ...o2, x: Math.round(Math.min(o2.x + dx, W - w)), y: Math.round(Math.max(0, o2.y + dy)) });
+    const pos = { ...f.pos };
+    for (const id of sel.msgs) if (pos[id]) pos[id] = mv(pos[id], rectOf(id)?.w || 0);
+    save({
+      pos,
+      cards: f.cards.map((c) => (sel.cards.has(c.id) ? mv(c, c.w || 0) : c)),
+      shapes: f.shapes.map((q) => (sel.shapes.has(q.id) ? mv(q, q.w || 0) : q)),
+    });
+  }
+  function zoomAtCentre(z) { const r = scroller.getBoundingClientRect(); zoomTo(z, r.left + r.width / 2, r.top + r.height / 2); }
   function setGrid(on) { gridOn = on; store.set('vr.fv.grid', on); board.classList.toggle('has-grid', on); paintTools(); }
   function setRail(on) {
     railOff = !on; store.set('vr.fv.rail.off', railOff);
@@ -382,7 +410,7 @@ export function mountFreeView(o) {
   }
   const wall = () => flow?.offsetWidth || scroller.clientWidth; // the right edge nothing passes
   function viewCenter() {
-    return { x: scroller.scrollLeft - L + scroller.clientWidth / 2, y: scroller.scrollTop + scroller.clientHeight / 2 };
+    return { x: (scroller.scrollLeft + scroller.clientWidth / 2) / zoom - L, y: (scroller.scrollTop + scroller.clientHeight / 2) / zoom };
   }
   function rectOf(id) {
     const card = cardEls.get(id);
@@ -415,9 +443,11 @@ export function mountFreeView(o) {
       L = nextL;
       world.style.left = `${L}px`;
       board.style.width = `${W + L}px`;
-      scroller.scrollLeft += d; // the view stays where it was while the canvas grows left
+      fitSizer(W + L, hgt);
+      scroller.scrollLeft += d * zoom; // the view stays where it was while the canvas grows left
     } else board.style.width = `${W + L}px`;
     board.style.height = `${hgt}px`;
+    fitSizer(W + L, hgt);
     world.style.height = `${hgt}px`;
     svg.setAttribute('width', W); svg.setAttribute('height', hgt);
     tools.classList.toggle('is-scroll', tools.scrollHeight > stage.clientHeight - 16); // short panels: the rail scrolls
@@ -700,6 +730,48 @@ export function mountFreeView(o) {
     });
   }
 
+  function fitSizer(bw = board.offsetWidth, bh = board.offsetHeight) {
+    board.style.transform = zoom === 1 ? '' : `scale(${zoom})`;
+    sizer.style.width = `${Math.ceil(bw * zoom)}px`;
+    sizer.style.height = `${Math.ceil(bh * zoom)}px`;
+    stage.style.setProperty('--fv-zoom', String(zoom));
+  }
+  // Zoom about a point on screen: what's under the pointer stays under the pointer.
+  function zoomTo(next, cx, cy) {
+    next = Math.min(ZMAX, Math.max(ZMIN, next));
+    if (Math.abs(next - zoom) < 1e-4) return;
+    const r = scroller.getBoundingClientRect();
+    const ko = r.width / (scroller.offsetWidth || 1) || 1; // the Space's own zoom around us
+    const px = (cx - r.left) / ko, py = (cy - r.top) / ko;
+    const bx = (scroller.scrollLeft + px) / zoom, by = (scroller.scrollTop + py) / zoom;
+    zoom = next;
+    fitSizer();
+    scroller.scrollLeft = bx * zoom - px;
+    scroller.scrollTop = by * zoom - py;
+    store.set(`vr.fv.zoom.${x.id}`, Math.round(zoom * 1000) / 1000);
+    paintZoom();
+  }
+  // A quiet readout while the zoom changes, then it gets out of the way.
+  const zoomChip = h('span', { class: 'vr-fv-zoomchip', 'aria-live': 'polite' });
+  stage.append(zoomChip);
+  let zoomChipT = 0;
+  function paintZoom() {
+    zoomChip.textContent = `${Math.round(zoom * 100)}%`;
+    zoomChip.classList.add('is-on');
+    clearTimeout(zoomChipT); zoomChipT = setTimeout(() => zoomChip.classList.remove('is-on'), 900);
+  }
+  scroller.addEventListener('wheel', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return; // a trackpad pinch arrives as Ctrl + wheel
+    e.preventDefault(); e.stopPropagation();
+    const d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    zoomTo(zoom * Math.exp(-d * (Math.abs(d) < 40 ? 0.012 : 0.0025)), e.clientX, e.clientY);
+  }, { passive: false });
+  // Safari's trackpad pinch
+  let gz = 1;
+  scroller.addEventListener('gesturestart', (e) => { e.preventDefault(); e.stopPropagation(); gz = zoom; });
+  scroller.addEventListener('gesturechange', (e) => { e.preventDefault(); e.stopPropagation(); zoomTo(gz * e.scale, e.clientX, e.clientY); });
+  scroller.addEventListener('gestureend', (e) => { e.preventDefault(); e.stopPropagation(); });
+
   /* ---------------- move around: hand tool, middle mouse, or Space + drag ---------------- */
   let spaceHeld = false;
   const onSpace = (e) => {
@@ -711,11 +783,20 @@ export function mountFreeView(o) {
   window.addEventListener('keydown', onSpace, true);
   window.addEventListener('keyup', onSpace, true);
   scroller.addEventListener('pointerdown', (e) => {
+    // Ctrl + middle mouse, drag: zoom (up/right = in) about where you pressed.
+    if (e.button === 1 && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault(); e.stopPropagation();
+      const sx = e.clientX, sy = e.clientY, z0 = zoom;
+      scroller.classList.add('is-zooming');
+      track((ev) => zoomTo(z0 * Math.exp(((ev.clientX - sx) - (ev.clientY - sy)) * 0.006), sx, sy), () => { scroller.classList.remove('is-zooming'); eatClick(); });
+      return;
+    }
     const handy = (e.button === 0 && (tool === 'hand' || spaceHeld)) || e.button === 1;
     if (!handy) return;
     e.preventDefault(); e.stopPropagation();
     const sx = e.clientX, sy = e.clientY, l0 = scroller.scrollLeft, t0 = scroller.scrollTop;
-    const k = scaleOf();
+    const sr = scroller.getBoundingClientRect();
+    const k = sr.width / (scroller.offsetWidth || 1) || 1; // screen px → scroll px (the Space's zoom only)
     let moved = false;
     scroller.classList.add('is-panning');
     track((ev) => {
@@ -865,7 +946,7 @@ export function mountFreeView(o) {
       if (last) mark(last, false);
       const b = how === 'up' ? objAt(ev) : null;
       const links = free().links;
-      if (b && b !== a && !links.some((l) => (l.a === a && l.b === b) || (l.a === b && l.b === a))) save({ links: [...links, { id: uid(), a, b, arrow: lastLink !== 'line' }] });
+      if (b && b !== a && !links.some((l) => (l.a === a && l.b === b) || (l.a === b && l.b === a))) { save({ links: [...links, { id: uid(), a, b, arrow: lastLink !== 'line' }] }); setTool('move'); }
       else draw();
     });
   }
@@ -886,8 +967,13 @@ export function mountFreeView(o) {
       autoScroll(ev);
       draw(s('g', { class: 'vr-fv-shape is-live' }, shapeSvg(sh, '')));
     }, (ev, how) => {
-      if (how === 'up' && sh && sh.w > 8 && sh.h > 8) save({ shapes: [...free().shapes, { ...sh, id: uid() }] });
-      else draw();
+      if (how !== 'up') { draw(); return; }
+      // A plain click drops a default-size shape, like the Blueprint; either way you're handed back the selection.
+      const made = sh && sh.w > 8 && sh.h > 8 ? { ...sh, id: uid() }
+        : (() => { const w0 = kind === 'ring' || kind === 'diamond' ? 110 : 140, h0 = kind === 'box' ? 90 : 110; const x0 = Math.max(Math.min(a.x - w0 / 2, W - w0), -1e6); return { id: uid(), kind, x: Math.round(x0), y: Math.round(Math.max(0, a.y - h0 / 2)), w: w0, h: h0 }; })();
+      clearSel(false); sel.shapes.add(made.id);
+      save({ shapes: [...free().shapes, made] });
+      setTool('move');
     });
   }
 
@@ -1011,12 +1097,24 @@ export function mountFreeView(o) {
     ].filter(Boolean));
   });
 
-  scroller.addEventListener('keydown', (e) => {
-    if (e.target.closest('input, textarea, [contenteditable="true"]')) return;
+  stage.addEventListener('keydown', (e) => {
+    if (e.target.closest('input, textarea, [contenteditable="true"], .menu, .popover')) return;
     const k = e.key.toLowerCase();
-    if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); e.stopPropagation(); history(!e.shiftKey); return; }
-    if ((e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); e.stopPropagation(); history(false); return; }
-    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+    const mod = e.ctrlKey || e.metaKey;
+    const eat = () => { e.preventDefault(); e.stopPropagation(); };
+    if (mod && k === 'z') { eat(); history(!e.shiftKey); return; }
+    if (mod && k === 'y') { eat(); history(false); return; }
+    if (mod && k === 'a') { eat(); selectAll(); return; }
+    if (mod && (k === '=' || k === '+')) { eat(); zoomAtCentre(zoom * 1.25); return; }
+    if (mod && (k === '-' || k === '_')) { eat(); zoomAtCentre(zoom * 0.8); return; }
+    if (mod && k === '0') { eat(); zoomAtCentre(1); return; }
+    if (!mod && !e.altKey && e.key.startsWith('Arrow') && selCount()) { eat(); nudge(e.key, e.shiftKey ? 10 : 1); return; }
+    if (!mod && !e.altKey && !e.shiftKey) {
+      if (k === 'o') { eat(); lastShape = 'ring'; setTool('shape'); return; }   // Blueprint: O = ellipse
+      if (k === 'a') { eat(); lastLink = 'arrow'; setTool('link'); return; }   // Blueprint: A = arrow
+      if (k === 'p') { eat(); lastPen = 'pen'; setTool('pen'); return; }
+    }
+    if (!mod && !e.altKey) {
       if (KEYS[k]) { e.preventDefault(); e.stopPropagation(); setTool(KEYS[k]); return; }
       if (k === 'g') { e.preventDefault(); e.stopPropagation(); setGrid(!gridOn); return; }
       if (k === 'u' && o.media) { e.preventDefault(); e.stopPropagation(); addImage(); return; }
@@ -1024,7 +1122,7 @@ export function mountFreeView(o) {
     if (e.key === 'Escape' && (tool !== 'move' || selCount())) { e.preventDefault(); e.stopPropagation(); if (tool !== 'move') setTool('move'); else clearSel(); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selCount()) { e.preventDefault(); e.stopPropagation(); deleteSel(); }
   });
-  scroller.addEventListener('scroll', () => scrollMem.set(x.id, { left: scroller.scrollLeft - L, top: scroller.scrollTop }), { passive: true });
+  scroller.addEventListener('scroll', () => scrollMem.set(x.id, { left: scroller.scrollLeft / zoom - L, top: scroller.scrollTop / zoom }), { passive: true });
   const ro = new ResizeObserver(() => { if (!busy) { size(); draw(); } });
   ro.observe(scroller);
 
@@ -1033,8 +1131,8 @@ export function mountFreeView(o) {
   requestAnimationFrame(() => {
     size();
     const m = scrollMem.get(x.id);
-    if (m) { scroller.scrollLeft = m.left + L; scroller.scrollTop = m.top; }
-    else { scroller.scrollLeft = L; if (!o.top) scroller.scrollTop = scroller.scrollHeight; }
+    if (m) { scroller.scrollLeft = (m.left + L) * zoom; scroller.scrollTop = m.top * zoom; }
+    else { scroller.scrollLeft = L * zoom; if (!o.top) scroller.scrollTop = scroller.scrollHeight; }
   });
 
   return {
@@ -1045,10 +1143,10 @@ export function mountFreeView(o) {
     update(next) {
       const atEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
       x = next;
-      const keep = { left: scroller.scrollLeft - L, top: scroller.scrollTop };
+      const keep = { left: scroller.scrollLeft / zoom - L, top: scroller.scrollTop / zoom };
       build();
       setTool(tool);
-      requestAnimationFrame(() => { size(); scroller.scrollLeft = keep.left + L; scroller.scrollTop = atEnd ? scroller.scrollHeight : keep.top; });
+      requestAnimationFrame(() => { size(); scroller.scrollLeft = (keep.left + L) * zoom; scroller.scrollTop = atEnd ? scroller.scrollHeight : keep.top * zoom; });
     },
     destroy() { ro.disconnect(); window.removeEventListener('keydown', onSpace, true); window.removeEventListener('keyup', onSpace, true); },
   };

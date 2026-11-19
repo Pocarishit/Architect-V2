@@ -748,3 +748,90 @@ body.is-space .shell-head { display: none; }
     color: var(--fg-2); background: var(--s1); border: 1px solid var(--line-2); pointer-events: none;
   }
 }
+
+/* ============================================================
+   Nov 19 — Radio: stream first, queue on demand
+   The video fills the widget edge to edge; YouTube's own small controls live inside the frame.
+   One caption line underneath. The queue drops from the burger in the title bar.
+   ============================================================ */
+.rd.is-stream { gap: 0; padding: 0; }
+.rd.is-stream .rd-stage { flex: 1; min-height: 140px; border: 0; border-radius: 0; background: #000; }
+.rd-cap { flex: none; display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 14px 12px; border-top: 1px solid var(--line); }
+.rd-cap-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--fg); }
+.rd.is-stream .rd-title { font-size: 13px; font-weight: 500; }
+.rd.is-stream .rd-artist { font-size: 13px; color: var(--fg-3); }
+.rd.is-stream .rd-live { flex: none; display: inline-flex; align-items: center; gap: 6px; font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
+.rd.is-stream .rd-tune { top: 50%; transform: translate(-50%, -50%); }
+.rd-burger[hidden] { display: none; }
+
+.rq.is-v2 { width: min(320px, calc(100vw - 24px)); max-height: min(480px, 70vh); padding-bottom: 4px; }
+.rq.is-v2 .rq-head { padding: 12px 14px 6px; }
+.rq.is-v2 .rq-head b { font-family: var(--f-mono); font-weight: 400; font-size: 10.5px; letter-spacing: .14em; color: var(--fg-3); }
+.rq.is-v2 .rq-list { padding: 2px 6px 4px; }
+.rq.is-v2 .rq-item { position: relative; gap: 0; padding-left: 12px; cursor: grab; }
+.rq.is-v2 .rq-item.is-on { background: transparent; }
+.rq.is-v2 .rq-item:hover { background: var(--s2); }
+.rq-now-dot { position: absolute; left: 4px; top: 50%; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: transparent; }
+.rq-item.is-on .rq-now-dot { background: #f2b733; box-shadow: 0 0 6px #f2b733; }
+.rq.is-v2 .rq-play { gap: 10px; padding: 6px 6px; cursor: pointer; }
+.rq-thumb { flex: none; width: 40px; height: 40px; border-radius: 8px; overflow: hidden; background: var(--s3); }
+.rq-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rq.is-v2 .rq-title { font-size: 13px; color: var(--fg); white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.rq.is-v2 .rq-dur { font-family: var(--f-mono); font-size: 10.5px; color: var(--fg-4); }
+.rq-now { flex: none; margin-right: 4px; font-family: var(--f-mono); font-size: 9.5px; letter-spacing: .1em; color: #f2b733; }
+.rq.is-v2 .rq-item.is-drag { opacity: .6; outline: 1px dashed var(--fg-3); cursor: grabbing; }
+.rq-addbtn { display: flex; align-items: center; gap: 8px; margin: 2px 6px; padding: 8px 10px; border-radius: 9px; font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-3); }
+.rq-addbtn:hover { color: var(--fg); background: var(--s2); }
+.rq.is-v2 .rq-row-add { padding: 0 10px 8px; border: 0; }
+.rq.is-v2 .rq-row-add[hidden] { display: none; }
+.rq-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; padding: 10px 14px 8px; border-top: 1px solid var(--line); font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .12em; color: var(--fg-3); }
+.rq-switch { position: relative; width: 30px; height: 18px; border-radius: 999px; background: var(--s3); border: 1px solid var(--line-2); transition: background .15s, border-color .15s; }
+.rq-switch i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--fg-3); transition: transform .18s var(--ease), background .15s; }
+.rq-switch.is-on { background: var(--fg); border-color: var(--fg); }
+.rq-switch.is-on i { transform: translateX(12px); background: var(--bg); }
+.rq-yt { display: flex; align-items: center; gap: 6px; margin: 0 6px 4px; padding: 6px 8px; border-radius: 8px; font-size: 11.5px; color: var(--fg-4); }
+.rq-yt:hover { color: var(--fg-2); background: var(--s2); }
+
+/* ============================================================
+   Nov 19 — Voice chat: same chat, now with images
+   The written half uses the Side Chat / Variables bubbles and composer.
+   ============================================================ */
+.ch.is-sc .ch-list.sc-list { gap: 0; padding: 10px 14px 12px; }
+.ch.is-sc .ch-compose.sc-compose { gap: 8px; padding: 10px 12px 12px; border-top: 1px solid var(--line); align-items: flex-end; }
+.ch.is-sc .ch-input.sc-input { flex: 1; min-width: 0; min-height: 40px; max-height: 120px; padding: 10px 16px; border-radius: 20px; border: 1px solid transparent; background: var(--s2); font-family: var(--f-sans); font-size: 14.5px; line-height: 1.35; }
+.ch.is-sc .ch-input.sc-input:focus { border-color: var(--line-2); }
+.ch.is-sc .sc-plus.is-busy { cursor: progress; opacity: .6; }
+.ch.is-sc .sc-msg { max-width: min(90%, 30em); }
+.ch.is-sc.is-drop::after {
+  content: 'Drop to send'; position: absolute; inset: 8px; z-index: 5; pointer-events: none;
+  border: 1.5px dashed var(--fg-3); border-radius: 14px; display: grid; place-items: center;
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-2);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+}
+
+/* ============================================================
+   Nov 19 — Blueprints: grid view
+   Beside the compact list, a grid of large cards, each with a big preview of its canvas, the name
+   underneath and the pin in the corner. The menu adapts to the size of the screen it's on.
+   ============================================================ */
+.bs { container-type: inline-size; align-content: start; min-height: 100%; box-sizing: border-box; }
+.bs-top { align-items: center; }
+.bs-views { flex: none; display: flex; gap: 2px; padding: 2px; border-radius: 10px; background: var(--s2); border: 1px solid var(--line); }
+.bs-view { width: 30px; height: 26px; border-radius: 8px; display: grid; place-items: center; color: var(--fg-3); }
+.bs-view:hover { color: var(--fg); }
+.bs-view.is-on { background: var(--fg); color: var(--bg); }
+.bs[data-view="grid"] .bs-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 10px; }
+.bs-card { position: relative; border: 1px solid var(--line-2); border-radius: 14px; background: var(--s1, var(--bg)); overflow: hidden; transition: border-color .15s; }
+.bs-card:hover { border-color: var(--fg-3); }
+.bs-card-open { display: grid; width: 100%; text-align: left; }
+.bs-card-pv {
+  aspect-ratio: 4 / 3; display: grid; place-items: center; overflow: hidden; color: var(--fg-4);
+  background: var(--s2) radial-gradient(color-mix(in srgb, var(--fg) 8%, transparent) 1px, transparent 1px) 0 0 / 14px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.bs-card-pv .pv { width: 100%; height: 100%; padding: 8px; box-sizing: border-box; }
+.bs-card-name { display: block; padding: 10px 40px 12px 12px; font-size: 13.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bs-card .bs-pin { position: absolute; right: 6px; bottom: 6px; color: var(--fg-3); }
+.bs-card .bs-pin:hover { color: var(--fg); }
+@container (max-width: 300px) { .bs-top .btn span { display: none; } }
+@container (min-width: 640px) { .bs[data-view="grid"] .bs-list { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); } }

@@ -456,7 +456,7 @@ export function mountBoard(root, boardId, opts = {}) {
       h('button', { class: 'bp-icon', type: 'button', 'aria-label': 'Zoom in', 'data-tip': kbd('Zoom in (⌘+)'), 'data-tip-pos': 'top', onclick: () => editor.zoomBy(1.25) }, icon('plus', 18)),
       h('button', { class: 'bp-icon', type: 'button', 'aria-label': 'Fit everything', 'data-tip': 'Fit all (⇧1)', 'data-tip-pos': 'top', onclick: () => editor.zoomToFit() }, icon('fit', 18)));
     page.append(zoomBar);
-    const syncZoom = () => { zoomLabel.textContent = `${Math.round(editor.cam.z * 100)}%`; };
+    const syncZoom = () => { const t = `${Math.round(editor.cam.z * 100)}%`; if (zoomLabel.textContent !== t) zoomLabel.textContent = t; };
     editor.on('camera', syncZoom);
     syncZoom();
     zoomLabel.addEventListener('click', () => {

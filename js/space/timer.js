@@ -6,7 +6,8 @@
 // running through reloads, tab sleep and offline. Mode tabs sit in the header, styled like Path's day tabs.
 import { h, s } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { prefersReducedMotion } from '../core/util.js';
+import { prefersReducedMotion, store } from '../core/util.js';
+import { popover, closeFloating, toast } from '../core/ui.js';
 import { SETPOINTS } from './fleeting.js';
 
 const DOTS = 60;
@@ -15,6 +16,10 @@ const DAY_START = 7 * 60; // the story/setpoint day runs 7AM → 7AM
 const MODES = [['timer', 'Timer'], ['watch', 'Stopwatch'], ['setpoint', 'Setpoint']];
 const PRESETS = [[15, '15M'], [60, '1H'], [120, '2H'], [240, '4H'], [600, '10H'], [1800, '30H']];
 const pad = (n) => String(n).padStart(2, '0');
+// The + button's add amounts — yours alone (this device), editable from the + popover.
+const ADDS_KEY = 'architect.timer.adds';
+const DEFAULT_ADDS = [60, 300, 900, 1800, 3600, 7200, 18000, 36000];
+const durLabel = (sec) => { const hh = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60); return `${hh ? `${hh}H` : ''}${m ? `${m}M` : ''}` || '0M'; };
 const split = (sec) => [Math.floor(sec / 3600), Math.floor((sec % 3600) / 60), Math.floor(sec % 60)];
 const fmtWatch = (ms) => { const [hh, m, sec] = split(ms / 1000); return `${hh ? `${hh}:` : ''}${pad(m)}:${pad(sec)}.${pad(Math.floor((ms % 1000) / 10))}`; };
 const clock12 = (d) => `${d.getHours() % 12 || 12}:${pad(d.getMinutes())} ${d.getHours() < 12 ? 'AM' : 'PM'}`;
@@ -108,9 +113,15 @@ export function mountTimer(root, el0, w) {
     digits.classList.toggle('is-edit', editable);
     digits.classList.toggle('is-long', showH);
   }
-  function frame() {
+  // Shared-space speed: the face changes at most a few times a second, and not at all off screen.
+  let lastFrame = 0, onScreen = true;
+  const io = 'IntersectionObserver' in window ? new IntersectionObserver((es) => { onScreen = es.some((x) => x.isIntersecting); }) : null;
+  io?.observe(box);
+  function frame(ts = performance.now()) {
     raf = requestAnimationFrame(frame);
-    if (document.hidden || !box.isConnected) return;
+    if (document.hidden || !box.isConnected || !onScreen) return;
+    if (ts - lastFrame < 100) return;
+    lastFrame = ts;
     const t = st();
     const done = isDone(t);
     let running = false, text = '', subTxt = '';
@@ -171,7 +182,7 @@ export function mountTimer(root, el0, w) {
       goBtn.setAttribute('aria-label', done ? 'Dismiss' : running ? 'Pause' : 'Start');
       goBtn.title = `${goBtn.getAttribute('aria-label')} · Space`;
       if (t.mode === 'watch') { auxBtn.replaceChildren(flag()); auxBtn.setAttribute('aria-label', 'Lap'); auxBtn.title = 'Lap · L'; }
-      else { auxBtn.replaceChildren(icon('plus', 18)); auxBtn.setAttribute('aria-label', 'Add one minute'); auxBtn.title = 'Add one minute · +'; }
+      else { auxBtn.replaceChildren(icon('plus', 18)); auxBtn.setAttribute('aria-label', 'Add time'); auxBtn.title = 'Add hours or minutes'; }
       auxBtn.disabled = t.mode === 'watch' && !running;
       resetBtn.disabled = t.mode === 'timer' ? (t.left === t.set && !t.end) : !(t.wAcc || t.wStart);
       for (const b of [goBtn, auxBtn, resetBtn]) b.hidden = setMode;
@@ -202,13 +213,53 @@ export function mountTimer(root, el0, w) {
     if (t.mode === 'timer') save({ end: null, left: t.set });
     else if (t.mode === 'watch') save({ wStart: null, wAcc: 0, laps: [] });
   }
+  // Add time: works while set, running, paused or finished.
+  function addTime(sec) {
+    const t = st();
+    if (t.mode !== 'timer' || !sec) return;
+    const ms = sec * 1000;
+    if (isDone(t)) save({ end: now() + ms });
+    else if (t.end) save({ end: Math.min(t.end + ms, now() + MAX * 1000) });
+    else { const v = Math.min(MAX, t.left + sec); save(t.left === t.set ? { set: v, left: v } : { left: v }); }
+    toast(`+${durLabel(sec)}`, { ms: 1100 });
+  }
+  const adds = () => { const v = store.get(ADDS_KEY, null); return Array.isArray(v) && v.length ? v : DEFAULT_ADDS; };
+  const lastAdd = () => store.get(`${ADDS_KEY}.last`, 60);
+
+  // The + popover: tap a chip to add it, type any hours + minutes, save your own chips, right-click to remove.
+  function addMenu(anchor) {
+    const hIn = h('input', { class: 'tmr-add-in', type: 'number', min: 0, max: 99, placeholder: '0', inputmode: 'numeric', 'aria-label': 'Hours to add' });
+    const mIn = h('input', { class: 'tmr-add-in', type: 'number', min: 0, max: 59, placeholder: '0', inputmode: 'numeric', 'aria-label': 'Minutes to add' });
+    const chips = h('div', { class: 'tmr-add-chips' });
+    const custom = () => Math.min(MAX, (Number(hIn.value) || 0) * 3600 + Math.min(59, Number(mIn.value) || 0) * 60);
+    const use = (sec) => { if (!sec) return; store.set(`${ADDS_KEY}.last`, sec); closeFloating(); addTime(sec); };
+    const paint = () => chips.replaceChildren(...adds().map((sec) => h('button', {
+      type: 'button', class: 'tmr-add-chip', title: 'Click to add · right-click to remove',
+      onclick: () => use(sec),
+      oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); store.set(ADDS_KEY, adds().filter((x) => x !== sec)); paint(); },
+    }, `+${durLabel(sec)}`)));
+    paint();
+    const onKey = (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); use(custom()); } };
+    hIn.addEventListener('keydown', onKey); mIn.addEventListener('keydown', onKey);
+    popover(anchor, h('div', { class: 'pop tmr-add' },
+      h('div', { class: 'pop-label' }, 'Add time'),
+      chips,
+      h('div', { class: 'tmr-add-row' },
+        h('label', {}, hIn, h('span', {}, 'H')),
+        h('label', {}, mIn, h('span', {}, 'M')),
+        h('button', { type: 'button', class: 'btn btn-primary sm', onclick: () => use(custom()) }, 'Add'),
+        h('button', {
+          type: 'button', class: 'btn sm', title: 'Keep this amount as a chip',
+          onclick: () => { const sec = custom(); if (!sec) return; store.set(ADDS_KEY, [...new Set([...adds(), sec])].sort((a, b) => a - b).slice(0, 12)); hIn.value = ''; mIn.value = ''; paint(); },
+        }, 'Save')),
+      h('p', { class: 'tmr-add-hint' }, `+ key adds ${durLabel(lastAdd())} (your last one) · right-click a chip to remove`)), { side: 'top', align: 'center', gap: 10 });
+    requestAnimationFrame(() => hIn.focus());
+  }
+
   function aux() {
     const t = st();
-    if (t.mode === 'timer') {
-      if (isDone(t)) save({ end: now() + 60_000 });
-      else if (t.end) save({ end: t.end + 60_000 });
-      else { const v = Math.min(MAX, t.left + 60); save(t.left === t.set ? { set: v, left: v } : { left: v }); }
-    } else if (t.mode === 'watch' && t.wStart) {
+    if (t.mode === 'timer') addMenu(auxBtn);
+    else if (t.mode === 'watch' && t.wStart) {
       const ms = watchMs(t), prev = t.laps?.[0]?.t || 0;
       save({ laps: [{ t: ms, d: ms - prev }, ...(t.laps || [])].slice(0, 200) });
     }
@@ -275,7 +326,7 @@ export function mountTimer(root, el0, w) {
     if (k === ' ' && !e.target.closest('button')) toggle();
     else if (k === 'r' && !eDown) reset();
     else if (k === 'l' && t.mode === 'watch') aux();
-    else if ((k === '+' || k === '=') && t.mode === 'timer') aux();
+    else if ((k === '+' || k === '=') && t.mode === 'timer') addTime(lastAdd());
     else if (k === '1' || k === '2' || k === '3') save({ mode: MODES[Number(k) - 1][0] });
     else if ((k === 'arrowup' || k === 'arrowdown') && t.mode === 'timer') nudge('m', k === 'arrowup' ? 1 : -1);
     else hit = false;
@@ -318,6 +369,6 @@ export function mountTimer(root, el0, w) {
 
   return {
     update(next) { el = next; },
-    destroy() { cancelAnimationFrame(raf); clearInterval(chimeT); try { ac?.close(); } catch {} w.slot.replaceChildren(); box.remove(); },
+    destroy() { cancelAnimationFrame(raf); io?.disconnect(); clearInterval(chimeT); try { ac?.close(); } catch {} w.slot.replaceChildren(); box.remove(); },
   };
 }

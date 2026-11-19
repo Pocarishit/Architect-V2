@@ -253,13 +253,22 @@ export function mountSideChat({ me }) {
   const compose = h('div', { class: 'sc-compose' }, plus, input); // Enter sends — no send button
   const body = h('div', { class: 'sc-body' }, pinbar, list, chip, jump);
   const handles = ['n', 's', 'w', 'e', 'nw', 'ne', 'sw', 'se'].map((d) => h('span', { class: `sc-rs sc-rs-${d}`, 'data-dir': d, 'aria-hidden': 'true' }));
+  // The active chat's name sits in the top bar beside the smiley; under the smiley runs the avatar rail.
+  const headName = h('h2', { class: 'sc-head-name' });
+  const head = h('header', { class: 'sc-head' }, headName);
+  const railList = h('div', { class: 'sc-rail-list', role: 'tablist', 'aria-label': 'Chats', 'aria-orientation': 'vertical' });
+  const railActs = h('div', { class: 'sc-rail-acts' },
+    h('button', { class: 'sc-rail-act', type: 'button', 'aria-label': 'New chat', title: 'New chat', onclick: () => addChat() }, icon('plus', 15)),
+    h('button', { class: 'sc-rail-act', type: 'button', 'aria-label': 'Side chat options', title: 'Options', onclick: (e) => optionsMenu(e.currentTarget) }, icon('more', 15)));
+  const rail = h('nav', { class: 'sc-rail' }, h('span', { class: 'sc-rail-spot', 'aria-hidden': 'true' }), railList, railActs);
+  const main = h('div', { class: 'sc-main' }, head, status, body, selbar, h('div', { class: 'sc-foot' }, modebar, compose));
   const panel = h('section', { class: 'sc-panel', role: 'dialog', 'aria-label': 'Side chat', 'data-noptr': '', hidden: true },
-    status, body, selbar, h('div', { class: 'sc-foot' }, modebar, compose), ...handles);
+    main, rail, ...handles);
   document.body.append(panel, drop, launch);
 
   /* ---------- geometry: everything hangs off the launcher ---------- */
   const sheet = () => innerWidth < 720;
-  const LS = 40, GAP = 10, M = 8;
+  const LS = 40, GAP = 10, M = 8, P = 8; // P: the panel's padding around the smiley (rail = LS + 2P wide)
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(Math.max(lo, hi), v));
   function launchPos() {
     const p = store.get(K.launch, null) || {};
@@ -269,10 +278,11 @@ export function mountSideChat({ me }) {
     return { x: clamp(fx * innerWidth - LS / 2, M, innerWidth - LS - M), y: clamp(fy * innerHeight - LS / 2, M, innerHeight - LS - M) };
   }
   function placeLaunch(pos = launchPos()) {
+    if (open && sheet()) pos = { x: innerWidth - LS - P, y: P }; // phones: the smiley docks in the sheet's corner
     launch.style.left = `${pos.x}px`; launch.style.top = `${pos.y}px`; launch.style.right = '';
     launch.dataset.side = pos.x + LS / 2 < innerWidth / 2 ? 'left' : 'right';
   }
-  const size = () => { const g = store.get(K.geo, null); return { w: g?.w || 420, h: g?.h || Math.min(600, innerHeight - 120) }; };
+  const size = () => { const g = store.get(K.geo, null); return { w: g?.w || 476, h: g?.h || Math.min(620, innerHeight - 80) }; };
   // Pick the roomiest side of the launcher, keep the panel touching it, never off screen.
   function anchorBox(L, want, { minW = 280, minH = 260 } = {}) {
     const right = L.left + L.width / 2 >= innerWidth / 2; // launcher on the right → grow leftwards
@@ -284,15 +294,24 @@ export function mountSideChat({ me }) {
     const y = clamp(down ? L.bottom + GAP : L.top - GAP - h, M, innerHeight - h - M);
     return { x, y, w, h, right, down };
   }
+  // The panel wraps the smiley: the smiley sits in the panel's corner, the rail runs along that edge.
   function placePanel() {
     panel.classList.toggle('is-sheet', sheet());
-    if (sheet()) { panel.style.cssText = ''; return; }
+    if (sheet()) { panel.style.cssText = ''; panel.dataset.side = 'sw'; placeLaunch(); return; }
     const L = launch.getBoundingClientRect();
-    const b = anchorBox(L, size());
-    Object.assign(panel.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
-    panel.style.setProperty('--ox', `${L.left + L.width / 2 - b.x}px`);
-    panel.style.setProperty('--oy', `${L.top + L.height / 2 - b.y}px`);
-    panel.dataset.side = `${b.down ? 's' : 'n'}${b.right ? 'w' : 'e'}`;
+    const want = size();
+    const right = L.left + L.width / 2 >= innerWidth / 2;
+    const below = innerHeight - L.top + P, above = L.bottom + P; // room if the panel hangs down / grows up
+    const down = below >= want.h || below >= above;
+    const w = clamp(want.w, Math.min(320, innerWidth - 4), innerWidth - 4);
+    const room = down ? innerHeight - (L.top - P) - 2 : L.bottom + P - 2;
+    const hh = clamp(want.h, Math.min(260, room), room);
+    const x = clamp(right ? L.right + P - w : L.left - P, 2, innerWidth - w - 2);
+    const y = clamp(down ? L.top - P : L.bottom + P - hh, 2, innerHeight - hh - 2);
+    Object.assign(panel.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${hh}px` });
+    panel.style.setProperty('--ox', `${L.left + L.width / 2 - x}px`);
+    panel.style.setProperty('--oy', `${L.top + L.height / 2 - y}px`);
+    panel.dataset.side = `${down ? 's' : 'n'}${right ? 'w' : 'e'}`;
   }
   function placeDrop() {
     const L = launch.getBoundingClientRect();
@@ -321,7 +340,7 @@ export function mountSideChat({ me }) {
       if (d.includes('w')) w = r.width - (ev.clientX - sx);
       if (d.includes('s')) hh = r.height + (ev.clientY - sy);
       if (d.includes('n')) hh = r.height - (ev.clientY - sy);
-      store.set(K.geo, { w: Math.round(clamp(w, 280, innerWidth - 2 * M)), h: Math.round(clamp(hh, 260, innerHeight - 2 * M)) });
+      store.set(K.geo, { w: Math.round(clamp(w, 320, innerWidth - 4)), h: Math.round(clamp(hh, 260, innerHeight - 4)) });
       placePanel();
     };
     const up = () => { panel.classList.remove('is-moving'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
@@ -351,11 +370,12 @@ export function mountSideChat({ me }) {
         store.set(K.launch, { x: (b.left + LS / 2) / innerWidth, y: (b.top + LS / 2) / innerHeight });
         return;
       }
-      setDrop(drop.hidden);
+      setOpen(!open);
     };
     launch.addEventListener('pointermove', move); launch.addEventListener('pointerup', up); launch.addEventListener('pointercancel', up);
   });
-  launch.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrop(drop.hidden); } });
+  launch.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); } });
+  launch.addEventListener('contextmenu', (e) => { e.preventDefault(); optionsMenu({ x: e.clientX, y: e.clientY }); });
 
   /* ---------- the chat list under the launcher ---------- */
   function setDrop(v) {
@@ -393,8 +413,11 @@ export function mountSideChat({ me }) {
     open = v;
     store.set(K.open, v);
     launch.classList.toggle('is-open', v);
+    launch.setAttribute('aria-expanded', String(v));
     if (v) {
+      setDrop(false);
       placePanel();
+      paintTabs();
       panel.classList.remove('is-in');
       panel.hidden = false;
       // Start from the launcher on every screen: commit the closed state first, then animate open.
@@ -407,6 +430,7 @@ export function mountSideChat({ me }) {
       panel.classList.remove('is-in');
       stopPoll();
       setTimeout(() => { if (!open) panel.hidden = true; }, prefersReducedMotion() ? 0 : 190);
+      placeLaunch();
       if (panel.contains(document.activeElement)) launch.focus({ preventScroll: true });
     }
   }
@@ -434,6 +458,9 @@ export function mountSideChat({ me }) {
     const linked = src().kind === 'anytype';
     const c0 = activeChat();
     input.placeholder = c0 ? `Message ${c0.name}` : 'Enter your message';
+    headName.textContent = c0?.name || (loaded ? 'No chat' : '');
+    headName.title = c0?.name || '';
+    paintRail(linked);
     if (drop.hidden) return;
     const pick = (id) => { setDrop(false); if (id !== active) select(id); setOpen(true); };
     const rows = chats.map((c) => {
@@ -458,6 +485,28 @@ export function mountSideChat({ me }) {
       act('more', 'Options', (b) => optionsMenu(b)),
       ...(open ? [act('chevronDown', 'Close chat', () => { setDrop(false); setOpen(false); }, { title: 'Esc' })] : []));
   }
+  // One squircle per chat, the same shape as the smiley; the active one is ringed in white.
+  function paintRail(linked = src().kind === 'anytype') {
+    const initials = (n) => String(n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+    railList.replaceChildren(...chats.map((c) => {
+      const face = c.photo ? urlOf(c.photo, () => paintRail()) : null;
+      const on = c.id === active;
+      return h('button', {
+        class: ['sc-ava', on && 'is-on', linked && !c.anytype_id && 'is-unlinked'], type: 'button', role: 'tab', 'aria-selected': String(on), 'aria-label': c.name, title: c.name, 'data-id': c.id,
+        onclick: () => { if (c.id !== active) select(c.id); },
+        ondblclick: () => renameChat(c),
+        oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); tabMenu({ x: e.clientX, y: e.clientY }, c); },
+      }, h('span', { class: 'sc-ava-in' }, face ? h('img', { src: face, alt: '', draggable: false }) : h('b', {}, initials(c.name))));
+    }));
+    railList.querySelector('.sc-ava.is-on')?.scrollIntoView?.({ block: 'nearest' });
+  }
+  railList.addEventListener('keydown', (e) => {
+    if (!['ArrowDown', 'ArrowUp'].includes(e.key)) return;
+    e.preventDefault(); e.stopPropagation();
+    const i = chats.findIndex((c) => c.id === active);
+    const n = chats[(i + (e.key === 'ArrowDown' ? 1 : -1) + chats.length) % chats.length];
+    if (n) { select(n.id); railList.querySelector(`[data-id="${n.id}"]`)?.focus(); }
+  });
   function select(id) {
     if (id === active) return;
     drafts.set(active, input.value);
@@ -532,8 +581,8 @@ export function mountSideChat({ me }) {
       c.photo ? { label: 'Remove picture', icon: 'close', onSelect: () => { c.photo = null; paintTabs(); acct.patchChat(c.id, { photo: null }).catch(() => {}); } } : null,
       src().kind === 'anytype' ? { label: c.anytype_id ? 'Change Anytype chat…' : 'Link to Anytype chat…', icon: 'link', onSelect: () => linkChat(c) } : null,
       '-',
-      i > 0 ? { label: 'Move left', icon: 'chevronLeft', onSelect: () => moveChat(c, -1) } : null,
-      i < chats.length - 1 ? { label: 'Move right', icon: 'chevronRight', onSelect: () => moveChat(c, 1) } : null,
+      i > 0 ? { label: 'Move up', icon: 'chevronUp', onSelect: () => moveChat(c, -1) } : null,
+      i < chats.length - 1 ? { label: 'Move down', icon: 'chevronDown', onSelect: () => moveChat(c, 1) } : null,
       '-',
       { label: 'Delete chat', icon: 'trash', danger: true, onSelect: () => deleteChat(c) },
     ]);
@@ -549,6 +598,7 @@ export function mountSideChat({ me }) {
       { label: 'New chat', icon: 'plus', onSelect: addChat },
       activeChat() ? { label: `Export ${activeChat().name}`, icon: 'download', onSelect: exportChat } : null,
       '-',
+      open ? { label: 'Close chat', icon: 'close', onSelect: () => setOpen(false) } : null,
       { label: 'Reset size & position', icon: 'fit', onSelect: () => { store.set(K.geo, null); store.set(K.launch, null); placeLaunch(); if (open) placePanel(); if (!drop.hidden) placeDrop(); } },
     ], { align: 'end' });
   }

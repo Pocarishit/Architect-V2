@@ -14,7 +14,7 @@
 // Drift is computed from the clock (start point + speed × time), so everyone sees the same motion.
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { menu, toast, popover, closeFloating } from '../core/ui.js';
+import { menu, toast, popover, closeFloating, dialog, confirmDialog } from '../core/ui.js';
 import { uid, store, prefersReducedMotion } from '../core/util.js';
 import { api, friendlyError } from '../data/api.js';
 import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia, fmtDur } from './media.js';
@@ -169,7 +169,7 @@ export function mountFleeting(root, el0, w) {
       weeks[key] = [...(weeks[key] || []), ...(v || [])];
     }
     const deadline = wk.deadline || keyOf(new Date(parseKey(start).getTime() + 55 * 86_400_000)); // default: 8 weeks
-    return { goal: wk.goal || DEFAULT_GOAL, start, deadline, weeks, tray: wk.tray || [], titles: wk.titles || {} };
+    return { goal: wk.goal ?? DEFAULT_GOAL, start, deadline, weeks, tray: wk.tray || [], titles: wk.titles || {} };
   };
   const setIdeas = (list, live = false) => {
     if (ideaView === 'shared') { if (poolOk()) poolSet(list, live); }
@@ -302,13 +302,20 @@ export function mountFleeting(root, el0, w) {
     syncIdeas();
     io = new IntersectionObserver((es) => { onScreen = es.some((x) => x.isIntersecting); }, { threshold: 0 });
     io.observe(field);
-    const loop = () => { raf = requestAnimationFrame(loop); if (onScreen && !document.hidden) place(); };
+    // Shared-space speed: the ice only runs while something is actually gliding (or just changed).
+    const gliding = (t) => ideas().some((i) => !i.parked && (i.vx || i.vy) && t - (i.t0 || 0) < 6000);
+    const loop = () => {
+      raf = requestAnimationFrame(loop);
+      if (!onScreen || document.hidden) return;
+      if (iceDirty || dragId || groupIds || gliding(Date.now())) { iceDirty = false; place(); }
+    };
     raf = requestAnimationFrame(loop);
   }
   function stopIdeas() { cancelAnimationFrame(raf); raf = 0; io?.disconnect(); io = null; field = null; }
 
   function syncIdeas() {
     if (!field) return;
+    iceDirty = true;
     const list = ideas();
     const live = new Set(list.map((i) => i.id));
     for (const [id, n] of nodes) if (!live.has(id)) { n.node.remove(); nodes.delete(id); }
@@ -320,7 +327,7 @@ export function mountFleeting(root, el0, w) {
         const node = h('div', { class: 'fi-idea', tabindex: 0, 'data-id': i.id, style: { '--he': sh.ext, '--hi': sh.int, '--hp': sh.pro, '--hc': sh.con } });
         bindIdea(node, i.id);
         field.append(node);
-        n = { node, w: 0, h: 0, tilt: g.tilt };
+        n = { node, w: 0, h: 0, tilt: 0 }; // Nov 19: ideas sit level, like Path items
         nodes.set(i.id, n);
       }
       if (n.node.textContent !== i.text) n.node.textContent = i.text;
@@ -363,6 +370,7 @@ export function mountFleeting(root, el0, w) {
   }
 
   const bumped = new Map(); // "a|b" → time, so one contact is one bump
+  let iceDirty = true;
   function place() {
     if (!field) return;
     const W = field.clientWidth, H = field.clientHeight;
@@ -376,7 +384,8 @@ export function mountFleeting(root, el0, w) {
       if (i.id === dragId || groupIds?.has(i.id)) continue;
       const m = motion(i, t);
       const px = Math.round(m.x * Math.max(0, W - n.w)), py = Math.round(m.y * Math.max(0, H - n.h));
-      n.node.style.transform = tf(px, py, n.tilt);
+      const t2 = tf(px, py, n.tilt);
+      if (n.node.style.transform !== t2) n.node.style.transform = t2; // resting ideas cost nothing per frame
       sideTo(n.node, px, n.w, W);
       boxes.push({ i, m, n, px, py, rx: Math.max(1, W - n.w), ry: Math.max(1, H - n.h) });
     }
@@ -446,6 +455,7 @@ export function mountFleeting(root, el0, w) {
           ghost.className = 'fi-idea fi-ghost';
           ghost.removeAttribute('tabindex');
           Object.assign(ghost.style, { width: `${nw}px`, height: `${nh}px`, transformOrigin: '0 0' });
+          ghost.style.setProperty('--fh', getComputedStyle(node).getPropertyValue('--fh').trim() || '268'); // keep its side colour off the field
           document.body.append(ghost);
         }
         if (ghost) ghost.hidden = !on;
@@ -797,25 +807,37 @@ export function mountFleeting(root, el0, w) {
   const PT = 44, PB = 52; // room for the GM / NEW MORNING labels
   let tl = null;
 
+  // Nov 19 — Story opens to the sides: no hard borders. x is a fraction of the column (0..1 is the old
+  // width) and can run past either side; the canvas grows sideways to hold whatever was pulled out, and
+  // a faint connector keeps each off-spine entry tied to its point in the day.
+  const X_MIN = -1.4, X_MAX = 2.4;
+  const clampX = (v) => Math.min(X_MAX, Math.max(X_MIN, v));
   function renderStory() {
     const keep = stage.scrollTop;
+    const keepLeft = tl && stage.contains(tl) ? stage.scrollLeft - (Number(tl.dataset.extl) || 0) : null;
     const list = [...story(), ...uploads.filter((u) => u.day === day)].sort((a, b) => a.m - b.m);
     const H = Math.max(stage.clientHeight || 520, 1560);
     const TH = H - PT - PB;
     const yOf = (m) => PT + (m / 1440) * TH;
-    tl = h('div', { class: 'fi-tl', style: { height: `${H}px` } },
+    const W0 = Math.max(260, (stage.clientWidth || 600) - 32);
+    const xs = list.map((f) => f.x ?? 0.5);
+    const lo = Math.min(0, ...xs.map((x) => x - 0.2)), hi = Math.max(1, ...xs.map((x) => x + 0.2));
+    const extL = Math.round(-lo * W0), extR = Math.round((hi - 1) * W0);
+    tl = h('div', { class: ['fi-tl', (extL || extR) && 'is-wide'], style: { height: `${H}px`, width: `${W0}px`, marginLeft: `${16 + extL}px`, marginRight: `${16 + extR}px` } },
       h('i', { class: 'fi-spine', style: { top: `${PT - 14}px`, bottom: `${PB - 18}px` } }),
       h('span', { class: 'fi-mark is-top', style: { top: `${PT - 34}px` } }, 'GM'),
       ...SETPOINTS.slice(1).map((s) => h('i', { class: 'fi-tick', style: { top: `${yOf(s.from)}px`, '--sp': s.color }, title: `${s.label} · ${clockOf(s.from)}` })),
       h('span', { class: 'fi-mark is-bottom', style: { top: `${PT + TH + 8}px` } }, 'NEW MORNING'),
       h('i', { class: 'fi-tick is-end', style: { top: `${PT + TH}px` } }));
     tl.dataset.th = TH;
+    tl.dataset.extl = extL;
     if (day === storyKey()) { const now = storyMin(); tl.append(h('span', { class: 'fi-now', style: { top: `${yOf(now)}px`, '--sp': spOf(now).color }, title: `Now · ${clockOf(now)}` }, h('i'), h('b', {}, 'NOW'))); }
     if (!list.length) tl.append(h('p', { class: 'fi-story-empty' }, day === storyKey() ? 'Nothing told yet today.' : 'An untold day.', h('br'), 'Type below, or drop photos and videos anywhere on the line.'));
     for (const f of list) tl.append(fragment(f, yOf));
     lookupWho(list.map((f) => f.by), () => { if (tab === 'story') refresh(); });
     stage.replaceChildren(tl);
     stage.scrollTop = keep;
+    stage.scrollLeft = extL + (keepLeft ?? 0);
     requestAnimationFrame(() => tl?.querySelectorAll('.fi-frag').forEach(connect));
   }
 
@@ -833,7 +855,10 @@ export function mountFleeting(root, el0, w) {
     } else content = [h('span', { class: 'fi-frag-text' }, f.text)];
     const more = h('button', { class: 'fi-frag-more', type: 'button', 'aria-label': 'Fragment options', onclick: (e) => { e.stopPropagation(); fragMenu(e.currentTarget, f); } }, icon('more', 14));
     const card = h('div', { class: ['fi-card', `is-${f.kind}`, f.uploading && 'is-uploading'], style: { '--sp': sp.color } }, label, whoHead(f), ...content, f.uploading ? h('span', { class: 'dots-loader sm' }, h('i'), h('i'), h('i')) : more);
-    const node = h('div', { class: 'fi-frag', 'data-id': f.id, style: { top: `${yOf(f.m)}px`, left: `${(f.x ?? 0.5) * 100}%` } }, card);
+    const x = f.x ?? 0.5;
+    const far = x < 0.1 || x > 0.9; // pulled out into the open space: it sits a touch askew, like a loose note
+    if (far) card.style.rotate = `${(glassOf(f.id).tilt * 0.55).toFixed(2)}deg`;
+    const node = h('div', { class: ['fi-frag', far && 'is-off'], 'data-id': f.id, style: { top: `${yOf(f.m)}px`, left: `${x * 100}%` } }, card);
     if (!f.uploading) bindFrag(node, card, label, f);
     return node;
   }
@@ -880,7 +905,7 @@ export function mountFleeting(root, el0, w) {
         moved = true;
         node.classList.add('is-moving');
         node.querySelector('.fi-link')?.remove();
-        x = Math.min(0.92, Math.max(0.08, x0 + dx / tl.clientWidth));
+        x = clampX(x0 + dx / tl.clientWidth);
         m = Math.round(Math.min(1439, Math.max(0, m0 + (dy / TH) * 1440)));
         node.style.left = `${x * 100}%`;
         node.style.top = `${PT + (m / 1440) * TH}px`;
@@ -951,11 +976,17 @@ export function mountFleeting(root, el0, w) {
   function nextSpot(k, list) {
     const GAP = 110; // minutes of line a card needs on its side
     const m = k === storyKey() ? storyMin() : Math.min(1439, list.length ? Math.max(...list.map((q) => q.m)) + 75 : 30);
-    const busy = (side) => list.some((q) => ((q.x ?? 0.5) < 0.5) === (side === 'left') && Math.abs(q.m - m) < GAP);
+    // Busy stretches spread outwards instead of stacking: near columns first, then the open space.
+    // Lanes are a card's width apart, so neighbours never overlap however narrow the widget is.
+    const W0 = Math.max(260, (stage.clientWidth || 600) - 32);
+    const step = Math.max(0.42, 300 / W0);
+    const lane = (x) => list.some((q) => Math.abs((q.x ?? 0.5) - x) < step / 2 && Math.abs(q.m - m) < GAP);
     const last = [...list].sort((a, b) => b.m - a.m)[0];
-    const prefer = last && (last.x ?? 0.5) < 0.5 ? 'right' : 'left';
-    const side = !busy(prefer) ? prefer : !busy(prefer === 'left' ? 'right' : 'left') ? (prefer === 'left' ? 'right' : 'left') : prefer;
-    return { m, x: side === 'left' ? 0.29 : 0.71 };
+    const leftFirst = !(last && (last.x ?? 0.5) < 0.5);
+    const L = (k) => clampX(0.29 - k * step), R = (k) => clampX(0.71 + k * step);
+    const order = [];
+    for (let k = 0; k < 3; k++) order.push(...(leftFirst ? [L(k), R(k)] : [R(k), L(k)]));
+    return { m, x: order.find((x) => !lane(x)) ?? order[0] };
   }
 
   function addFragment(f, k = day, at = null) {
@@ -1004,7 +1035,7 @@ export function mountFleeting(root, el0, w) {
     const scale = r.width / (tl.clientWidth || 1);
     const TH = Number(tl.dataset.th);
     const m = Math.round(Math.min(1439, Math.max(0, (((e.clientY - r.top) / scale - PT) / TH) * 1440)));
-    const x = Math.min(0.85, Math.max(0.15, (e.clientX - r.left) / r.width));
+    const x = clampX((e.clientX - r.left) / r.width);
     addMediaToStory(files, { m, x });
   });
 
@@ -1055,7 +1086,7 @@ export function mountFleeting(root, el0, w) {
   // Every week has a renamable title (stored in weekly.titles by Monday key) and its list of
   // "what's needed to be true". Weeks with nothing in them simply show up blank.
   let viewWeek = null;     // Monday key of the week on screen (null → this week)
-  const wkSwipe = { acc: 0, t: 0, lock: 0 };
+  let wkJump = false;      // the next Weekly render scrolls the focused week into view
   const sel = new Set();   // selected task ids (Weekly)
   let anchorId = null;     // for shift-click ranges
   const SLOT_HINTS = ['add a key requirement…', 'add another requirement…', 'add one more requirement…'];
@@ -1071,7 +1102,7 @@ export function mountFleeting(root, el0, w) {
     const keys = planWeeks(weekly());
     const i = keys.indexOf(weekOnScreen(weekly(), keys)) + d;
     if (i < 0 || i >= keys.length) return;
-    viewWeek = keys[i]; sel.clear(); renderWeekly();
+    viewWeek = keys[i]; sel.clear(); wkJump = true; renderWeekly();
   }
 
   function renderWeekly() {
@@ -1095,71 +1126,151 @@ export function mountFleeting(root, el0, w) {
     const daysLeft = Math.ceil((parseKey(p.deadline) - new Date(new Date().toDateString())) / 86_400_000);
     const a = parseKey(k), b = new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6);
 
-    const goal = h('button', { class: 'fi-goal', type: 'button', title: 'Rename the goal', onclick: () => editGoal(goal, p.goal) }, `GOAL: ${p.goal}`.toUpperCase());
-    const due = h('button', { class: ['fi-due', daysLeft < 0 && 'is-over'], type: 'button', title: 'Set the start and deadline', onclick: (e) => datesPop(e.currentTarget, p) },
-      icon('hourglass', 13),
-      `DUE ${shortDate(parseKey(p.deadline)).toUpperCase()} – `,
-      h('b', {}, daysLeft < 0 ? 'PAST DEADLINE' : left === 1 ? 'LAST WEEK' : `${left} WEEKS LEFT`));
+    // Nov 19 — the Weekly answers to the goal. The goal is the one thing you configure: click it and its
+    // menu opens right there. The weeks run down a timeline and stay hands-on — double-click a title to
+    // rename it, check requirements on their pills. The week in focus opens into a card that carries
+    // nothing but its own content; the due date waits at the final week, where the scroll lands.
+    const goalName = p.goal || 'Set a goal';
+    const goal = h('button', {
+      class: ['fi-goal', 'fi-wl-goal', !p.goal && 'is-unset'], type: 'button', 'aria-haspopup': 'menu', title: 'Goal options',
+      onclick: (e) => goalMenu(e.currentTarget, p),
+    }, `GOAL: ${goalName}`.toUpperCase());
+    const leftTxt = daysLeft < 0 ? 'PAST DEADLINE' : left <= 1 ? 'LAST WEEK' : `${left} WEEKS LEFT`;
+    const head = h('div', { class: 'fi-wl-head' }, goal, h('span', { class: ['fi-wl-left', daysLeft < 0 && 'is-over'] }, leftTxt));
 
-    const title = h('button', { class: 'fi-wk-name', type: 'button', title: 'Rename this week', onclick: () => editWeekTitle(title, k, p) },
-      (p.titles?.[k] || `WEEK ${n}`).toUpperCase());
-    const slots = Math.max(1, SLOT_HINTS.length - list.length);
-    const hintAt = (i) => SLOT_HINTS[Math.min(list.length + i, SLOT_HINTS.length - 1)];
-    const arrow = (d, label) => {
-      const to = keys[idx + d];
-      return h('button', {
-        type: 'button', class: ['fi-wk-arrow', d < 0 ? 'is-prev' : 'is-next'], disabled: !to,
-        'aria-label': label, title: to ? `${label} · ${shortDate(parseKey(to))}` : label,
-        'data-wk': to || null, onclick: () => stepWeek(d),
-      }, icon(d < 0 ? 'chevronLeft' : 'chevronRight', 24));
-    };
-    const card = h('section', {
-      class: ['fi-wk', 'fi-wk-card', k === now && 'is-now', k < now && 'is-past', k > lastWk && 'is-after'],
-      'data-wk': k, 'aria-label': `${p.titles?.[k] || `Week ${n}`}${k === now ? ', this week' : ''}`,
-    },
-      title,
-      h('p', { class: 'fi-wk-sub' }, 'WHAT’S NEEDED TO BE TRUE'),
-      h('div', { class: 'fi-wk-list' }, list.map((x) => taskRow(x, k))),
-      Array.from({ length: slots }, (_, i) => adder(k, hintAt(i), i === 0)));
-    // The week's dates live in the card's tooltip now; the screen is just the goal and this week.
-    card.title = `${shortDate(a)} – ${shortDate(b)}${k === now ? ' · this week' : k > lastWk ? ' · after the deadline' : k === lastWk ? ' · due week' : k < now ? ' · past' : ''} · ← → or swipe to change week`;
+    const nOf = (key) => Math.round((parseKey(key) - parseKey(first)) / (7 * 86_400_000)) + 1;
+    const rows = keys.map((key) => {
+      const items = p.weeks[key] || [];
+      const doneN = items.filter((x) => x.done).length;
+      const complete = items.length > 0 && doneN === items.length;
+      const focus = key === k;
+      const state = complete ? 'is-complete' : key === now ? 'is-now' : key < now ? 'is-past' : 'is-future';
+      const isDue = key === lastWk;
+      const custom = p.titles?.[key] || '';
+      const wkLabel = custom || `WEEK ${nOf(key)}`;
+      const node = h('span', { class: 'fi-wl-node', 'aria-hidden': 'true' }, complete ? icon('check', 10, { weight: 3 }) : null);
+      const when = h('span', { class: 'fi-wl-when' }, h('b', {}, `W${nOf(key)}`), shortDate(parseKey(key)).toUpperCase());
+      let body;
+      if (focus) {
+        const title = h('button', { class: 'fi-wk-name fi-wl-title', type: 'button', title: 'Double-click to rename', ondblclick: () => editWeekTitle(title, key, p) }, wkLabel.toUpperCase());
+        const slots = Math.max(1, SLOT_HINTS.length - items.length);
+        const hintAt = (i) => SLOT_HINTS[Math.min(items.length + i, SLOT_HINTS.length - 1)];
+        body = h('section', { class: ['fi-wk', 'fi-wk-card', 'fi-wl-card', key === now && 'is-now'], 'data-wk': key, 'aria-label': wkLabel },
+          title,
+          h('p', { class: 'fi-wk-sub fi-wl-sub' }, key === now ? 'WHAT’S NEEDED TO BE TRUE THIS WEEK' : key < now ? 'WHAT WAS NEEDED TO BE TRUE THAT WEEK' : 'WHAT’S NEEDED TO BE TRUE THAT WEEK'),
+          h('div', { class: 'fi-wk-list' }, items.map((x) => taskRow(x, key))),
+          Array.from({ length: slots }, (_, i) => adder(key, hintAt(i), i === 0)),
+          isDue ? h('span', { class: 'fi-wl-due is-in-card' }, `DUE ${shortDate(parseKey(p.deadline)).toUpperCase()}`) : null);
+      } else {
+        // One click opens the week; a double-click renames it on the spot (the open waits a beat for it).
+        let openT = 0;
+        const title = h('span', { class: 'fi-wl-bar-title' }, custom ? custom.toUpperCase() : '');
+        body = h('div', {
+          role: 'button', tabindex: 0, class: 'fi-wl-bar', 'data-wk': key, title: `${shortDate(parseKey(key))} – ${shortDate(new Date(parseKey(key).getTime() + 6 * 86_400_000))} · click to open · double-click to rename`,
+          onclick: (e) => {
+            if (e.target.closest('input')) return;
+            clearTimeout(openT);
+            if (e.detail > 1) return;
+            openT = setTimeout(() => { viewWeek = key; sel.clear(); wkJump = true; renderWeekly(); }, 220);
+          },
+          ondblclick: (e) => { if (e.target.closest('input')) return; clearTimeout(openT); editWeekTitle(title, key, p); },
+          onkeydown: (e) => { if (e.key === 'Enter' && !e.target.closest('input')) { e.preventDefault(); viewWeek = key; sel.clear(); wkJump = true; renderWeekly(); } },
+        },
+        h('span', { class: ['fi-wl-ring', complete && 'is-done'] }),
+        title,
+        items.length ? h('span', { class: 'fi-wl-count' }, `${doneN}/${items.length}`) : null,
+        isDue ? h('span', { class: 'fi-wl-due' }, `DUE ${shortDate(parseKey(p.deadline)).toUpperCase()}`) : null);
+      }
+      return h('li', { class: ['fi-wl-row', state, focus && 'is-focus', isDue && 'is-due'], 'data-key': key }, when, node, body);
+    });
 
     const look = weeklyLook();
     const bgUrl = look.bg ? urlOf(look.bg, () => tab === 'weekly' && refresh()) : null;
     const view = h('div', {
-      class: ['fi-weekly', look.bg && 'has-bg'], 'data-wk-theme': look.theme || 'default',
+      class: ['fi-weekly', 'is-line', look.bg && 'has-bg'], 'data-wk-theme': look.theme || 'default',
       style: bgUrl ? { '--wk-img': `url("${bgUrl}")` } : null,
     },
-      h('div', { class: 'fi-wk-top' }, goal, due),
-      // The edge arrows only appear while you drag a requirement (drop on one to send it to that week).
-      h('div', { class: 'fi-wk-stage' }, arrow(-1, 'Previous week'), card, arrow(1, 'Next week')),
+      head,
+      h('ol', { class: 'fi-wl', 'aria-label': 'Weeks', style: { '--wl-fill': `${Math.round(100 * Math.max(0, Math.min(1, (keys.filter((x) => x <= now).length) / Math.max(1, keys.length))))}%` } }, rows),
       selBar(p));
-    // Trackpad sideways scroll or a swipe steps weeks — no chevrons on screen.
-    view.addEventListener('wheel', (e) => {
-      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY) * 1.2) return;
-      e.preventDefault(); e.stopPropagation();
-      const t = performance.now();
-      if (t < wkSwipe.lock) return; // one gesture, one week (momentum scrolling keeps firing)
-      if (t - wkSwipe.t > 300) wkSwipe.acc = 0;
-      wkSwipe.t = t; wkSwipe.acc += e.deltaX;
-      if (Math.abs(wkSwipe.acc) > 80) { const d = Math.sign(wkSwipe.acc); wkSwipe.acc = 0; wkSwipe.lock = t + 650; stepWeek(d); }
-    }, { passive: false });
-    view.addEventListener('pointerdown', (e) => {
-      if (e.pointerType !== 'touch' || e.target.closest('.fi-task, input, button')) return;
-      const sx = e.clientX, sy = e.clientY;
-      const up = (ev) => {
-        view.removeEventListener('pointerup', up);
-        const dx = ev.clientX - sx, dy = ev.clientY - sy;
-        if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) stepWeek(dx < 0 ? 1 : -1);
-      };
-      view.addEventListener('pointerup', up);
-    });
-    // Background & theme now live on a right-click of the empty Weekly space.
+    // Background & theme live on a right-click of the empty Weekly space.
     view.addEventListener('contextmenu', (e) => {
       if (e.target.closest('.fi-task, input, [contenteditable="true"]')) return;
       e.preventDefault(); lookMenu({ x: e.clientX, y: e.clientY });
     });
+    const keepTop = stage.querySelector('.fi-weekly.is-line') ? stage.scrollTop : null;
     stage.replaceChildren(view);
+    if (keepTop != null && !wkJump) stage.scrollTop = keepTop;
+    else requestAnimationFrame(() => view.querySelector('.fi-wl-row.is-focus')?.scrollIntoView({ block: 'center', behavior: wkJump && keepTop != null && !prefersReducedMotion() ? 'smooth' : 'auto' }));
+    wkJump = false;
+  }
+
+  /* ---- the goal's own menu: the one place the plan is configured ---- */
+  function goalMenu(anchor, p) {
+    menu(anchor, [
+      { label: 'Edit goal name', icon: 'edit', onSelect: () => { const b = stage.querySelector('.fi-wl-goal'); if (b) editGoal(b, p.goal); } },
+      { label: 'Edit weeks', icon: 'list', onSelect: () => editWeeks() },
+      { label: 'Add week', icon: 'plus', onSelect: () => addWeek() },
+      { label: 'Set due date', icon: 'calendar', onSelect: () => datesPop(anchor, weekly()) },
+      { label: 'Reset progress', icon: 'history', onSelect: () => resetProgress() },
+      '-',
+      { label: 'Delete goal', icon: 'trash', danger: true, onSelect: () => deleteGoal() },
+    ], { align: 'end' });
+  }
+  function addWeek() {
+    const p = weekly();
+    const d = parseKey(p.deadline);
+    setWeekly({ deadline: keyOf(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7)) });
+    renderWeekly();
+    toast('Added a week — the due date moved out by 7 days.', { ms: 2400 });
+  }
+  function resetProgress() {
+    const p = weekly();
+    const before = { weeks: p.weeks, tray: p.tray };
+    if (!Object.values(p.weeks).flat().some((x) => x.done)) { toast('Nothing checked off yet.'); return; }
+    setWeekly(eachList(p, (l) => l.map((y) => ({ ...y, done: false }))));
+    renderWeekly();
+    toast('Progress reset.', { ms: 4000, action: { label: 'Undo', onClick: () => { setWeekly(before); renderWeekly(); } } });
+  }
+  async function deleteGoal() {
+    const p = weekly();
+    if (!(await confirmDialog(`Delete ${p.goal ? `“${p.goal}”` : 'this goal'}?`, 'Its weeks, titles and requirements go with it.'))) return;
+    const before = { ...p };
+    const start = keyOf(mondayOf(new Date()));
+    setWeekly({ goal: '', start, deadline: keyOf(new Date(parseKey(start).getTime() + 55 * 86_400_000)), weeks: {}, tray: [], titles: {} });
+    viewWeek = null; sel.clear(); wkJump = true;
+    renderWeekly();
+    toast('Goal deleted.', { ms: 5000, action: { label: 'Undo', onClick: () => { setWeekly(before); renderWeekly(); } } });
+  }
+  // Rearrange weeks: each week (its title and its requirements) can swap places with a neighbour,
+  // be renamed, or be cleared. The dates stay put — the content moves.
+  async function editWeeks() {
+    const p0 = weekly();
+    const keys = planWeeks(p0);
+    const first = keyOf(mondayOf(parseKey(p0.start)));
+    let order = keys.map((key) => ({ key, title: p0.titles?.[key] || '', items: p0.weeks[key] || [] }));
+    const list = h('ol', { class: 'fi-ew' });
+    const paintList = () => list.replaceChildren(...order.map((o, i) => {
+      const inp = h('input', { class: 'input sm fi-ew-title', value: o.title, maxlength: 40, placeholder: `Week ${i + 1}`, 'aria-label': `Week ${i + 1} title`, oninput: (e) => { o.title = e.target.value; } });
+      const mv = (d) => { const j = i + d; if (j < 0 || j >= order.length) return; [order[i], order[j]] = [order[j], order[i]]; paintList(); list.querySelectorAll('.fi-ew-title')[j]?.focus(); };
+      return h('li', { class: 'fi-ew-row' },
+        h('span', { class: 'fi-ew-when' }, `W${Math.round((parseKey(keys[i]) - parseKey(first)) / (7 * 86_400_000)) + 1} · ${shortDate(parseKey(keys[i])).toUpperCase()}`),
+        inp,
+        h('span', { class: 'fi-ew-n' }, o.items.length ? `${o.items.length}` : '—'),
+        h('button', { type: 'button', class: 'icon-btn sm', 'aria-label': 'Move up', disabled: i === 0, onclick: () => mv(-1) }, icon('chevronUp', 14)),
+        h('button', { type: 'button', class: 'icon-btn sm', 'aria-label': 'Move down', disabled: i === order.length - 1, onclick: () => mv(1) }, icon('chevronDown', 14)));
+    }));
+    paintList();
+    const ok = await dialog({
+      title: 'Edit weeks', width: 520, className: 'fi-ew-dlg',
+      body: h('div', { class: 'stack' }, h('p', { class: 'muted fi-ew-hint' }, 'Rename weeks or move a week’s requirements up and down the plan. Dates stay fixed.'), list),
+      actions: [{ label: 'Cancel', value: null }, { label: 'Save', primary: true, value: true }],
+    });
+    if (!ok) return;
+    const weeks = {}, titles = {};
+    order.forEach((o, i) => { const key = keys[i]; if (o.items.length) weeks[key] = o.items; const t = o.title.trim(); if (t) titles[key] = t; });
+    setWeekly({ weeks, titles });
+    renderWeekly();
   }
 
   function editWeekTitle(btn, k, p) {
@@ -1458,6 +1569,7 @@ export function mountFleeting(root, el0, w) {
       if (gone) return; gone = true;
       const v = inp.value.trim();
       if (save && v && v !== current) setWeekly({ goal: v });
+      wkJump = false;
       renderWeekly();
     };
     inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });

@@ -2,7 +2,9 @@
 //   chat  — a thread, optionally connected to another object (a sticky, a widget, a Blueprint portal…).
 //           Resizable, scrolls on hover, exports to Markdown / text / JSON.
 //   tts   — Voice chat: every message is read out loud (text-to-speech) on everyone's screen,
-//           the moment it's sent. Your own plays as you hit Enter.
+//           the moment it's sent. Your own plays as you hit Enter. Nov 19: its text side is the same chat
+//           as Side Chat and the Variables chat — the same bubbles and composer — and takes images
+//           (attach with +, paste, or drop them in).
 // Messages live on the widget object itself, so they sync live with the rest of the Space.
 // Two people sending at the same moment can overwrite each other; each sender keeps its message
 // pending until it shows up in the shared copy and re-adds it if it was lost.
@@ -12,6 +14,8 @@ import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { menu, toast } from '../core/ui.js';
 import { uid, store } from '../core/util.js';
+import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
+import { uploadMedia, pickMedia, mediaFiles } from './media.js';
 
 const MAX = 400; // messages kept on the object (older ones drop off; export before if you need them all)
 
@@ -54,6 +58,7 @@ export function labelOf(el) {
 }
 
 /* ---------------- export ---------------- */
+const filesNote = (m) => (m.files?.length ? `[${m.files.length} ${m.files[0].kind === 'video' ? 'video' : 'photo'}${m.files.length > 1 ? 's' : ''}]` : '');
 function download(name, text, type) {
   const a = h('a', { href: URL.createObjectURL(new Blob([text], { type })), download: name });
   document.body.append(a);
@@ -66,8 +71,8 @@ const fileBase = (title) => (title || 'chat').replace(/[^\w\- ]+/g, '').trim().r
 function exportChat(anchor, title, list) {
   if (!list.length) { toast('Nothing to export yet.'); return; }
   const md = () => [`# ${title}`, `_Exported ${stamp(Date.now())} · ${list.length} message${list.length === 1 ? '' : 's'}_`, '',
-    ...list.map((m) => `**${m.name || 'Someone'}** · ${stamp(m.ts)}  \n${String(m.text).replace(/\n/g, '  \n')}\n`)].join('\n');
-  const txt = () => [title, '', ...list.map((m) => `[${stamp(m.ts)}] ${m.name || 'Someone'}: ${m.text}`)].join('\n');
+    ...list.map((m) => `**${m.name || 'Someone'}** · ${stamp(m.ts)}  \n${String(m.text || filesNote(m)).replace(/\n/g, '  \n')}\n`)].join('\n');
+  const txt = () => [title, '', ...list.map((m) => `[${stamp(m.ts)}] ${m.name || 'Someone'}: ${m.text || filesNote(m)}`)].join('\n');
   menu(anchor, [
     { header: 'Export chat' },
     { label: 'Copy as text', icon: 'copy', onSelect: async () => { try { await navigator.clipboard.writeText(txt()); toast('Copied.'); } catch { toast('Couldn’t copy — use a download instead.', { tone: 'error' }); } } },
@@ -91,12 +96,45 @@ export function mountChat(body, el, w, { tts = false } = {}) {
   const mountedAt = Date.now();
   let retry = null;
 
-  const list = h('div', { class: 'ch-list', 'data-wheel': '', role: 'log', 'aria-live': tts ? 'off' : 'polite' });
-  const input = h('textarea', { class: 'ch-input', rows: 1, maxlength: 2000, placeholder: 'Message', 'aria-label': 'Message' });
+  const list = h('div', { class: ['ch-list', tts && 'sc-list'], 'data-wheel': '', role: 'log', 'aria-live': tts ? 'off' : 'polite' });
+  const input = h('textarea', { class: ['ch-input', tts && 'sc-input'], rows: 1, maxlength: 2000, placeholder: tts ? 'Enter your message' : 'Message', 'aria-label': 'Message' });
   const sendBtn = h('button', { class: 'ch-send', type: 'button', 'aria-label': 'Send', onclick: () => send() }, icon('send', 16));
   const about = h('button', { class: 'ch-about', type: 'button', hidden: true, onclick: () => goAbout() });
   const typingRow = h('div', { class: 'ch-typing', 'aria-live': 'polite', hidden: true });
-  body.append(h('div', { class: ['ch', tts && 'is-tts'] }, about, list, typingRow, h('div', { class: 'ch-compose' }, input, sendBtn)));
+  // Voice chat's composer is the Side Chat composer: + for photos and videos, Enter sends.
+  let sending = false;
+  const plus = tts ? h('button', { class: 'sc-plus', type: 'button', 'aria-label': 'Add a photo or video', title: 'Add a photo or video', onclick: async () => { const fs = await pickMedia({ accept: 'image/*,video/*' }); if (fs.length) sendFiles(fs); } }, icon('plus', 18)) : null;
+  const root = h('div', { class: ['ch', tts && 'is-tts is-sc'] }, about, list, typingRow,
+    tts ? h('div', { class: 'ch-compose sc-compose' }, plus, input) : h('div', { class: 'ch-compose' }, input, sendBtn));
+  body.append(root);
+  if (tts) {
+    root.addEventListener('paste', (e) => {
+      const fs = mediaFiles(e.clipboardData);
+      if (!fs.length) return;
+      e.preventDefault(); e.stopPropagation();
+      sendFiles(fs);
+    });
+    root.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); e.stopPropagation(); root.classList.add('is-drop'); } });
+    root.addEventListener('dragleave', (e) => { if (!root.contains(e.relatedTarget)) root.classList.remove('is-drop'); });
+    root.addEventListener('drop', (e) => {
+      root.classList.remove('is-drop');
+      const fs = mediaFiles(e.dataTransfer);
+      if (!fs.length) return;
+      e.preventDefault(); e.stopPropagation();
+      sendFiles(fs);
+    });
+  }
+  async function sendFiles(fs) {
+    if (sending) return;
+    sending = true; plus?.classList.add('is-busy');
+    const files = [];
+    for (const f of fs.slice(0, 10)) {
+      try { const up = await uploadMedia(f); files.push({ kind: up.kind, path: up.path, name: up.name, dur: up.dur }); }
+      catch (e) { toast(e?.message || 'That file didn’t upload.', { tone: 'error', ms: 4000 }); }
+    }
+    sending = false; plus?.classList.remove('is-busy');
+    if (files.length) send('', files);
+  }
 
   /* "… is typing" — out over the live channel while you type, in from everyone else */
   const typers = new Map(); // uid → { name, until }
@@ -174,16 +212,16 @@ export function mountChat(body, el, w, { tts = false } = {}) {
   }
 
   /* sending + keeping messages from getting lost */
-  function send(text = input.value) {
+  function send(text = input.value, files = null) {
     const t = String(text || '').trim();
-    if (!t) return;
-    const m = { id: uid(), by: me.id, name: me.username || 'Me', text: t.slice(0, 2000), ts: Date.now() };
+    if (!t && !files?.length) return;
+    const m = { id: uid(), by: me.id, name: me.username || 'Me', text: t.slice(0, 2000), ts: Date.now(), ...(files?.length ? { files } : {}) };
     mineSent.set(m.id, m);
     mineAfter.set(m.id, (w.current().messages || []).at(-1)?.id || null); // where it went, in case it has to be put back
     known.add(m.id);
     if (text === input.value) { input.value = ''; grow(); stopTyping(); }
     commit();
-    if (tts && !muted) speak(m);
+    if (tts && !muted && m.text) speak(m);
     paint(true);
   }
   function commit() {
@@ -220,6 +258,30 @@ export function mountChat(body, el, w, { tts = false } = {}) {
     if (sig === lastSig) return;
     lastSig = sig;
     const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 30;
+    if (tts) {
+      // The Side Chat / Variables bubbles: yours on the right, everyone else's grey on the left with a name.
+      const rows = [];
+      let lastDay = '', prev = null;
+      for (const m of msgs) {
+        const dl = chatDayLabel(m.ts);
+        if (dl !== lastDay) { rows.push(dayRow(m.ts)); lastDay = dl; prev = null; }
+        const mine = m.by === me.id;
+        const cont = !!prev && prev.by === m.by && m.ts - prev.ts < CHAT_GROUP_MS;
+        rows.push(bubbleRow({ id: m.id, text: m.text, files: m.files, at: m.ts }, {
+          cont, theirs: !mine, who: m.name || 'Someone',
+          onAsset: () => { lastSig = ''; paint(); },
+          onDbl: (e) => { if (m.text && !e.target.closest('.sc-file')) speak(m, { force: true }); },
+          onMenu: (e) => m.text && menu({ x: e.clientX, y: e.clientY }, [
+            m.text ? { label: 'Play again', icon: 'play', onSelect: () => speak(m, { force: true }) } : null,
+            m.text ? { label: 'Copy', icon: 'copy', onSelect: async () => { try { await navigator.clipboard.writeText(m.text); toast('Copied.', { ms: 1400 }); } catch {} } } : null,
+          ].filter(Boolean)),
+        }));
+        prev = m;
+      }
+      list.replaceChildren(...(rows.length ? rows : [h('p', { class: 'sc-empty' }, 'Messages here are read out loud for everyone in the Space. Photos and videos can go in too.')]));
+      if (stick || atBottom) list.scrollTop = list.scrollHeight;
+      return;
+    }
     let day = '';
     const rows = [];
     let prev = null;
@@ -250,7 +312,7 @@ export function mountChat(body, el, w, { tts = false } = {}) {
         if (known.has(m.id)) continue;
         known.add(m.id);
         if (typers.delete(m.by)) paintTyping();
-        if (tts && !muted && m.by !== me.id && m.ts > mountedAt - 15_000) speak(m);
+        if (tts && !muted && m.text && m.by !== me.id && m.ts > mountedAt - 15_000) speak(m);
       }
       // Lost in a simultaneous send (their copy didn't have yours yet): add it back.
       if ([...mineSent.keys()].some((id) => !ids.has(id))) { clearTimeout(retry); retry = setTimeout(commit, 250 + Math.random() * 250); }

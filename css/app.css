@@ -589,3 +589,22 @@ body.is-lassoing, body.is-lassoing * { user-select: none !important; cursor: cro
   --gold: #d39a12; --gold-hi: #e8b22e;
   background: linear-gradient(135deg, color-mix(in srgb, var(--gold) 8%, #2a2925), color-mix(in srgb, var(--gold) 4%, #222));
 }
+
+/* ============================================================
+   Nov 19 — Path on a phone: setpoints as tabs, one at a time, the next one peeking in below
+   ============================================================ */
+.pphone { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.ptabs { flex: none; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 10px 12px 8px; }
+.ptabs::-webkit-scrollbar { display: none; }
+.ptab {
+  flex: none; height: 32px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line-2);
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--fg-3); white-space: nowrap;
+}
+.ptab.is-on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.ptab.is-live:not(.is-on) { color: var(--fg); border-color: var(--fg-3); }
+.ptab.is-live::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 8px; border-radius: 50%; background: var(--red); vertical-align: 1px; }
+.paths.is-embedded .pboard.is-tabbed { flex: 1; min-height: 0; display: block; overflow-y: auto; overflow-x: hidden; padding: 4px 12px 24px; }
+.paths.is-embedded .pboard.is-tabbed > .pcol, .paths.is-embedded .pboard.is-tabbed .ppeek > .pcol { width: 100%; max-width: none; min-height: 0; }
+.paths.is-embedded .pboard.is-tabbed .ptask { font-size: 15px; padding: 12px 12px; }
+.paths.is-embedded .pboard.is-tabbed .pcheck { width: 22px; height: 22px; }
+.ppeek { margin-top: 14px; opacity: .45; max-height: 140px; overflow: hidden; -webkit-mask-image: linear-gradient(#000 30%, transparent); mask-image: linear-gradient(#000 30%, transparent); cursor: pointer; }

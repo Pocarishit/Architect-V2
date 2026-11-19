@@ -190,14 +190,8 @@ export class Editor {
     if (!this._moving) { this._moving = true; this.vp.classList.add('is-moving'); }
     clearTimeout(this._movingT);
     this._movingT = setTimeout(() => { this._moving = false; this.vp.classList.remove('is-moving'); this.settleCamera(); }, 160);
-    if (this._zz === z) {
-      // Panning at a settled zoom: just slide the already-sharp board.
-      this.world.style.transform = `translate(${x / z}px, ${y / z}px)`;
-    } else {
-      this._zz = null;
-      this.world.style.zoom = '';
-      this.world.style.transform = `translate(${x}px, ${y}px) scale(${z})`;
-    }
+    this._zz = null;
+    this.world.style.transform = `translate(${x}px, ${y}px) scale(${z})`;
     this.vp.style.setProperty('--iz', String(1 / z));
     let step = 24 * z;
     while (step < 14) step *= 4;
@@ -214,17 +208,41 @@ export class Editor {
 
   // Once the view stops, re-lay the board out at the real zoom (CSS zoom) instead of scaling a bitmap:
   // text, borders and widgets render natively sharp at any zoom. Translation snaps to device pixels.
+  // Nov 19 — zoom without friction: the board always scales through its transform layer, so a zoom is a
+  // pure visual shift (nothing re-lays out, however heavy the board). Once the view rests the layer is
+  // dropped (is-moving goes away) and the browser re-rasterises the text sharp at the new scale.
   settleCamera() {
-    if (!ZOOM_OK || this._zz === this.cam.z) return;
+    if (this._zz === this.cam.z) return;
     const { x, y, z } = this.cam;
     const dpr = window.devicePixelRatio || 1;
     const rx = Math.round(x * dpr) / dpr, ry = Math.round(y * dpr) / dpr;
-    this.world.style.zoom = String(z);
-    this.world.style.transform = `translate(${rx / z}px, ${ry / z}px)`;
-    this._zz = z;
+    this.world.style.zoom = '';
+    this.world.style.transform = `translate(${rx}px, ${ry}px) scale(${z})`;
+    this._zz = null;
   }
 
+  // Wheel ticks and trackpad pinches feed one eased glide toward a target zoom (in log space), so
+  // separate ticks blend into a single continuous motion instead of stepped jumps.
+  glideZoom(cx, cy, dLog, ease = 0.3) {
+    const g = (this._glide ||= { target: Math.log(this.cam.z), raf: 0 });
+    if (!g.raf) g.target = Math.log(this.cam.z);
+    g.target = clamp(g.target + dLog, Math.log(MIN_Z), Math.log(MAX_Z));
+    g.cx = cx; g.cy = cy; g.ease = ease;
+    if (prefersReducedMotion()) { this.zoomAt(cx, cy, Math.exp(g.target - Math.log(this.cam.z))); return; }
+    if (g.raf) return;
+    const tick = () => {
+      const cur = Math.log(this.cam.z);
+      const diff = g.target - cur;
+      if (Math.abs(diff) < 0.0015) { this.zoomAt(g.cx, g.cy, Math.exp(diff)); g.raf = 0; return; }
+      this.zoomAt(g.cx, g.cy, Math.exp(diff * g.ease));
+      g.raf = requestAnimationFrame(tick);
+    };
+    g.raf = requestAnimationFrame(tick);
+  }
+  stopGlide() { if (this._glide?.raf) { cancelAnimationFrame(this._glide.raf); this._glide.raf = 0; } }
+
   setCamera(c, { animate = false } = {}) {
+    this.stopGlide?.();
     const target = { x: c.x, y: c.y, z: clamp(c.z, MIN_Z, MAX_Z) };
     cancelAnimationFrame(this._anim);
     if (!animate || prefersReducedMotion()) { this.cam = target; this.applyCamera(); return; }
@@ -411,7 +429,9 @@ export class Editor {
           : ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
       dirs.forEach((d) => o.append(handle(d, r)));
       // Connection dots: drag one to draw a connector, click one to add a connected item.
-      if (CONNECTABLE.has(el.type) && !busy) {
+      // Nov 19: notes and text keep a quiet editing surface — just the object and its frame, no rings around
+      // it inviting accidental drags. Connect them with the connector tool (or from the other end) as before.
+      if (CONNECTABLE.has(el.type) && !busy && el.type !== 'sticky' && el.type !== 'text') {
         const off = 20 / z;
         const spots = { e: [r.x + r.w + off, r.y + r.h / 2], w: [r.x - off, r.y + r.h / 2], s: [r.x + r.w / 2, r.y + r.h + off], n: [r.x + r.w / 2, r.y - off] };
         for (const [d, [x, y]] of Object.entries(spots)) {
@@ -471,6 +491,15 @@ export class Editor {
         try { n = createNode(el); updateNode(n, el, ctx); } catch { n = this.nodes.get(el.id)?.cloneNode(true) || null; }
       }
       if (!n) continue;
+      // Nov 19 export fix: a fresh node hasn't been measured yet, so give it what the live one worked out —
+      // the fitted size of a note's text (it was printing at the starting size and getting cut off) and
+      // the real height of auto-growing text.
+      const live = this.nodes.get(el.id);
+      if (live && n !== live && el.type !== 'widget' && el.type !== 'pdf') {
+        if (live._text && n._text && live._text.style.fontSize) n._text.style.fontSize = live._text.style.fontSize;
+        if (el.type === 'text' && live.offsetHeight > (el.h || 0)) n.style.height = `${live.offsetHeight}px`;
+        if (el.type === 'text' && live.offsetWidth > (el.w || 0)) n.style.width = `${live.offsetWidth}px`;
+      }
       n.removeAttribute('hidden');
       for (const prop of ['display', 'visibility', 'content-visibility', 'opacity']) n.style.removeProperty(prop);
       (el.type === 'frame' ? frames : els).append(n);
@@ -478,6 +507,21 @@ export class Editor {
     world.querySelectorAll('.is-selected, .is-live').forEach((n) => n.classList.remove('is-selected', 'is-live'));
     world.querySelectorAll('[contenteditable]').forEach((n) => n.removeAttribute('contenteditable'));
     world.querySelectorAll('.el-shield').forEach((n) => n.remove());
+    // Lazy images in an off-screen copy never load: print them all now.
+    world.querySelectorAll('img[loading]').forEach((img) => { img.loading = 'eager'; });
+    // Widgets keep their scroll position (a copy starts at the top), so what you saw is what prints.
+    for (const el of this.els) {
+      if (el.type !== 'widget' || this.isHidden(el)) continue;
+      const live = this.nodes.get(el.id), copy = world.querySelector(`[data-eid="${CSS.escape(el.id)}"]`);
+      if (!live || !copy) continue;
+      const a = [...live.querySelectorAll('*')].filter((x) => x.scrollTop || x.scrollLeft);
+      for (const x of a) {
+        const path = []; let c = x;
+        while (c && c !== live) { path.unshift([...c.parentNode.children].indexOf(c)); c = c.parentNode; }
+        let t = copy; for (const i of path) t = t?.children[i];
+        if (t) { t.dataset.printTop = x.scrollTop; t.dataset.printLeft = x.scrollLeft; }
+      }
+    }
     // Videos: freeze the current frame when the browser allows it; embeds: a labelled card.
     world.querySelectorAll('video').forEach((v) => {
       const eid = v.closest('[data-eid]')?.dataset.eid;
@@ -1541,7 +1585,9 @@ export class Editor {
       this._wh = null;
       if (!q) return;
       if (q.dx || q.dy) this.cam = { ...this.cam, x: this.cam.x - q.dx, y: this.cam.y - q.dy };
-      if (q.zoom) this.zoomAt(q.cx, q.cy, Math.exp(clamp(q.zoom, -1.5, 1.5)));
+      // Mouse wheels arrive in big ticks: ease them. Trackpad pinches arrive in many tiny steps: follow
+      // closely (a light ease) so the fingers never feel ahead of the board.
+      if (q.zoom) this.glideZoom(q.cx, q.cy, clamp(q.zoom, -1.5, 1.5), Math.abs(q.zoom) > 0.25 ? 0.24 : 0.55);
       else this.applyCamera();
     });
   }

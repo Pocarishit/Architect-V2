@@ -20,3 +20,7 @@ export const poolReady = () => !!pool;
 export const poolIdeas = () => (pool ? pool.get() || [] : []);
 export function setPoolIdeas(list, live = false) { if (pool) pool.set(list, live); }
 export function onPool(fn) { subs.add(fn); return () => subs.delete(fn); }
+// Nov 19 (sync): the shared object's Story and Weekly ride the same pool, so Fleeting Moments shows the
+// same days and the same plan in both Spaces — what you write in one is exactly what the other shows.
+export const poolField = (k) => (pool?.field ? pool.field(k) : undefined);
+export function patchPool(p) { if (pool?.patch) pool.patch(p); }

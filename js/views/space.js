@@ -118,6 +118,10 @@ export function mountSpace(root) {
     return warming;
   }
 
+  // Side Chat's ideas canvas asks for the shared pool the same way.
+  const onWarm = () => { warmShared(); };
+  window.addEventListener('architect:warm-shared', onWarm);
+
   // Hide a Space without unloading it. 'parked' keeps its keyboard, copy and paste handlers asleep.
   function park(slot) {
     if (!slot?.el) return;
@@ -453,8 +457,10 @@ export function mountSpace(root) {
 
   function mountDock() {
     page.querySelector('.space-dock')?.remove();
+    { const old = page.querySelector('.space-slider'); old?._off?.(); old?.remove(); }
     const ed = editor();
     ed?.setViewOnly?.(viewMode);
+    if (phone()) { mountSlider(ed); return; }
     const cat = dockCatalog(ed);
     let suppress = false; // a long-press opened the customizer: the release isn't a tap
     const item = (ic, label, fn, extra = {}) => h('button', { class: 'sd-btn', type: 'button', 'aria-label': label, onclick: (e) => { if (suppress) { suppress = false; return; } fn(e.currentTarget); }, ...extra }, icon(ic, 20), h('span', {}, label));
@@ -475,6 +481,153 @@ export function mountSpace(root) {
     dock.addEventListener('contextmenu', (e) => { e.preventDefault(); clearTimeout(hold); hold = null; customizeDock(); });
     page.append(dock);
   }
+
+  /* ================= Mobile (Nov 19) =================
+     The phone shows one object at a time, sized for the thumb; the others stay where they are, so their
+     edges and lines run off the screen. The bottom of the screen is a slider: MAP (the whole board), then
+     every object on the board in reading order, then Ideas and Side Chat. Tap a label or drag the gold
+     knob; swipe the bar to step. A new object becomes a new stop. */
+  const phone = () => innerWidth < 720;
+  let focusId = null;       // the object the phone is showing
+  let focusStyle = null;
+  const LABELS = { path: 'Path', fleeting: 'Moments', variables: 'Variables', blueprints: 'Blueprints', radio: 'Radio', chat: 'Chat', tts: 'Voice', timer: 'Timer', er: 'Emergency' };
+  function stopLabel(e) {
+    if (e.kind === 'path') return e.owner === me.id ? 'Path' : `${e.ownerName || 'Their'} Path`;
+    if (e.kind === 'column') return e.title || 'Setpoint';
+    if (e.kind === 'portal') return e.name || 'Blueprint';
+    if (e.kind === 'custom') return e.title || 'Widget';
+    return LABELS[e.kind] || (e.kind || 'Object').replace(/^\w/, (c) => c.toUpperCase());
+  }
+  function stopsOf(ed) {
+    const ws = ed.els.filter((e) => e.type === 'widget' && !ed.isHidden(e) && !e.privateTo || (e.type === 'widget' && e.privateTo === me.id && !ed.isHidden(e)));
+    // reading order: rows of roughly the same height, left to right
+    ws.sort((a, b) => (Math.abs(a.y - b.y) < 200 ? a.x - b.x : a.y - b.y));
+    return [{ id: 'map', label: 'Map' }, ...ws.map((e) => ({ id: e.id, label: stopLabel(e) })), { id: 'ideas', label: 'Ideas' }, { id: 'sidechat', label: 'Side Chat' }];
+  }
+  function clearFocus() {
+    focusId = null;
+    if (focusStyle) focusStyle.textContent = '';
+    page.classList.remove('has-phone-focus');
+  }
+  function phoneFocus(ed, el, animate = true) {
+    const bar = page.querySelector('.space-slider');
+    const r = ed.rect();
+    const top = Math.max(0, (page.querySelector('.bp-topbar, .topbar')?.getBoundingClientRect().bottom || r.top) - r.top);
+    const W = Math.round(r.width), H = Math.round(r.height - top - (bar?.offsetHeight || 84) - 8);
+    focusId = el.id;
+    focusStyle ||= h('style', { 'data-phone-focus': '' });
+    if (!focusStyle.isConnected) document.head.append(focusStyle);
+    const sel = `.bp-world [data-eid="${CSS.escape(el.id)}"]`;
+    focusStyle.textContent = `${sel} { width: ${W}px !important; height: ${H}px !important; z-index: 40 !important; border-radius: 0 !important; }
+      ${sel} .wg-head { position: sticky; top: 0; }`;
+    page.classList.add('has-phone-focus');
+    ed.select([]);
+    ed.setCamera({ x: -el.x, y: -el.y + top, z: 1 }, { animate });
+  }
+  function goStop(ed, st, animate = true) {
+    if (!st) return;
+    if (st.id === 'map') { clearFocus(); ed.zoomToFit(animate); }
+    else if (st.id === 'ideas' || st.id === 'sidechat') { window.dispatchEvent(new CustomEvent('architect:sidechat-open', { detail: { ideas: st.id === 'ideas' } })); }
+    else { const el = ed.byId.get(st.id); if (el) phoneFocus(ed, el, animate); }
+    store.set(`architect.phone.stop.${spaceId}`, st.id);
+    page.querySelector('.space-slider')?._paint?.(st.id);
+  }
+  function mountSlider(ed) {
+    if (!ed) return;
+    let stops = stopsOf(ed);
+    let cur = store.get(`architect.phone.stop.${spaceId}`, null);
+    if (!stops.some((x) => x.id === cur)) cur = stops.find((x) => ed.byId.get(x.id)?.kind === 'path')?.id || 'map';
+    const track = h('div', { class: 'ss-track' });
+    const rail = h('div', { class: 'ss-rail' }, h('i', { class: 'ss-line' }));
+    const knob = h('span', { class: 'ss-knob', role: 'slider', tabindex: 0, 'aria-label': 'Object' });
+    rail.append(knob);
+    track.append(rail);
+    const menuBtn = h('button', { class: 'ss-menu', type: 'button', 'aria-label': 'Menu' }, icon('more', 18));
+    menuBtn.addEventListener('click', () => {
+      const r = menuBtn.getBoundingClientRect();
+      menu({ x: r.left, y: r.top - 8 }, [
+        { label: viewMode ? 'View mode: on' : 'View mode', icon: 'eye', checked: viewMode, onSelect: () => setViewMode(!viewMode) },
+        { label: mode === 'personal' ? 'Go to the Shared Space' : 'Go to your Personal Space', icon: 'home', onSelect: () => toggleSpace() },
+        { label: 'Voice', icon: 'speaker', onSelect: () => sayBar() },
+        '-', ...spaceItems(ed.viewCenter()),
+      ], { side: 'top' });
+    });
+    const bar = h('nav', { class: 'space-slider', 'aria-label': 'Objects on this board' }, menuBtn, track);
+    const SP = 74; // px between stops
+    const paint = (id = cur) => {
+      cur = id;
+      stops = stopsOf(ed);
+      const i = Math.max(0, stops.findIndex((x) => x.id === cur));
+      rail.style.width = `${Math.max(track.clientWidth - 8, (stops.length - 1) * SP + 60)}px`;
+      const step = stops.length > 1 ? (rail.clientWidth - 60) / (stops.length - 1) : 0;
+      rail.querySelectorAll('.ss-stop').forEach((n) => n.remove());
+      stops.forEach((st, j) => {
+        const b = h('button', { type: 'button', class: ['ss-stop', j === i && 'is-on', st.id === 'map' && 'is-map'], style: { left: `${30 + j * step}px` }, onclick: () => goStop(ed, st) }, h('i'), h('span', {}, st.label));
+        rail.append(b);
+      });
+      rail.dataset.step = step;
+      knob.style.left = `${30 + i * step}px`;
+      knob.setAttribute('aria-valuetext', stops[i]?.label || '');
+      const kx = 30 + i * step;
+      if (kx < track.scrollLeft + 40 || kx > track.scrollLeft + track.clientWidth - 40) track.scrollTo({ left: kx - track.clientWidth / 2, behavior: 'smooth' });
+    };
+    bar._paint = paint;
+    // drag the knob
+    knob.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      knob.setPointerCapture?.(e.pointerId);
+      knob.classList.add('is-drag');
+      const step = Number(rail.dataset.step) || 1;
+      const rr = rail.getBoundingClientRect();
+      const near = (x) => Math.max(0, Math.min(stops.length - 1, Math.round((x - rr.left - 30) / (step || 1))));
+      const move = (ev) => {
+        const x = Math.max(30, Math.min(30 + (stops.length - 1) * step, ev.clientX - rr.left));
+        knob.style.left = `${x}px`;
+        const j = near(ev.clientX);
+        rail.querySelectorAll('.ss-stop').forEach((n, k) => n.classList.toggle('is-near', k === j));
+      };
+      const up = (ev) => {
+        knob.removeEventListener('pointermove', move); knob.removeEventListener('pointerup', up); knob.removeEventListener('pointercancel', up);
+        knob.classList.remove('is-drag');
+        goStop(ed, stops[near(ev.clientX)]);
+      };
+      knob.addEventListener('pointermove', move); knob.addEventListener('pointerup', up); knob.addEventListener('pointercancel', up);
+    });
+    knob.addEventListener('keydown', (e) => {
+      const i = stops.findIndex((x) => x.id === cur);
+      if (e.key === 'ArrowRight') { e.preventDefault(); goStop(ed, stops[Math.min(stops.length - 1, i + 1)]); }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); goStop(ed, stops[Math.max(0, i - 1)]); }
+    });
+    // swipe the bar to step one object
+    let sw = null;
+    bar.addEventListener('touchstart', (e) => { if (e.target.closest('.ss-knob')) return; const t = e.touches[0]; sw = { x: t.clientX, y: t.clientY, sl: track.scrollLeft, t: Date.now() }; }, { passive: true });
+    bar.addEventListener('touchend', (e) => {
+      if (!sw) return;
+      const t = e.changedTouches[0], dx = t.clientX - sw.x, dy = t.clientY - sw.y;
+      const scrolled = Math.abs(track.scrollLeft - sw.sl) > 4;
+      sw = null;
+      if (scrolled || Math.abs(dx) < 50 || Math.abs(dy) > Math.abs(dx)) return;
+      const i = stops.findIndex((x) => x.id === cur);
+      goStop(ed, stops[Math.max(0, Math.min(stops.length - 1, i + (dx < 0 ? 1 : -1)))]);
+    }, { passive: true });
+    page.append(bar);
+    requestAnimationFrame(() => { paint(cur); goStop(ed, stops.find((x) => x.id === cur) || stops[0], false); });
+    // a new object becomes a new stop
+    let sig = stops.map((x) => x.id + x.label).join();
+    const off = ed.on('change', () => {
+      const next = stopsOf(ed).map((x) => x.id + x.label).join();
+      if (next !== sig) { sig = next; paint(); }
+      if (focusId && !ed.byId.has(focusId)) clearFocus();
+    });
+    bar._off = off;
+  }
+  let wasPhone = phone();
+  const onPhoneResize = () => {
+    const p2 = phone();
+    if (p2 !== wasPhone) { wasPhone = p2; if (!p2) clearFocus(); mountDock(); return; }
+    if (p2 && focusId) { const ed = editor(); const el = ed?.byId.get(focusId); if (el) phoneFocus(ed, el, false); }
+  };
+  window.addEventListener('resize', onPhoneResize);
 
   // Choose and order the dock's buttons. Drag ⠿ to reorder; the switch puts a button in the bar.
   async function customizeDock() {
@@ -1007,6 +1160,10 @@ export function mountSpace(root) {
     focus: (kind) => { try { sessionStorage.removeItem('architect.focus'); } catch {} focusKind(kind); },
     destroy() {
       destroyed = true;
+      window.removeEventListener('architect:warm-shared', onWarm);
+      window.removeEventListener('resize', onPhoneResize);
+      page.querySelector('.space-slider')?._off?.();
+      focusStyle?.remove();
       bpWin?.close(); bpWin = null;
       ticketEsc.forEach((off) => off()); ticketEsc.clear();
       offs.forEach((f) => { try { f(); } catch {} });

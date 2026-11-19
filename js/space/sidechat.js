@@ -261,7 +261,11 @@ export function mountSideChat({ me }) {
     h('button', { class: 'sc-rail-act', type: 'button', 'aria-label': 'New chat', title: 'New chat', onclick: () => addChat() }, icon('plus', 15)),
     h('button', { class: 'sc-rail-act', type: 'button', 'aria-label': 'Side chat options', title: 'Options', onclick: (e) => optionsMenu(e.currentTarget) }, icon('more', 15)));
   const rail = h('nav', { class: 'sc-rail' }, h('span', { class: 'sc-rail-spot', 'aria-hidden': 'true' }), railList, railActs);
-  const main = h('div', { class: 'sc-main' }, head, status, body, selbar, h('div', { class: 'sc-foot' }, modebar, compose));
+  // Nov 19 (evening): the ideas live in Side Chat — the lightbulb at the foot of the avatar stack opens the
+  // Fleeting Moments ideas canvas right here (the very same canvas, composer and all).
+  const ideasBox = h('div', { class: 'sc-ideas', hidden: true });
+  const foot = h('div', { class: 'sc-foot' }, modebar, compose);
+  const main = h('div', { class: 'sc-main' }, head, status, body, ideasBox, selbar, foot);
   const panel = h('section', { class: 'sc-panel', role: 'dialog', 'aria-label': 'Side chat', 'data-noptr': '', hidden: true },
     main, rail, ...handles);
   document.body.append(panel, drop, launch);
@@ -458,8 +462,8 @@ export function mountSideChat({ me }) {
     const linked = src().kind === 'anytype';
     const c0 = activeChat();
     input.placeholder = c0 ? `Message ${c0.name}` : 'Enter your message';
-    headName.textContent = c0?.name || (loaded ? 'No chat' : '');
-    headName.title = c0?.name || '';
+    headName.textContent = ideasOn ? 'Ideas' : c0?.name || (loaded ? 'No chat' : '');
+    headName.title = ideasOn ? 'Your ideas' : c0?.name || '';
     paintRail(linked);
     if (drop.hidden) return;
     const pick = (id) => { setDrop(false); if (id !== active) select(id); setOpen(true); };
@@ -490,14 +494,17 @@ export function mountSideChat({ me }) {
     const initials = (n) => String(n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
     railList.replaceChildren(...chats.map((c) => {
       const face = c.photo ? urlOf(c.photo, () => paintRail()) : null;
-      const on = c.id === active;
+      const on = c.id === active && !ideasOn;
       return h('button', {
         class: ['sc-ava', on && 'is-on', linked && !c.anytype_id && 'is-unlinked'], type: 'button', role: 'tab', 'aria-selected': String(on), 'aria-label': c.name, title: c.name, 'data-id': c.id,
-        onclick: () => { if (c.id !== active) select(c.id); },
+        onclick: () => { if (ideasOn) setIdeas(false); if (c.id !== active) select(c.id); else paintTabs(); },
         ondblclick: () => renameChat(c),
         oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); tabMenu({ x: e.clientX, y: e.clientY }, c); },
       }, h('span', { class: 'sc-ava-in' }, face ? h('img', { src: face, alt: '', draggable: false }) : h('b', {}, initials(c.name))));
-    }));
+    }), h('button', {
+      class: ['sc-ava', 'sc-bulb', ideasOn && 'is-on'], type: 'button', role: 'tab', 'aria-selected': String(ideasOn), 'aria-label': 'Ideas', title: 'Ideas',
+      onclick: () => setIdeas(!ideasOn),
+    }, h('span', { class: 'sc-ava-in' }, icon('bulb', 17))));
     railList.querySelector('.sc-ava.is-on')?.scrollIntoView?.({ block: 'nearest' });
   }
   railList.addEventListener('keydown', (e) => {
@@ -507,6 +514,29 @@ export function mountSideChat({ me }) {
     const n = chats[(i + (e.key === 'ArrowDown' ? 1 : -1) + chats.length) % chats.length];
     if (n) { select(n.id); railList.querySelector(`[data-id="${n.id}"]`)?.focus(); }
   });
+  let ideasOn = !!store.get(`architect.sidechat.ideas.${uidKey}`, false);
+  let ideasCtl = null;
+  const ideasEl = { id: `sidechat-ideas-${uidKey}`, ideas: [] };
+  function setIdeas(on) {
+    ideasOn = !!on;
+    store.set(`architect.sidechat.ideas.${uidKey}`, ideasOn);
+    panel.classList.toggle('is-ideas', ideasOn);
+    ideasBox.hidden = !ideasOn;
+    body.hidden = ideasOn; foot.hidden = ideasOn;
+    if (ideasOn) { status.hidden = true; selbar.hidden = true; }
+    if (ideasOn && !ideasCtl) {
+      const fakeW = { host: { personal: true, warmShared: () => window.dispatchEvent(new CustomEvent('architect:warm-shared')) }, current: () => ideasEl, patch() {}, live() {}, slot: null, tools: h('span') };
+      ideasCtl = {}; // claimed while loading
+      import('./fleeting.js').then((m) => { ideasCtl = m.mountFleeting(ideasBox, ideasEl, fakeW, { only: 'ideas' }); })
+        .catch((e) => { console.error(e); ideasCtl = null; toast('The ideas canvas didn’t load.', { tone: 'error' }); });
+    }
+    if (ideasOn) setTimeout(() => ideasBox.querySelector('.fi-input')?.focus({ preventScroll: true }), 60);
+    else if (!sheet()) input.focus({ preventScroll: true });
+    paintTabs();
+  }
+
+  queueMicrotask(() => { if (ideasOn) setIdeas(true); });
+
   function select(id) {
     if (id === active) return;
     drafts.set(active, input.value);
@@ -599,8 +629,35 @@ export function mountSideChat({ me }) {
       activeChat() ? { label: `Export ${activeChat().name}`, icon: 'download', onSelect: exportChat } : null,
       '-',
       open ? { label: 'Close chat', icon: 'close', onSelect: () => setOpen(false) } : null,
+      { label: hotkey() ? `Shortcut key: ${keyName(hotkey())}` : 'Set a shortcut key…', icon: 'keyboard', onSelect: bindHotkey },
       { label: 'Reset size & position', icon: 'fit', onSelect: () => { store.set(K.geo, null); store.set(K.launch, null); placeLaunch(); if (open) placePanel(); if (!drop.hidden) placeDrop(); } },
     ], { align: 'end' });
+  }
+
+  /* ---------- the shortcut key ---------- */
+  const HK = 'architect.sidechat.hotkey';
+  const hotkey = () => store.get(HK, null);
+  const matchKey = (e, k) => e.code === k.code && !!e.ctrlKey === !!k.ctrl && !!e.altKey === !!k.alt && !!e.shiftKey === !!k.shift && !!e.metaKey === !!k.meta;
+  const keyName = (k) => [k.ctrl && 'Ctrl', k.meta && (isMac ? '⌘' : 'Win'), k.alt && (isMac ? '⌥' : 'Alt'), k.shift && 'Shift',
+    String(k.code || '').replace(/^Key/, '').replace(/^Digit/, '').replace(/^Arrow/, '') || k.key].filter(Boolean).join(' + ');
+  async function bindHotkey() {
+    let picked = hotkey();
+    const shown = h('div', { class: 'sc-hk-key' }, picked ? keyName(picked) : 'Press a key…');
+    const box = h('div', { class: 'sc-hk', tabindex: 0 }, shown, h('p', { class: 'muted' }, 'Press the key (or combination) that should open Side Chat. A plain key only works when you aren’t typing somewhere; add Ctrl or Alt to make it work everywhere.'));
+    box.addEventListener('keydown', (e) => {
+      if (['Control', 'Shift', 'Alt', 'Meta', 'Tab'].includes(e.key)) return;
+      if (e.key === 'Escape' && !e.ctrlKey && !e.altKey) return; // let the dialog close
+      e.preventDefault(); e.stopPropagation();
+      picked = { code: e.code, key: e.key, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey };
+      shown.textContent = keyName(picked);
+    });
+    setTimeout(() => box.focus(), 50);
+    const v = await dialog({
+      title: 'Side Chat shortcut', width: 420, body: box,
+      actions: [hotkey() ? { label: 'Remove', value: 'off' } : null, { label: 'Cancel', value: null }, { label: 'Save', primary: true, value: 'save' }].filter(Boolean),
+    });
+    if (v === 'off') { store.set(HK, null); toast('Shortcut removed.', { ms: 1600 }); }
+    else if (v === 'save' && picked) { store.set(HK, picked); toast(`Press ${keyName(picked)} to open Side Chat.`, { ms: 2400 }); }
   }
 
   /* ---------- Anytype connection ---------- */
@@ -1008,8 +1065,20 @@ export function mountSideChat({ me }) {
   /* ---------- keyboard, paste, drop — handled before the canvas sees them ---------- */
   const inPanel = (t) => t instanceof Node && panel.contains(t);
   const onKey = (e) => {
+    // The Side Chat shortcut (bound once in Options): opens it from anywhere, no smiley click.
+    const hk = hotkey();
+    if (hk && !e.repeat && matchKey(e, hk) && !document.querySelector('.dlg-overlay') && (hk.ctrl || hk.alt || hk.meta || !isTypingTarget(e.target) || inPanel(e.target))) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (open && inPanel(document.activeElement)) setOpen(false);
+      else { setOpen(true); setTimeout(() => (ideasOn ? ideasBox.querySelector('.fi-input') : input)?.focus({ preventScroll: true }), 40); }
+      return;
+    }
     if (!drop.hidden && e.key === 'Escape' && !document.querySelector('.menu, .popover, .dlg-overlay')) { e.preventDefault(); e.stopImmediatePropagation(); setDrop(false); return; }
     if (!open || !inPanel(e.target) || document.querySelector('.menu, .popover, .dlg-overlay')) return;
+    if (ideasOn) { // the ideas canvas runs its own keys; Esc on empty space still closes the chat
+      if (e.key === 'Escape' && !isTypingTarget(e.target) && !ideasBox.querySelector('.fi-idea.is-sel')) { e.preventDefault(); e.stopImmediatePropagation(); setOpen(false); }
+      return;
+    }
     e.stopImmediatePropagation();
     const mod = isMac ? e.metaKey : e.ctrlKey;
     const k = e.key.toLowerCase();
@@ -1030,16 +1099,19 @@ export function mountSideChat({ me }) {
     if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && !input.disabled) input.focus({ preventScroll: true });
   };
   const onPaste = (e) => {
-    if (!open || !inPanel(e.target)) return;
+    if (!open || !inPanel(e.target) || ideasOn) return;
     e.stopImmediatePropagation();
     const fs = mediaFiles(e.clipboardData);
     if (fs.length) { e.preventDefault(); sendFiles(fs); }
   };
   window.addEventListener('keydown', onKey, true);
+  // The phone's slider (and anything else) can open Side Chat — straight to the ideas, or to the chats.
+  const onOpenReq = (e) => { setOpen(true); setIdeas(!!e.detail?.ideas); };
+  window.addEventListener('architect:sidechat-open', onOpenReq);
   window.addEventListener('paste', onPaste, true);
-  panel.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); e.stopPropagation(); panel.classList.add('is-drop'); } });
+  panel.addEventListener('dragover', (e) => { if (!ideasOn && [...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); e.stopPropagation(); panel.classList.add('is-drop'); } });
   panel.addEventListener('dragleave', (e) => { if (!panel.contains(e.relatedTarget)) panel.classList.remove('is-drop'); });
-  panel.addEventListener('drop', (e) => { panel.classList.remove('is-drop'); const fs = mediaFiles(e.dataTransfer); e.preventDefault(); e.stopPropagation(); if (fs.length) sendFiles(fs); });
+  panel.addEventListener('drop', (e) => { panel.classList.remove('is-drop'); if (ideasOn) return; const fs = mediaFiles(e.dataTransfer); e.preventDefault(); e.stopPropagation(); if (fs.length) sendFiles(fs); });
 
   // Warm up quietly so the first open is instant; come back open if it was open.
   const idle = window.requestIdleCallback || ((f) => setTimeout(f, 1500));
@@ -1053,6 +1125,7 @@ export function mountSideChat({ me }) {
       window.removeEventListener('resize', onResize);
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('architect:sidechat-open', onOpenReq);
       window.removeEventListener('paste', onPaste, true);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);

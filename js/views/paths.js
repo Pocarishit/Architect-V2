@@ -229,15 +229,13 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   }
 
   const addDays = (k, n) => { const [y, m, d] = k.split('-').map(Number); return keyOf(new Date(y, m - 1, d + n)); };
+  // Nov 19: the tabs say the day — Today, Friday, Saturday… — and wrap into next week the same way.
   const dayLabel = (k, i) => {
-    if (i === 0) return 'Today';
-    if (i === 1) return 'Tomorrow';
+    if (i === 0 || !k) return 'Today';
     const [y, m, d] = k.split('-').map(Number);
-    const date = new Date(y, m - 1, d);
-    // Within the week: "Sat 14". Further out: "Jan 1" (and the year if it isn't this one).
-    if (date - new Date() < 7 * 86_400_000) return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(y !== new Date().getFullYear() ? { year: 'numeric' } : {}) });
+    return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long' });
   };
+  const dayFull = (k) => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }); };
   function dayTabs() {
     const today = todayKey();
     const planned = new Map();
@@ -248,7 +246,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       const n = k ? planned.get(k) || 0 : 0;
       return h('button', {
         type: 'button', role: 'tab', class: ['pday', viewDay === k && 'is-on', n && 'has-plan'], 'aria-selected': String(viewDay === k),
-        title: k ? `${n ? `${n} planned` : 'Plan'} for ${dayLabel(k, i)} — it becomes your path when that day starts` : 'Today’s path',
+        title: k ? `${n ? `${n} planned` : 'Plan'} for ${dayFull(k)} — it becomes your path when that day starts` : 'Today’s path',
         onclick: () => { if (viewDay === k) return; viewDay = k; picked = new Set(); composerFor = null; editing = null; render(); },
       }, dayLabel(k, i), n ? h('b', {}, String(n)) : null);
     }));
@@ -333,6 +331,8 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     if (loading) return h('div', { class: 'empty' }, h('span', { class: 'dots-loader' }, h('i'), h('i'), h('i')));
     if (loadError) return h('div', { class: 'empty' }, h('p', { class: 'empty-text' }, loadError), h('button', { class: 'btn', onclick: () => { loading = true; loadError = null; render(); load(); } }, 'Try again'));
     const cols = shown();
+    renderedNarrow = embedded && narrow();
+    if (embedded && cols.length > 1 && renderedNarrow) return tabbed(cols);
     if (embedded && !cols.length) {
       return h('div', { class: 'pboard is-empty' }, h('p', { class: 'empty-text' }, readOnly ? 'No paths to show.' : opts.only ? 'This path was deleted.' : 'Every path is out on the canvas.'),
         null);
@@ -342,6 +342,33 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       // New paths come from a path's ··· menu — no button at the end of the board.
       null);
   }
+
+  // Path on a phone (Nov 19): one thing at a time. The setpoints become tabs; the one you tap fills the
+  // widget — countdown, gold goal, add task — and the next one peeks in below.
+  let phoneCol = null;
+  const narrow = () => el.clientWidth > 0 && el.clientWidth < 620;
+  function tabbed(cols) {
+    const live = cols.find((c) => stOf(c)?.phase === 'live');
+    if (!cols.some((c) => c.id === phoneCol)) phoneCol = (live || cols[0]).id;
+    const i = cols.findIndex((c) => c.id === phoneCol);
+    const tabs = h('div', { class: 'ptabs', role: 'tablist', 'aria-label': 'Setpoints' }, cols.map((c) => h('button', {
+      type: 'button', role: 'tab', class: ['ptab', c.id === phoneCol && 'is-on', stOf(c)?.phase === 'live' && 'is-live'], 'aria-selected': String(c.id === phoneCol),
+      onclick: () => { phoneCol = c.id; render(); el.querySelector('.pboard')?.scrollTo({ top: 0 }); },
+    }, c.title)));
+    const next = cols[i + 1];
+    const board = h('div', { class: 'pboard is-tabbed' }, columnView(cols[i]), next ? h('div', { class: 'ppeek', onclick: () => { phoneCol = next.id; render(); } }, columnView(next)) : null);
+    // Swiping down past the end of a setpoint moves to the next one.
+    board.addEventListener('scroll', () => {
+      if (!next || board._swapping) return;
+      const peek = board.querySelector('.ppeek');
+      if (peek && peek.getBoundingClientRect().top < board.getBoundingClientRect().top + 40) { board._swapping = true; phoneCol = next.id; render(); }
+    }, { passive: true });
+    requestAnimationFrame(() => tabs.querySelector('.ptab.is-on')?.scrollIntoView({ inline: 'center', block: 'nearest' }));
+    return h('div', { class: 'pphone' }, tabs, board);
+  }
+  let renderedNarrow = null;
+  const onNarrow = new ResizeObserver(() => { if (renderedNarrow !== null && narrow() !== renderedNarrow) render(); });
+  if (embedded) onNarrow.observe(el);
 
   function columnView(col) {
     const list = tasksOf(col.id);
@@ -520,12 +547,12 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     if (!list.length) return false;
     const detail = { texts: list.map((t) => t.title).filter(Boolean), handled: false, ...(at || {}) };
     window.dispatchEvent(new CustomEvent('architect:drop-idea', { detail }));
-    if (!detail.handled) { if (!at) toast('No Fleeting Ideas in this space.', { ms: 2200 }); return false; }
+    if (!detail.handled) { if (!at) toast('No Fleeting Moments or ideas canvas open here — open Side Chat’s lightbulb.', { ms: 2600 }); return false; }
     const ids = new Set(list.map((t) => t.id));
     tasks = tasks.filter((t) => !ids.has(t.id));
     picked = new Set();
     render();
-    toast(`Back in Fleeting Ideas${list.length > 1 ? ` (${list.length})` : ''}.`, { ms: 2000 });
+    toast(`Back in your ideas${list.length > 1 ? ` (${list.length})` : ''}.`, { ms: 2000 });
     try { await db.remove('path_tasks', [...ids]); } catch (e) { fail(e); }
     return true;
   }
@@ -826,7 +853,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       { label: picked.has(task.id) ? 'Deselect' : 'Select', icon: 'selectAll', kbd: '⌘Click', onSelect: () => togglePick(task) },
       { label: 'Duplicate', icon: 'copy', onSelect: () => duplicateTask(task) },
       readOnly ? null : { label: 'Plan for another day…', icon: 'calendar', onSelect: () => dayMenu(anchor, [task]) },
-      readOnly ? null : { label: 'Back to Fleeting Ideas', icon: 'spark', onSelect: () => toIdeas([task]) },
+      readOnly ? null : { label: 'Back to ideas', icon: 'spark', onSelect: () => toIdeas([task]) },
       '-',
       { header: 'Move to' },
       ...others.map((c) => ({
@@ -867,7 +894,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       { header: 'Move to' },
       ...columns.map((c) => ({ label: c.title, icon: 'toPaths', onSelect: () => bulkMove(c.id) })),
       '-',
-      readOnly ? null : { label: 'Back to Fleeting Ideas', icon: 'spark', onSelect: () => toIdeas(list) },
+      readOnly ? null : { label: 'Back to ideas', icon: 'spark', onSelect: () => toIdeas(list) },
       { label: 'Clear selection', icon: 'close', kbd: 'Esc', onSelect: clearPick },
       { label: `Delete ${plural(list.length, 'task')}`, icon: 'trash', kbd: 'Del', danger: true, onSelect: bulkDelete },
     ], { align: 'end' });
@@ -1367,6 +1394,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       window.scrollTo(0, 0);
     },
     destroy() {
+      onNarrow.disconnect();
       clearInterval(livePoll); clearTimeout(reloadT);
       window.removeEventListener('architect:paths-changed', onChanged);
       window.removeEventListener('architect:drop-task', onDropTask);

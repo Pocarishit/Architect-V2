@@ -20,7 +20,7 @@ import { mountTimer } from './timer.js';
 export const WIDGETS = {
   path: { label: 'Path', icon: 'toPaths', w: 1490, h: 520 },
   column: { label: 'Path column', icon: 'toPaths', w: 330, h: 520 },
-  fleeting: { label: 'Fleeting Ideas', icon: 'spark', w: 760, h: 620, hint: 'Ideas, Story, Tracker and Weekly in one object' },
+  fleeting: { label: 'Fleeting Moments', icon: 'spark', w: 760, h: 620, hint: 'Story, Tracker and Weekly in one object' },
   timer: { label: 'Timer', icon: 'hourglass', w: 560, h: 640, hint: 'Timer, stopwatch and setpoint countdown — shared live' },
   variables: { label: 'Variables', icon: 'users', w: 460, h: 540, hint: 'The people and commitments that shape your life' },
   tracker: { label: 'Tracker & Weekly', icon: 'calendar', w: 460, h: 690 },
@@ -101,7 +101,7 @@ const KINDS = {
   },
 
   fleeting(body, el, w) {
-    w.setTitle('FLEETING IDEAS');
+    w.setTitle('FLEETING MOMENTS');
     w.tools.append(h('button', {
       class: 'wg-btn', type: 'button', title: 'Fill the screen', 'aria-label': 'Fill the screen',
       onclick: () => { const ed = w.host.editor(); if (ed) { ed.select([el.id]); ed.fitRect(w.current(), { maxZ: 2.5, pad: innerWidth < 720 ? 6 : 24 }); } },

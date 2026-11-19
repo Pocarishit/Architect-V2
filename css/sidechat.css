@@ -321,3 +321,33 @@
 .sc-panel.is-sheet { flex-direction: row; }
 .sc-panel.is-sheet .sc-head { justify-content: flex-end; }
 @media (prefers-reduced-motion: reduce) { .sc-ava { transition: none; } }
+
+/* ---------- Nov 19 (evening): tighter header, the ideas lightbulb, the shortcut ---------- */
+/* The title strip no longer runs the full width: it hugs the chat name, beside the smiley. */
+.sc-head { height: 56px; padding: 0 10px; border-bottom: 0; }
+.sc-head-name {
+  max-width: 100%; height: 30px; line-height: 28px; padding: 0 12px; border-radius: 10px;
+  border: 1px solid var(--line-2); background: var(--s1);
+  font-size: 11.5px;
+}
+.sc-bulb .sc-ava-in { color: #f2b733; background: color-mix(in srgb, #f2b733 10%, var(--s3)); }
+.sc-bulb:hover { border-color: color-mix(in srgb, #f2b733 70%, transparent); }
+.sc-bulb.is-on { border-color: #f2b733; box-shadow: 0 0 12px -3px color-mix(in srgb, #f2b733 70%, transparent); }
+.sc-ideas { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.sc-ideas[hidden] { display: none; }
+.sc-ideas > .fi { flex: 1; min-height: 0; height: auto; }
+.sc-panel .sc-ideas .fi-compose { padding: 10px 12px 12px; border-top: 1px solid var(--line); }
+.sc-panel .sc-ideas .fi-input {
+  height: 40px; border-radius: 20px; padding: 0 16px; background: var(--s2); border: 1px solid transparent;
+  font-family: var(--f-sans); font-size: 14.5px; color: var(--fg);
+}
+.sc-panel .sc-ideas .fi-input:focus { border-color: var(--line-2); outline: none; }
+.sc-panel.is-ideas .sc-body, .sc-panel.is-ideas .sc-foot { display: none; }
+.sc-hk { display: grid; gap: 10px; outline: none; }
+.sc-hk-key {
+  height: 64px; display: grid; place-items: center; border-radius: 14px; border: 1px dashed var(--line-2);
+  font-family: var(--f-mono); font-size: 18px; letter-spacing: .06em; color: var(--fg);
+}
+.sc-hk:focus .sc-hk-key { border-style: solid; border-color: var(--fg-3); }
+.sc-hk p { margin: 0; font-size: 12.5px; }
+.sc-ideas { position: relative; }

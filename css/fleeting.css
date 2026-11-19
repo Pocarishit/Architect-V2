@@ -1355,3 +1355,76 @@ body.fi-dragging .fi-wk-arrow.is-over { opacity: 1; }
   opacity: 0; transform: translateY(4px); transition: opacity .18s, transform .18s var(--ease);
 }
 .vr-fv-zoomchip.is-on { opacity: 1; transform: none; }
+
+/* ============================================================
+   Nov 19 (evening) — Fleeting Moments
+   Tabs beside the title (like Path), Story has no narration box (click the line), Weekly in focus.
+   ============================================================ */
+.wg-head .fi-tabs { flex-wrap: nowrap; gap: 4px; margin-left: 6px; padding: 2px; }
+.wg-head .fi-tab {
+  height: 26px; padding: 0 10px; border-radius: var(--pill, 999px); border-color: var(--line-2);
+  font-family: var(--f-mono); font-size: 10px; font-weight: 400; letter-spacing: .08em; color: var(--fg-3); white-space: nowrap;
+}
+.wg-head .fi-tab:hover { color: var(--fg); border-color: var(--fg-3); }
+.wg-head .fi-tab.is-on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.fi-top:not(:has(> .fi-tabs)) { padding-top: 8px; }
+.fi-top:not(:has(> .fi-tabs)) .fi-aside:empty { display: none; }
+.fi[data-tab="weekly"] > .fi-top:not(:has(> .fi-tabs)) { display: none; }
+.fi.is-only-ideas > .fi-top { padding: 8px 12px 0; }
+/* click to story */
+.fi[data-tab="story"] .fi-tl { cursor: crosshair; }
+.fi[data-tab="story"] .fi-tl :is(.fi-frag, .fi-mark, .fi-now) { cursor: auto; }
+.fi-frag-text[contenteditable="true"]:empty::before { content: 'What happened?'; color: var(--fg-4); }
+.fi-frag-text[contenteditable="true"] { display: block; min-width: 140px; outline: none; }
+
+/* Weekly — the week in focus */
+.fi-weekly.is-line { --wl-when: 128px; --wl-node: 28px; }
+.fi-wl-when { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; text-align: right; white-space: normal; line-height: 1.25; height: auto; min-height: 38px; }
+.fi-wl-row.is-now .fi-wl-when { color: var(--tl); }
+.fi-wl-row.is-focus:not(.is-now) .fi-wl-when { color: var(--fg); }
+.fi-wl-row:not(.is-now) .fi-wl-when b, .fi-wl-row.is-focus:not(.is-now) .fi-wl-when b { color: inherit; }
+/* nodes: gold only for the current week; completed past weeks fill gray */
+.fi-wl-row.is-complete .fi-wl-node { background: var(--fg-3); border-color: var(--fg-3); box-shadow: none; color: var(--bg); }
+.fi-wl-row.is-now.is-complete .fi-wl-node { background: var(--tl); border-color: var(--tl); box-shadow: 0 0 10px -1px color-mix(in srgb, var(--tl) 70%, transparent); }
+.fi-wl-row.is-past .fi-wl-node { border-color: var(--fg-3); }
+.fi-wl-ring.is-done { border-color: var(--fg-3); background: var(--fg-3); }
+.fi-wl-row.is-due:not(.is-now) .fi-wl-bar { border-color: var(--line-2); }
+.fi-wl-row:not(.is-now) .fi-wl-due { color: var(--fg-2); }
+/* past weeks show what was checked off, gray */
+.fi-wl-row.has-past .fi-wl-bar { flex-wrap: wrap; padding: 8px 12px; row-gap: 6px; }
+.fi-wl-past { flex-basis: 100%; order: 5; display: grid; gap: 4px; }
+.fi-wl-pastitem { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fi-wl-pastitem i { flex: none; width: 13px; height: 13px; border-radius: 4px; border: 1px solid var(--fg-4); display: grid; place-items: center; color: var(--bg); }
+.fi-wl-pastitem.is-done i { background: var(--fg-3); border-color: var(--fg-3); }
+.fi-wl-pastitem.is-done { color: var(--fg-2); }
+.fi-wl-row.is-past:not(.is-focus) .fi-wl-bar { opacity: 1; }
+/* the focused card: bigger, dot-matrix, gold only when it is this week */
+.fi-weekly.is-line .fi-wl-card { padding: 22px 22px 18px; gap: 10px; border-radius: 16px; }
+.fi-weekly.is-line .fi-wl-title, .fi-weekly.is-line .fi-wl-card .fi-wk-name-input { font-family: var(--f-dot); font-size: clamp(24px, 4.4cqh, 40px); letter-spacing: .04em; }
+.fi-weekly.is-line .fi-wl-sub { font-family: var(--f-dot); font-size: clamp(11px, 1.6cqh, 13px); letter-spacing: .1em; }
+.fi-weekly.is-line .fi-wl-card:not(.is-now) {
+  border-color: var(--line-2); background: color-mix(in srgb, var(--s2) 60%, var(--bg)); box-shadow: 0 18px 40px -26px rgba(0, 0, 0, .9);
+}
+.fi-weekly.is-line .fi-wl-card:not(.is-now) .fi-wl-title { color: var(--fg); }
+.fi-weekly.is-line .fi-wl-card:not(.is-now) .fi-task.is-done .fi-check { background: var(--fg-3); border-color: var(--fg-3); color: var(--bg); }
+.fi-weekly.is-line .fi-wl-card:not(.is-now) .fi-slot:focus-within { border-color: var(--fg-3); }
+.fi-weekly.is-line .fi-wl-card.is-now {
+  box-shadow: inset 0 0 18px -8px color-mix(in srgb, var(--tl) 60%, transparent), 0 0 34px -8px color-mix(in srgb, var(--tl) 55%, transparent);
+}
+/* fog: the week in focus stays crisp; the weeks around it blur back (the goal never does) */
+.fi-wl.is-fog .fi-wl-row:not(.is-focus) { filter: blur(1.4px); opacity: .55; transition: filter .25s var(--ease), opacity .25s var(--ease); }
+.fi-wl.is-fog .fi-wl-row:not(.is-focus):is(:hover, :focus-within) { filter: none; opacity: 1; }
+.fi-wl.is-fog .fi-wl-row.is-focus { z-index: 1; }
+@media (prefers-reduced-motion: reduce) { .fi-wl.is-fog .fi-wl-row { transition: none; } }
+@media (max-width: 560px) { .fi-weekly.is-line { --wl-when: 70px; --wl-node: 20px; } .fi-wl-when { font-size: 9px; } }
+.bp-viewport.is-moving .fi-wl.is-fog .fi-wl-row:not(.is-focus) { filter: none; }
+/* ideas on air: a held pill is its own compositor layer and skips the hue transition */
+.fi-field .fi-idea.is-held { will-change: transform; transition: none; }
+body.fi-dragging .fi-field .fi-idea:not(.is-held) { transition: none; }
+.fi-field .fi-idea.is-editing:empty::before { content: 'type an idea…'; color: rgba(255, 255, 255, .45); }
+.fi-field .fi-idea.is-editing:empty { min-width: 120px; }
+.fi-field { cursor: text; }
+
+/* Nov 19 — Variables: title beside the tabs (the section tabs ride in the widget header) */
+.wg-head .vr-tabs { margin-left: 12px; padding: 0; border-bottom: 0; gap: 14px; flex-wrap: nowrap; overflow-x: auto; min-width: 0; align-items: center; }
+.wg-head .vr-tab { font-size: 13px; }

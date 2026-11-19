@@ -33,6 +33,7 @@ export async function printToPdf({ content, width, height, title = 'Architect', 
   document.head.append(page);
   document.body.append(root);
   document.body.classList.add('is-printing');
+  root.querySelectorAll('[data-print-top], [data-print-left]').forEach((n) => { n.scrollTop = Number(n.dataset.printTop) || 0; n.scrollLeft = Number(n.dataset.printLeft) || 0; });
   const prevTitle = document.title;
   document.title = title.replace(/[\\/:*?"<>|]+/g, '').trim() || 'Architect';
 

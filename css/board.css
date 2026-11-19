@@ -649,3 +649,8 @@ body.bp-busy .el.is-live .el-media { pointer-events: none; }
 .bp-viewport.is-moving .bp-world :is(.vr-cat, .fi-idea, .fi-wk, .fi-wk-card, .fi-wl-card, .fi-wl-bar, .tmr, .ptask) {
   -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
 }
+
+/* Nov 19 — Blueprint export: everything on the sheet renders, whole */
+.bp-print [data-eid], .print-root [data-eid] { content-visibility: visible !important; contain: none !important; }
+.print-root .bp-world { will-change: auto !important; }
+.print-root .el-widget .wg-body { overflow: hidden; }

@@ -1,4 +1,6 @@
-// Fleeting Ideas — one object, three tabs (the Tracker calendar opens from a button in Story).
+// Fleeting Moments (was Fleeting Ideas) — Story and Weekly (the Tracker calendar opens from a button in
+// Story). Nov 19: the Ideas canvas moved into Side Chat (its lightbulb), mounted from here with
+// { only: 'ideas' } so it is the very same canvas; the widget's tabs sit beside its title.
 //   Ideas    an influence canvas split in two: EXTERNAL (amber, left) and INTERNAL (violet, right).
 //            Where an idea sits is its classification, and its glass takes that side's colour.
 //            Two views: Mine (default — your own ideas, on your account, the same in every Space)
@@ -21,7 +23,7 @@ import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia, fmtDur } from './m
 import { avatarsFor } from '../data/profile.js';
 import { getPref, setPref } from '../data/prefs.js';
 import { loadMyVars, myVars, setMyVars, onMyVars } from '../data/myvars.js';
-import { registerPool, poolReady, poolIdeas, setPoolIdeas, onPool } from '../data/ideapool.js';
+import { registerPool, poolReady, poolIdeas, setPoolIdeas, onPool, poolField, patchPool } from '../data/ideapool.js';
 
 /* Who wrote a Story event: name + face, looked up once per person. */
 const whoNames = new Map(), whoFaces = new Map();
@@ -61,6 +63,12 @@ export const spOf = (m) => [...SETPOINTS].reverse().find((s) => m >= s.from) || 
 const clockOf = (m) => { const t = (m + DAY_START) % 1440; return `${pad(Math.floor(t / 60))}:${pad(t % 60)}`; };
 const mondayOf = (d) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
 const shortDate = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+/** A week named by when it really is: "November 16–22", or "Nov 30 – Dec 6" across a month. */
+const weekRange = (key) => {
+  const a = parseKey(key), b = new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6);
+  const mo = (d, len) => d.toLocaleDateString(undefined, { month: len });
+  return a.getMonth() === b.getMonth() ? `${mo(a, 'long')} ${a.getDate()}–${b.getDate()}` : `${mo(a, 'short')} ${a.getDate()} – ${mo(b, 'short')} ${b.getDate()}`;
+};
 const addWeeks = (key, n) => { const d = parseKey(key); return keyOf(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n * 7)); };
 /** Every Monday from start's week through deadline's week, plus any week that still holds tasks. */
 const planWeeks = (p) => {
@@ -90,7 +98,7 @@ const AXES = { mine: ['EXTERNAL', 'INTERNAL'], shared: ['PRODUCE', 'CONSUME'] };
 const tf = (x, y, tilt = 0, lift = false) => `translate(${x}px, ${y}px) rotate(${lift ? 0 : tilt}deg)${lift ? ' scale(1.04)' : ''}`;
 const fold = (v) => { v = ((v % 2) + 2) % 2; return v > 1 ? 2 - v : v; };
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
-const TABS = [['ideas', 'Ideas'], ['story', 'Story'], ['weekly', 'Weekly']];
+const MOMENT_TABS = [['story', 'Story'], ['weekly', 'Weekly']];
 const DEFAULT_GOAL = 'Rona’s Apartment';
 // Weekly looks — yours alone (saved to your account prefs), so everyone can plan on their own backdrop.
 const WK_THEMES = [
@@ -103,13 +111,15 @@ const WK_THEMES = [
   ['moss', 'Moss', '#1f2e22'],
 ];
 
-export function mountFleeting(root, el0, w) {
+export function mountFleeting(root, el0, w, opts = {}) {
   let el = el0;
+  const only = opts.only || null; // 'ideas' → just the ideas canvas (Side Chat)
+  const TABS = only === 'ideas' ? [['ideas', 'Ideas']] : MOMENT_TABS;
   const me = api.auth.current()?.user;
   const memKey = `architect.fi.${el.id}`;
   const mem = store.get(memKey, {});
   // Tracker used to be a tab: anyone who left it open lands in Story with the calendar showing.
-  let tab = mem.tab === 'tracker' ? 'story' : TABS.some(([id]) => id === mem.tab) ? mem.tab : 'ideas';
+  let tab = only === 'ideas' ? 'ideas' : mem.tab === 'tracker' ? 'story' : TABS.some(([id]) => id === mem.tab) ? mem.tab : 'story';
   let cal = mem.tab === 'tracker' || !!mem.cal; // Story's calendar (the Tracker) is open
   let day = storyKey();
   let month = (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })();
@@ -132,8 +142,10 @@ export function mountFleeting(root, el0, w) {
   });
   const attach = h('button', { class: 'fi-attach', type: 'button', title: 'Add photos or videos', 'aria-label': 'Add photos or videos', onclick: () => pickMedia().then((f) => addMediaToStory(f)) }, icon('image', 17));
   const composer = h('div', { class: 'fi-compose' }, input, attach);
-  const box = h('div', { class: 'fi' }, h('div', { class: 'fi-top' }, tabsRow, aside), stage, composer);
+  const box = h('div', { class: ['fi', only && `is-only-${only}`] }, h('div', { class: 'fi-top' }, w.slot || only ? null : tabsRow, aside), stage, composer);
   root.append(box);
+  // Title beside the tabs (like Path): the tab strip rides in the widget header, right after the name.
+  if (w.slot && !only) w.slot.replaceChildren(tabsRow);
 
   // Paste photos/videos straight into Story (or into Ideas → they land in today's story).
   box.addEventListener('paste', (e) => {
@@ -145,7 +157,7 @@ export function mountFleeting(root, el0, w) {
     }
     if (!files.length) return;
     e.preventDefault();
-    if (tab === 'ideas') { day = storyKey(); setTab('story'); }
+    if (tab === 'ideas') { if (!only) { day = storyKey(); setTab('story'); } else return; }
     if (tab === 'story') addMediaToStory(files);
   });
 
@@ -157,11 +169,26 @@ export function mountFleeting(root, el0, w) {
   const poolSet = (list, live = false) => (personal ? setPoolIdeas(list, live) : (live ? w.live : w.patch)({ ideas: list }));
   const poolOk = () => !personal || poolReady();
   const ideas = () => (ideaView === 'shared' ? poolGet() : mineList());
-  const story = (k = day) => el.story?.[k] || [];
+  // Moments sync: in your personal Space, Story and Weekly are the shared Space's object (when it is
+  // around), merged with anything this copy holds that the shared one doesn't have yet — nothing written
+  // in either place goes missing, and every write lands on the one shared record.
+  const moments = !only && personal;
+  const sharedStory = () => (moments && poolReady() ? poolField('story') || {} : null);
+  const storyAll = (k) => {
+    const mine = el.story?.[k] || [];
+    const sh = sharedStory();
+    if (!sh) return mine;
+    const theirs = sh[k] || [];
+    if (!mine.length) return theirs;
+    const ids = new Set(theirs.map((f) => f.id));
+    return [...theirs, ...mine.filter((f) => !ids.has(f.id))].sort((a, b) => a.m - b.m);
+  };
+  const story = (k = day) => storyAll(k);
   // Weekly plan. Weeks are keyed by their Monday (YYYY-MM-DD) and run from start to the deadline,
   // so the columns generate themselves. Older plans keyed weeks 1..8 — those convert on read.
   const weekly = () => {
-    const wk = el.weekly || {};
+    const shw = moments && poolReady() ? poolField('weekly') : null;
+    const wk = (shw && (shw.goal != null || Object.keys(shw.weeks || {}).length) ? shw : el.weekly) || {};
     const start = wk.start || keyOf(mondayOf(new Date()));
     const weeks = {};
     for (const [k, v] of Object.entries(wk.weeks || {})) {
@@ -175,8 +202,21 @@ export function mountFleeting(root, el0, w) {
     if (ideaView === 'shared') { if (poolOk()) poolSet(list, live); }
     else if (mineReady) setMyVars({ ideas: list });
   };
-  const setStory = (k, list) => w.patch({ story: { ...(w.current().story || {}), [k]: list } });
-  const setWeekly = (p) => { const cur = weekly(); w.patch({ weekly: { ...cur, ...p } }); };
+  const setStory = (k, list) => {
+    const sh = sharedStory();
+    if (sh) {
+      patchPool({ story: { ...sh, [k]: list } });
+      // this copy's own entries now live on the shared record: clear them here so they aren't merged twice
+      if ((w.current().story || {})[k]?.length) w.patch({ story: { ...(w.current().story || {}), [k]: [] } });
+      return;
+    }
+    w.patch({ story: { ...(w.current().story || {}), [k]: list } });
+  };
+  const setWeekly = (p) => {
+    const cur = weekly();
+    if (moments && poolReady()) { patchPool({ weekly: { ...cur, ...p } }); return; }
+    w.patch({ weekly: { ...cur, ...p } });
+  };
 
   /* ---------------- shell ---------------- */
   function setTab(id) {
@@ -192,11 +232,13 @@ export function mountFleeting(root, el0, w) {
     }, label)));
     const v = view();
     box.dataset.tab = tab;
-    composer.hidden = !(v === 'ideas' || v === 'story');
+    // Story has no narration box any more: click the line where the moment happened. The ideas canvas keeps
+    // its composer (in Side Chat) and also takes a click on open space.
+    composer.hidden = v !== 'ideas';
     attach.hidden = tab !== 'story';
     input.placeholder = tab === 'story' ? (day === storyKey() ? 'narrate this moment…' : `add to ${shortDate(parseKey(day))}…`) : 'type an idea…';
     input.setAttribute('aria-label', tab === 'story' ? 'Narrate a moment' : 'Type an idea');
-    aside.replaceChildren(...(tab === 'story' ? [...(cal ? [] : dayNav()), calBtn()] : tab === 'ideas' ? [viewSwitch()] : []));
+    aside.replaceChildren(...(tab === 'story' ? [...(cal ? [] : dayNav()), ...(cal ? [] : [mediaBtn()]), calBtn()] : tab === 'ideas' ? [viewSwitch()] : []));
     if (tab === 'ideas') input.placeholder = ideaView === 'shared' ? 'add to the shared pool…' : 'type an idea…';
     stopIdeas();
     stage.replaceChildren();
@@ -461,11 +503,15 @@ export function mountFleeting(root, el0, w) {
         if (ghost) ghost.hidden = !on;
         node.style.visibility = on ? 'hidden' : '';
       };
+      // Ideas on air (Nov 19): the pill is written straight from the pointer event — no frame of lag —
+      // and the field's box is measured a few times a second, not on every move.
+      let frc = fr0, frcT = performance.now();
       const step = () => {
         frame = 0;
         const ev = last;
         if (!ev || done) return;
-        const fr = field.getBoundingClientRect();
+        if (performance.now() - frcT > 250) { frc = field.getBoundingClientRect(); frcT = performance.now(); }
+        const fr = frc;
         const inside = ev.clientX >= fr.left && ev.clientX <= fr.right && ev.clientY >= fr.top && ev.clientY <= fr.bottom;
         fx = Math.max(0, Math.min(rx, (ev.clientX - fr.left) / scale - offX));
         fy = Math.max(0, Math.min(ry, (ev.clientY - fr.top) / scale - offY));
@@ -488,7 +534,7 @@ export function mountFleeting(root, el0, w) {
         samples.push({ x: ev.clientX, y: ev.clientY, t: performance.now() });
         if (samples.length > 6) samples.shift();
         last = ev;
-        if (!frame) frame = requestAnimationFrame(step);
+        step();
       };
       const finish = (ev, how) => {
         if (done) return;
@@ -613,7 +659,10 @@ export function mountFleeting(root, el0, w) {
       node.classList.remove('is-editing');
       const text = node.textContent.replace(/\s+/g, ' ').trim();
       dragId = null;
-      if (save && text && text !== i.text) commitIdeas(ideas().map((x) => (x.id === id ? { ...x, text } : x)));
+      if (save && text && text !== i.text) {
+        if (!i.text) setIdeas(ideas().map((x) => (x.id === id ? { ...x, text } : x))); // a fresh pill: one undo step, not two
+        else commitIdeas(ideas().map((x) => (x.id === id ? { ...x, text } : x)));
+      } else if (!i.text) { setIdeas(ideas().filter((x) => x.id !== id)); hist.pop(); } // left empty: it was never there
       else node.textContent = i.text;
       const n = nodes.get(id); if (n) { n.w = node.offsetWidth; n.h = node.offsetHeight; }
       release();
@@ -653,11 +702,32 @@ export function mountFleeting(root, el0, w) {
       window.removeEventListener('pointerup', up, true);
       window.removeEventListener('pointercancel', up, true);
       box.remove();
-      if (!shown) { selIdeas.clear(); base.forEach((id) => selIdeas.add(id)); paintIdeaSel(); } // a plain click on the ice clears it
+      if (!shown) {
+        // Click to Idea: a plain click on open ice clears a selection, or — with nothing selected — births
+        // a fresh pill right there, ready to type.
+        const had = selIdeas.size;
+        selIdeas.clear(); base.forEach((id) => selIdeas.add(id)); paintIdeaSel();
+        if (!had && !base.size) newIdeaAt(sx, sy);
+      }
     };
     window.addEventListener('pointermove', move, true);
     window.addEventListener('pointerup', up, true);
     window.addEventListener('pointercancel', up, true);
+  }
+
+  function newIdeaAt(cx, cy) {
+    if (ideaView === 'shared' ? !poolOk() : !mineReady) { toast('One moment — still opening your ideas.', { ms: 1800 }); return; }
+    const fr = field.getBoundingClientRect();
+    const scale = fr.width / (field.clientWidth || 1);
+    const W = field.clientWidth, H = field.clientHeight;
+    const pw = 150, ph = 36; // a fresh pill's rough size, so it opens under the pointer
+    const x = clamp01(((cx - fr.left) / scale - 12) / Math.max(1, W - pw));
+    const y = clamp01(((cy - fr.top) / scale - ph / 2) / Math.max(1, H - ph));
+    const id = uid();
+    commitIdeas([...ideas(), { id, text: '', by: me?.id || null, t0: Date.now(), parked: true, mv: me?.id || null, x, y, vx: 0, vy: 0 }]);
+    let tries = 0;
+    const open = () => { const n = nodes.get(id); if (n) editIdea(n.node, id); else if (tries++ < 10) requestAnimationFrame(open); };
+    requestAnimationFrame(open);
   }
 
   // Drag one of several selected ideas: they all move together (and can all land on your Path).
@@ -780,7 +850,7 @@ export function mountFleeting(root, el0, w) {
     }
     d.handled = true;
     addIdeas(d.texts, at);
-    if (tab !== 'ideas') setTab('ideas'); else paintIdeaSel();
+    if (tab === 'ideas') paintIdeaSel();
   };
   window.addEventListener('architect:drop-idea', onDropIdea);
 
@@ -832,7 +902,7 @@ export function mountFleeting(root, el0, w) {
     tl.dataset.th = TH;
     tl.dataset.extl = extL;
     if (day === storyKey()) { const now = storyMin(); tl.append(h('span', { class: 'fi-now', style: { top: `${yOf(now)}px`, '--sp': spOf(now).color }, title: `Now · ${clockOf(now)}` }, h('i'), h('b', {}, 'NOW'))); }
-    if (!list.length) tl.append(h('p', { class: 'fi-story-empty' }, day === storyKey() ? 'Nothing told yet today.' : 'An untold day.', h('br'), 'Type below, or drop photos and videos anywhere on the line.'));
+    if (!list.length) tl.append(h('p', { class: 'fi-story-empty' }, day === storyKey() ? 'Nothing told yet today.' : 'An untold day.', h('br'), 'Click anywhere on the line to tell a moment, or drop photos and videos on it.'));
     for (const f of list) tl.append(fragment(f, yOf));
     lookupWho(list.map((f) => f.by), () => { if (tab === 'story') refresh(); });
     stage.replaceChildren(tl);
@@ -947,6 +1017,29 @@ export function mountFleeting(root, el0, w) {
     ].filter(Boolean), { align: 'end' });
   }
 
+  function mediaBtn() {
+    return h('button', { class: 'fi-nav fi-media', type: 'button', title: 'Add photos or videos', 'aria-label': 'Add photos or videos', onclick: () => pickMedia().then((f) => addMediaToStory(f)) }, icon('image', 15));
+  }
+  // Click to Story: a left click on open line births a card right there — the time is where you
+  // clicked, and so is the side. Empty when you leave it? It goes away again.
+  let downAt = null;
+  stage.addEventListener('pointerdown', (e) => { downAt = e.button === 0 && !stage.querySelector('[contenteditable="true"]') ? { x: e.clientX, y: e.clientY } : null; }, true);
+  stage.addEventListener('click', (e) => {
+    if (view() !== 'story' || !tl || !downAt || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) return;
+    if (e.target.closest('.fi-frag, button, a, input, [contenteditable="true"], .fi-story-empty button')) return;
+    const r = tl.getBoundingClientRect();
+    const TH = Number(tl.dataset.th);
+    const y = e.clientY - r.top;
+    if (y < PT - 30 || y > PT + TH + 20) return;
+    const m = Math.round(Math.min(1439, Math.max(0, ((y - PT) / TH) * 1440)));
+    const x = clampX((e.clientX - r.left) / r.width);
+    const frag = addFragment({ kind: 'text', text: '' }, day, { m, x });
+    requestAnimationFrame(() => {
+      const card = tl?.querySelector(`.fi-frag[data-id="${frag.id}"] .fi-card`);
+      if (card) editFrag(card, frag);
+    });
+  });
+
   function editFrag(card, f) {
     let t = card.querySelector('.fi-frag-text');
     if (!t) { t = h('span', { class: 'fi-frag-text' }); card.append(t); }
@@ -961,7 +1054,7 @@ export function mountFleeting(root, el0, w) {
       t.contentEditable = 'false';
       const text = t.innerText.replace(/\n{3,}/g, '\n\n').trim();
       if (save && text !== (f.text || '') && (text || f.kind !== 'text')) setStory(day, story().map((q) => (q.id === f.id ? { ...q, text } : q)));
-      else if (save && !text && f.kind === 'text') setStory(day, story().filter((q) => q.id !== f.id));
+      else if ((save || !f.text) && !text && f.kind === 'text') setStory(day, story().filter((q) => q.id !== f.id)); // an empty card goes away
       release();
       if (!save) refresh();
     };
@@ -1030,7 +1123,7 @@ export function mountFleeting(root, el0, w) {
     const files = mediaFiles(e.dataTransfer);
     if (!files.length) return;
     e.preventDefault(); e.stopPropagation();
-    if (tab === 'ideas') { day = storyKey(); setTab('story'); addMediaToStory(files); return; }
+    if (tab === 'ideas') { if (only) return; day = storyKey(); setTab('story'); addMediaToStory(files); return; }
     const r = tl.getBoundingClientRect();
     const scale = r.width / (tl.clientWidth || 1);
     const TH = Number(tl.dataset.th);
@@ -1144,12 +1237,13 @@ export function mountFleeting(root, el0, w) {
       const doneN = items.filter((x) => x.done).length;
       const complete = items.length > 0 && doneN === items.length;
       const focus = key === k;
-      const state = complete ? 'is-complete' : key === now ? 'is-now' : key < now ? 'is-past' : 'is-future';
+      // Gold belongs to the current week only. Past weeks read gray, filled with what got checked off.
+      const state = key === now ? 'is-now' : key < now ? 'is-past' : 'is-future';
       const isDue = key === lastWk;
       const custom = p.titles?.[key] || '';
-      const wkLabel = custom || `WEEK ${nOf(key)}`;
-      const node = h('span', { class: 'fi-wl-node', 'aria-hidden': 'true' }, complete ? icon('check', 10, { weight: 3 }) : null);
-      const when = h('span', { class: 'fi-wl-when' }, h('b', {}, `W${nOf(key)}`), shortDate(parseKey(key)).toUpperCase());
+      const wkLabel = custom || weekRange(key);
+      const node = h('span', { class: ['fi-wl-node', complete && 'is-done'], 'aria-hidden': 'true' }, complete ? icon('check', 10, { weight: 3 }) : null);
+      const when = h('span', { class: 'fi-wl-when' }, weekRange(key));
       let body;
       if (focus) {
         const title = h('button', { class: 'fi-wk-name fi-wl-title', type: 'button', title: 'Double-click to rename', ondblclick: () => editWeekTitle(title, key, p) }, wkLabel.toUpperCase());
@@ -1178,10 +1272,13 @@ export function mountFleeting(root, el0, w) {
         },
         h('span', { class: ['fi-wl-ring', complete && 'is-done'] }),
         title,
+        key < now && items.length
+          ? h('span', { class: 'fi-wl-past' }, items.slice(0, 4).map((x) => h('span', { class: ['fi-wl-pastitem', x.done && 'is-done'] }, h('i', {}, x.done ? icon('check', 9, { weight: 3 }) : null), x.text)))
+          : null,
         items.length ? h('span', { class: 'fi-wl-count' }, `${doneN}/${items.length}`) : null,
         isDue ? h('span', { class: 'fi-wl-due' }, `DUE ${shortDate(parseKey(p.deadline)).toUpperCase()}`) : null);
       }
-      return h('li', { class: ['fi-wl-row', state, focus && 'is-focus', isDue && 'is-due'], 'data-key': key }, when, node, body);
+      return h('li', { class: ['fi-wl-row', state, complete && 'is-complete', focus && 'is-focus', isDue && 'is-due', key < now && items.length && 'has-past'], 'data-key': key }, when, node, body);
     });
 
     const look = weeklyLook();
@@ -1191,7 +1288,7 @@ export function mountFleeting(root, el0, w) {
       style: bgUrl ? { '--wk-img': `url("${bgUrl}")` } : null,
     },
       head,
-      h('ol', { class: 'fi-wl', 'aria-label': 'Weeks', style: { '--wl-fill': `${Math.round(100 * Math.max(0, Math.min(1, (keys.filter((x) => x <= now).length) / Math.max(1, keys.length))))}%` } }, rows),
+      h('ol', { class: ['fi-wl', 'is-fog'], 'aria-label': 'Weeks', style: { '--wl-fill': `${Math.round(100 * Math.max(0, Math.min(1, (keys.filter((x) => x <= now).length) / Math.max(1, keys.length))))}%` } }, rows),
       selBar(p));
     // Background & theme live on a right-click of the empty Weekly space.
     view.addEventListener('contextmenu', (e) => {
@@ -1254,7 +1351,7 @@ export function mountFleeting(root, el0, w) {
       const inp = h('input', { class: 'input sm fi-ew-title', value: o.title, maxlength: 40, placeholder: `Week ${i + 1}`, 'aria-label': `Week ${i + 1} title`, oninput: (e) => { o.title = e.target.value; } });
       const mv = (d) => { const j = i + d; if (j < 0 || j >= order.length) return; [order[i], order[j]] = [order[j], order[i]]; paintList(); list.querySelectorAll('.fi-ew-title')[j]?.focus(); };
       return h('li', { class: 'fi-ew-row' },
-        h('span', { class: 'fi-ew-when' }, `W${Math.round((parseKey(keys[i]) - parseKey(first)) / (7 * 86_400_000)) + 1} · ${shortDate(parseKey(keys[i])).toUpperCase()}`),
+        h('span', { class: 'fi-ew-when' }, weekRange(keys[i])),
         inp,
         h('span', { class: 'fi-ew-n' }, o.items.length ? `${o.items.length}` : '—'),
         h('button', { type: 'button', class: 'icon-btn sm', 'aria-label': 'Move up', disabled: i === 0, onclick: () => mv(-1) }, icon('chevronUp', 14)),
@@ -1584,9 +1681,16 @@ export function mountFleeting(root, el0, w) {
   onResize.observe(stage);
 
   // The shared Space's object is the pool everyone's Shared view reads.
-  const poolReg = personal ? null : registerPool({ id: el.id, get: () => w.current()?.ideas || el.ideas || [], set: (list, live) => (live ? w.live : w.patch)({ ideas: list }) });
+  const poolReg = personal ? null : registerPool({
+    id: el.id,
+    get: () => w.current()?.ideas || el.ideas || [],
+    set: (list, live) => (live ? w.live : w.patch)({ ideas: list }),
+    field: (k) => (w.current() || el)[k],
+    patch: (p) => w.patch(p),
+  });
+  if (moments && !poolReady()) w.host?.warmShared?.(); // bring the shared record in so both Spaces agree
   const ideasShown = () => tab === 'ideas';
-  const offPool = personal ? onPool(() => { if (ideasShown() && ideaView === 'shared') refresh(); }) : () => {};
+  const offPool = personal ? onPool(() => { if ((ideasShown() && ideaView === 'shared') || (moments && tab !== 'ideas')) refresh(); }) : () => {};
   const offMine = onMyVars((d, keys) => { if ((!keys || keys.includes('ideas')) && ideasShown() && ideaView === 'mine') refresh(); });
   if (personal && ideaView === 'shared' && !poolReady()) w.host?.warmShared?.();
   loadMyVars().then(() => {
@@ -1607,7 +1711,7 @@ export function mountFleeting(root, el0, w) {
   return {
     update(next) {
       const changed = next.ideas !== el.ideas || next.story !== el.story || next.weekly !== el.weekly;
-      const poolChanged = next.ideas !== el.ideas;
+      const poolChanged = next.ideas !== el.ideas || next.story !== el.story || next.weekly !== el.weekly;
       el = next;
       if (poolChanged) poolReg?.changed();
       if (changed) refresh();

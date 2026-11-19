@@ -253,7 +253,7 @@ export function mountVariables(root, el0, w) {
     const tabs = h('div', { class: 'vr-tabs', role: 'tablist' },
       t.map((s) => h('button', {
         type: 'button', role: 'tab', class: ['vr-tab', s.id === section && 'is-on', s.img && 'has-img'], 'aria-selected': String(s.id === section), 'data-sec': s.id,
-        onclick: () => { section = s.id; sub = null; remember(); render(); },
+        onclick: () => { section = s.id; sub = null; if (w?.slot) open = null; remember(); render(); },
         ondblclick: () => renameSection(s),
         oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, s); },
       }, secImg(s, 'vr-tab-img'), s.name.toUpperCase())),
@@ -333,7 +333,10 @@ export function mountVariables(root, el0, w) {
       h('span', {}, `Variables are now private to each account. ${old.length} saved on this object from before ${old.length === 1 ? 'isn’t' : 'aren’t'} in yours.`),
       h('button', { type: 'button', class: 'btn btn-primary sm', onclick: bringIn }, 'Bring in'),
       h('button', { type: 'button', class: 'btn sm', onclick: () => { store.set(`${memKey}.legacy`, 'dismissed'); render(); } }, 'Not mine')) : null;
-    return h('div', { class: ['vr-home', fvOn && 'is-free'] }, tabs, banner,
+    // Title beside the tabs (Nov 19): on the Space the section tabs ride in the widget header, right after
+    // VARIABLES, like Path's day tabs — the header loses a whole row.
+    if (w?.slot) w.slot.replaceChildren(tabs);
+    return h('div', { class: ['vr-home', fvOn && 'is-free'] }, w?.slot ? null : tabs, banner,
       h('div', { class: 'vr-bar' }, h('div', { class: 'vr-crumb' }, ...bar), fvToggle),
       main,
       !list.length && !cats.length && !fvOn ? h('p', { class: 'vr-hint' }, 'A teacher, a committee, your family, the office — every influence gets its own space. Right-click here to add one.') : null);

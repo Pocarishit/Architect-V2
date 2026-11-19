@@ -12,7 +12,8 @@
 // new messages above everyone else's). "… is typing" travels over the live channel only.
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { menu, toast } from '../core/ui.js';
+import { menu, toast, dialog } from '../core/ui.js';
+import { getPref, setPref } from '../data/prefs.js';
 import { uid, store } from '../core/util.js';
 import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
 import { uploadMedia, pickMedia, mediaFiles } from './media.js';
@@ -47,7 +48,7 @@ const strip = (t) => String(t || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' 
 export function labelOf(el) {
   if (!el) return 'Deleted object';
   if (el.type === 'widget') {
-    const names = { path: `${el.ownerName || ''} Path`.trim(), fleeting: 'Fleeting Ideas', variables: 'Variables', tracker: 'Tracker', tickets: 'Ticket board', blueprints: 'Blueprints', portal: el.name || 'Blueprint', custom: el.title || 'Widget', ticket: 'Ticket', column: 'Path column', ticketcol: 'Ticket column', radio: 'Radio', chat: 'Chat', tts: 'Voice chat' };
+    const names = { path: `${el.ownerName || ''} Path`.trim(), fleeting: 'Fleeting Moments', variables: 'Variables', tracker: 'Tracker', tickets: 'Ticket board', blueprints: 'Blueprints', portal: el.name || 'Blueprint', custom: el.title || 'Widget', ticket: 'Ticket', column: 'Path column', ticketcol: 'Ticket column', radio: 'Radio', chat: 'Chat', tts: 'Voice chat' };
     return names[el.kind] || 'Widget';
   }
   if (el.type === 'frame') return el.title || 'Frame';
@@ -55,6 +56,69 @@ export function labelOf(el) {
   const t = strip(el.text);
   if (t) return t.length > 48 ? `${t.slice(0, 46)}…` : t;
   return { sticky: 'Sticky note', text: 'Text', shape: 'Shape', image: 'Image', video: 'Video', pdf: el.name || 'PDF', border: 'Border' }[el.type] || 'Object';
+}
+
+/* ---------------- text shortcuts (Voice chat) ---------------- */
+// Type less, say more: a keyword expands into its full sentence the moment you finish it (space,
+// punctuation or Enter). Yours to edit; saved to your account so they follow you.
+export const DEFAULT_SHORTCUTS = [
+  ['wdym', 'what do you mean'], ['idk', 'I don’t know'], ['brb', 'be right back'], ['tbh', 'to be honest'],
+  ['ngl', 'not gonna lie'], ['imo', 'in my opinion'], ['omw', 'on my way'], ['rn', 'right now'], ['nvm', 'never mind'], ['ty', 'thank you'],
+];
+const shortcuts = () => { const v = getPref('ttsShortcuts', null); return Array.isArray(v) ? v : DEFAULT_SHORTCUTS; };
+const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Expand the keyword right before the caret, if the character just typed ended it. */
+function expandAt(input) {
+  const pos = input.selectionStart, v = input.value;
+  if (pos == null || pos !== input.selectionEnd || pos < 2) return false;
+  const end = v[pos - 1];
+  if (!/[\s.,!?;:]/.test(end)) return false;
+  const before = v.slice(0, pos - 1);
+  for (const [k, full] of shortcuts()) {
+    if (!k) continue;
+    const m = before.match(new RegExp(`(^|[\\s(“"'])(${escRe(k)})$`, 'i'));
+    if (!m) continue;
+    const at = before.length - m[2].length;
+    const keepCase = m[2][0] === m[2][0].toUpperCase() && m[2][0] !== m[2][0].toLowerCase();
+    const out = keepCase ? full.charAt(0).toUpperCase() + full.slice(1) : full;
+    input.value = v.slice(0, at) + out + v.slice(pos - 1);
+    const c = at + out.length + 1;
+    input.setSelectionRange(c, c);
+    return true;
+  }
+  return false;
+}
+/** Expand a keyword sitting at the very end (for Enter). */
+function expandEnd(text) {
+  let t = String(text);
+  for (const [k, full] of shortcuts()) {
+    if (!k) continue;
+    const m = t.match(new RegExp(`(^|[\\s(“"'])(${escRe(k)})$`, 'i'));
+    if (m) return t.slice(0, t.length - m[2].length) + full;
+  }
+  return t;
+}
+async function editShortcuts() {
+  let rows = shortcuts().map(([k, v]) => ({ k, v }));
+  const list = h('div', { class: 'tts-sc-list' });
+  const paint = () => list.replaceChildren(...rows.map((r, i) => h('div', { class: 'tts-sc-row' },
+    h('input', { class: 'input sm', value: r.k, maxlength: 20, placeholder: 'wdym', 'aria-label': 'Keyword', oninput: (e) => { r.k = e.target.value.trim(); } }),
+    h('span', { class: 'tts-sc-arrow', 'aria-hidden': 'true' }, '→'),
+    h('input', { class: 'input sm', value: r.v, maxlength: 200, placeholder: 'what do you mean', 'aria-label': 'Becomes', oninput: (e) => { r.v = e.target.value; } }),
+    h('button', { type: 'button', class: 'icon-btn sm', 'aria-label': 'Remove', onclick: () => { rows.splice(i, 1); paint(); } }, icon('close', 13)))));
+  paint();
+  const add = h('button', { type: 'button', class: 'btn sm', onclick: () => { rows.push({ k: '', v: '' }); paint(); list.lastElementChild?.querySelector('input')?.focus(); } }, icon('plus', 13), h('span', {}, 'Add shortcut'));
+  const reset = h('button', { type: 'button', class: 'btn sm', onclick: () => { rows = DEFAULT_SHORTCUTS.map(([k, v]) => ({ k, v })); paint(); } }, 'Defaults');
+  const ok = await dialog({
+    title: 'Text shortcuts', width: 520, className: 'tts-sc-dlg',
+    body: h('div', { class: 'stack' }, h('p', { class: 'muted', style: { margin: 0, fontSize: '12.5px' } }, 'Type the keyword and it becomes the full line as soon as you finish the word.'), list, h('div', { class: 'row', style: { gap: '8px' } }, add, reset)),
+    actions: [{ label: 'Cancel', value: null }, { label: 'Save', primary: true, value: true }],
+  });
+  if (!ok) return;
+  const seen = new Set();
+  const clean = rows.map((r) => [r.k.trim(), r.v.trim()]).filter(([k, v]) => k && v && !/\s/.test(k) && !seen.has(k.toLowerCase()) && seen.add(k.toLowerCase()));
+  setPref('ttsShortcuts', clean);
+  toast(`${clean.length} shortcut${clean.length === 1 ? '' : 's'} saved.`, { ms: 1800 });
 }
 
 /* ---------------- export ---------------- */
@@ -175,7 +239,10 @@ export function mountChat(body, el, w, { tts = false } = {}) {
     e.stopPropagation(); // typing here never drives canvas shortcuts
   });
   const grow = () => { input.style.height = 'auto'; input.style.height = `${Math.min(120, input.scrollHeight)}px`; };
-  input.addEventListener('input', () => { grow(); pingTyping(); });
+  input.addEventListener('input', (e) => {
+    if (tts && e.inputType !== 'insertFromPaste' && !e.isComposing) expandAt(input);
+    grow(); pingTyping();
+  });
 
   /* tools in the widget header */
   const muteBtn = tts ? h('button', { class: 'wg-btn', type: 'button', onclick: () => setMuted(!muted) }) : null;
@@ -195,6 +262,8 @@ export function mountChat(body, el, w, { tts = false } = {}) {
       '-',
       { header: 'Speed' },
       ...[[0.85, 'Slow'], [1, 'Normal'], [1.2, 'Fast'], [1.45, 'Faster']].map(([r, l]) => ({ label: l, checked: ratePref() === r, onSelect: () => store.set('architect.tts.rate', r) })),
+      '-',
+      { label: 'Text shortcuts…', icon: 'keyboard', onSelect: editShortcuts },
     ], { align: 'end' });
   }
 
@@ -213,7 +282,7 @@ export function mountChat(body, el, w, { tts = false } = {}) {
 
   /* sending + keeping messages from getting lost */
   function send(text = input.value, files = null) {
-    const t = String(text || '').trim();
+    const t = (tts ? expandEnd(String(text || '').trim()) : String(text || '')).trim();
     if (!t && !files?.length) return;
     const m = { id: uid(), by: me.id, name: me.username || 'Me', text: t.slice(0, 2000), ts: Date.now(), ...(files?.length ? { files } : {}) };
     mineSent.set(m.id, m);

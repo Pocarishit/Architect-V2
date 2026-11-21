@@ -15,7 +15,7 @@ import { mountBoard } from '../board/board.js';
 import { getSurface, setSurface } from '../board/editor.js';
 import { onEscapeFull } from '../core/guard.js';
 import { go } from '../core/router.js';
-import { uploadMedia, mediaFiles, pickMedia, canRecord, startRecording, fmtDur } from './media.js';
+import { uploadMedia, mediaFiles, pickMedia, canRecord, startRecording, fmtDur, playAllVoice } from './media.js';
 import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
 import { speak, ttsSupported } from './chat.js';
 
@@ -98,6 +98,8 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
   const openedAt = Date.now();
   let heard = new Set();
   const voiceBtn = h('button', { class: 'er-hbtn', type: 'button', onclick: () => setVoice(!voice) });
+  // Play all (Nov 22): every voice message in the room, top to bottom, back to back.
+  const playAllBtn = h('button', { class: 'er-hbtn er-playall', type: 'button', hidden: true, 'aria-label': 'Play all voice messages', title: 'Play all voice messages in order', onclick: () => playAllVoice(list) }, icon('play', 13));
   // The mic sends your actual voice (Nov 22): tap to record, tap again to send, × to throw it away.
   const mic = h('button', { class: 'sc-plus er-mic', type: 'button', 'aria-label': 'Record a voice message', title: 'Record a voice message', onclick: () => (rec ? stopMic(true) : startMic()) }, micIcon());
   const recTime = h('span', { class: 'er-rec-time' }, '0:00');
@@ -107,7 +109,7 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
   const hideBtn = h('button', { class: 'er-hbtn', type: 'button', 'aria-label': 'Hide chat', title: 'Hide chat', onclick: () => setChatOpen(false) }, icon('chevronLeft', 15));
   const showBtn = h('button', { class: 'er-rail', type: 'button', 'aria-label': 'Show chat', title: 'Show chat', onclick: () => setChatOpen(true) }, icon('chevronRight', 15), h('span', { class: 'er-rail-name' }));
   const chat = h('aside', { class: 'er-chat' },
-    h('header', { class: 'er-head' }, nameEl, drop, voiceBtn, hideBtn),
+    h('header', { class: 'er-head' }, nameEl, drop, playAllBtn, voiceBtn, hideBtn),
     list,
     h('div', { class: 'sc-compose er-compose' }, plus, ta, recBar, mic),
     showBtn);
@@ -289,6 +291,7 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
   }
 
   function paint(toBottom) {
+    playAllBtn.hidden = msgs.filter((m) => m.files?.some((f) => f.kind === 'audio')).length < 2;
     const atBottom = toBottom || list.scrollHeight - list.scrollTop - list.clientHeight < 40;
     const rows = [];
     let lastDay = '', prev = null;

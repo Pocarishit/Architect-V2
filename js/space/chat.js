@@ -43,6 +43,28 @@ export function speak(m, { force = false } = {}) {
   } catch (e) { console.warn('TTS failed', e); }
 }
 
+/** Read text aloud and know when it's done (sequence playback). Free browser voices. */
+export function sayAloud(text) {
+  let u = null;
+  const done = new Promise((res) => {
+    if (!ttsSupported() || !String(text || '').trim()) { res(); return; }
+    try {
+      u = new SpeechSynthesisUtterance(String(text).slice(0, 1200));
+      const v = voices().find((x) => x.name === voicePref());
+      if (v) u.voice = v;
+      u.rate = ratePref();
+      u.onend = () => res(); u.onerror = () => res();
+      window.speechSynthesis.speak(u);
+    } catch { res(); }
+  });
+  return {
+    done,
+    pause() { try { window.speechSynthesis.pause(); } catch {} },
+    resume() { try { window.speechSynthesis.resume(); } catch {} },
+    stop() { try { window.speechSynthesis.cancel(); } catch {} },
+  };
+}
+
 /* ---------------- labels for the object a chat is about ---------------- */
 const strip = (t) => String(t || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 export function labelOf(el) {

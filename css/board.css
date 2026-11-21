@@ -672,3 +672,48 @@ body.bp-busy .el.is-live .el-media { pointer-events: none; }
 .bp-print [data-eid], .print-root [data-eid] { content-visibility: visible !important; contain: none !important; }
 .print-root .bp-world { will-change: auto !important; }
 .print-root .el-widget .wg-body { overflow: hidden; }
+
+/* ---------- Play in sequence + voice notes on notes (Nov 22) ---------- */
+.el-frame-play {
+  position: absolute; right: 0; bottom: calc(100% + 6px * var(--iz, 1));
+  display: inline-flex; align-items: center; gap: 5px; height: calc(22px * var(--iz, 1)); padding: 0 calc(9px * var(--iz, 1)) 0 calc(7px * var(--iz, 1));
+  border-radius: 999px; border: 1px solid var(--line-2); background: var(--paper, var(--bg)); color: var(--fg-2);
+  font-family: var(--f-mono); font-size: calc(10px * var(--iz, 1)); letter-spacing: .1em; text-transform: uppercase;
+  opacity: .72; transition: opacity .15s, background-color .15s, color .15s; pointer-events: auto; cursor: pointer;
+}
+.el-frame-play svg { width: calc(10px * var(--iz, 1)); height: calc(10px * var(--iz, 1)); fill: currentColor; }
+.el-frame:hover .el-frame-play, .el-frame-play:focus-visible { opacity: 1; }
+.el-frame-play:hover { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.bp-page.is-presenting .el-frame-play, .bp-page.is-playing-seq .el-frame-play { display: none; }
+
+.el-voice {
+  position: absolute; left: 8px; bottom: 8px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px 0 4px;
+  border-radius: 999px; background: rgba(0, 0, 0, .78); color: #fff;
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: .04em; font-variant-numeric: tabular-nums;
+  pointer-events: auto; cursor: pointer; box-shadow: 0 2px 8px -2px rgba(0, 0, 0, .5);
+}
+.el-voice-ic { width: 15px; height: 15px; border-radius: 50%; display: grid; place-items: center; background: #fff; color: #000; }
+.el-voice-ic svg { width: 9px; height: 9px; fill: currentColor; stroke: currentColor; }
+.el-voice.is-playing { background: #f2b733; color: #111; }
+.el-voice.is-playing .el-voice-ic { background: #111; color: #f2b733; }
+
+/* the object playing now */
+.el.is-seq-on { outline: 3px solid #f2b733; outline-offset: 6px; border-radius: 6px; box-shadow: 0 0 0 10px color-mix(in srgb, #f2b733 16%, transparent); transition: outline-color .2s; }
+.bp-page.is-playing-seq .bp-tools, .bp-page.is-playing-seq .bp-ctx { opacity: .25; pointer-events: none; }
+.pl-hud { overflow: hidden; }
+.pl-hud.out { opacity: 0; transition: opacity .18s; }
+.pl-count { font-family: var(--f-mono); font-size: 12px; letter-spacing: .06em; font-variant-numeric: tabular-nums; padding: 0 4px; }
+.pl-label { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--fg-2); padding-right: 4px; }
+.pl-read { opacity: .45; }
+.pl-read.is-on { opacity: 1; }
+.pl-bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 0; background: #f2b733; transition: width .35s var(--ease, ease); }
+
+.pl-rec {
+  position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 40;
+  display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 14px;
+}
+.pl-rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red, #e5484d); animation: pl-blink 1s steps(2, start) infinite; }
+@keyframes pl-blink { to { visibility: hidden; } }
+.pl-rec-t { font-family: var(--f-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+.pl-rec-hint { font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); padding-right: 4px; }

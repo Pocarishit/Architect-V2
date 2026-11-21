@@ -167,8 +167,11 @@ export function voiceNote(f, { onAsset } = {}) {
     const url = urlOf(f.path, () => onAsset?.());
     if (!url) { node.classList.add('is-loading'); return null; }
     // One Audio per clip, so a chat that redraws mid-play keeps the same sound (and its controls).
+    const fresh = !clips.has(f.path);
     audio = clips.get(f.path) || new Audio(url);
     clips.set(f.path, audio);
+    // Play in sequence (Nov 22): a clip you started rolls straight into the next voice note below it.
+    if (fresh) audio.addEventListener('ended', () => { if (audio._chain) playNextAfter(f.path); });
     audio.preload = 'auto';
     audio.addEventListener('timeupdate', () => {
       const d = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : (f.dur || 1);
@@ -180,9 +183,11 @@ export function voiceNote(f, { onAsset } = {}) {
     audio.addEventListener('play', paint);
     return audio;
   }
-  node.play = () => {
+  node.dataset.path = f.path;
+  node.play = ({ chain = false } = {}) => {
     const a = ensure();
     if (!a) return Promise.reject(new Error('not ready'));
+    a._chain = chain;
     if (nowPlaying && nowPlaying !== a) nowPlaying.pause();
     nowPlaying = a;
     return a.play();
@@ -191,7 +196,7 @@ export function voiceNote(f, { onAsset } = {}) {
     e.stopPropagation();
     const a = ensure();
     if (!a) return;
-    if (a.paused) node.play().catch(() => {}); else a.pause();
+    if (a.paused) node.play({ chain: true }).catch(() => {}); else a.pause();
   });
   // Tap along the line to jump.
   bars.addEventListener('click', (e) => {
@@ -201,9 +206,72 @@ export function voiceNote(f, { onAsset } = {}) {
     const r = bars.getBoundingClientRect();
     const d = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : (f.dur || 0);
     if (d) a.currentTime = Math.max(0, Math.min(d, ((e.clientX - r.left) / r.width) * d));
-    if (a.paused) node.play().catch(() => {});
+    if (a.paused) node.play({ chain: true }).catch(() => {});
   });
   urlOf(f.path, () => { node.classList.remove('is-loading'); onAsset?.(); });
   if (clips.has(f.path)) { ensure(); paint(); }
   return node;
+}
+
+function playNextAfter(path) {
+  const here = [...document.querySelectorAll('.vn')].find((n) => n.dataset.path === path && n.isConnected);
+  const log = here?.closest('[role="log"], .er-list, .sc-list, .vr-list');
+  if (!log) return;
+  const all = [...log.querySelectorAll('.vn')];
+  const next = all[all.indexOf(here) + 1];
+  if (next?.play) { next.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); next.play({ chain: true }).catch(() => {}); }
+}
+/** Play every voice note in a chat from the top, one after another. */
+export function playAllVoice(log) {
+  const first = log?.querySelector('.vn');
+  if (!first?.play) return false;
+  first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  first.play({ chain: true }).catch(() => {});
+  return true;
+}
+
+/** Play one clip to the end (sequence playback). { done: Promise, pause, resume, stop, audio }. */
+export function playClip(path) {
+  const url = urlOf(path);
+  const a = clips.get(path) || (url ? new Audio(url) : null);
+  if (!a) {
+    // The link isn't signed yet: wait for it, then play.
+    let stopped = false, inner = null;
+    const done = new Promise((res) => {
+      urlOf(path, () => { if (stopped) { res(); return; } inner = playClip(path); inner.done.then(res); });
+      setTimeout(() => { if (!inner) res(); }, 8000);
+    });
+    return { done, pause: () => inner?.pause(), resume: () => inner?.resume(), stop: () => { stopped = true; inner?.stop(); } };
+  }
+  clips.set(path, a);
+  if (nowPlaying && nowPlaying !== a) nowPlaying.pause();
+  nowPlaying = a;
+  try { a.currentTime = 0; } catch {}
+  let finish;
+  const done = new Promise((res) => { finish = res; });
+  const end = () => { a.removeEventListener('ended', end); a.removeEventListener('error', end); finish(); };
+  a.addEventListener('ended', end); a.addEventListener('error', end);
+  a.play().catch(() => end());
+  return { audio: a, done, pause: () => a.pause(), resume: () => a.play().catch(() => {}), stop: () => { a.pause(); end(); } };
+}
+
+/** The little ▶ chip on a board note that carries a voice note. */
+export function voiceChip(audio) {
+  const t = h('span', { class: 'el-voice-t' }, fmtDur(audio.dur || 0) || '0:00');
+  const ic = h('span', { class: 'el-voice-ic' }, icon('play', 11));
+  const btn = h('button', { type: 'button', class: 'el-voice', 'data-noptr': '', 'aria-label': 'Play voice note', title: 'Play voice note' }, ic, t);
+  let ctl = null;
+  btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const a = clips.get(audio.path);
+    if (a && !a.paused) { a.pause(); return; }
+    ctl = playClip(audio.path);
+    btn.classList.add('is-playing'); ic.replaceChildren(icon('pause', 11));
+    const tick = setInterval(() => { const x = clips.get(audio.path); if (x) t.textContent = fmtDur(Math.floor(x.currentTime)) || '0:00'; }, 250);
+    const stopUi = () => { clearInterval(tick); btn.classList.remove('is-playing'); ic.replaceChildren(icon('play', 11)); t.textContent = fmtDur(audio.dur || 0) || '0:00'; };
+    ctl.done.then(stopUi);
+    ctl.audio?.addEventListener('pause', stopUi, { once: true });
+  });
+  return btn;
 }

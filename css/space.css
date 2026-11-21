@@ -604,6 +604,8 @@ body.is-space .shell-head { display: none; }
 .er-hbtn { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--fg-3); cursor: pointer; transition: color .12s, background .12s; }
 .er-hbtn:hover { color: var(--fg); background: var(--s2); }
 .er-hbtn.is-on { color: var(--bg); background: var(--fg); }
+.er-hbtn[hidden] { display: none; }
+.er-playall svg { fill: currentColor; }
 .er-list { padding: 8px 14px 10px; }
 .er-loading { margin: auto; }
 .er-compose { flex: none; padding: 10px 12px 12px; border-top: 1px solid var(--line); }

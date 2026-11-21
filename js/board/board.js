@@ -1,4 +1,5 @@
 // Blueprint board page: loads a board, wires the editor to toolbars, panels, media and autosave.
+import { playSequence, itemsInFrame, order as orderSeq, recordOnto } from './playback.js';
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { menu, popover, toast, dialog, confirmDialog, promptDialog, closeFloating } from '../core/ui.js';
@@ -776,9 +777,35 @@ export function mountBoard(root, boardId, opts = {}) {
       ], { align: 'end' });
     }
 
+    // Play in sequence + voice notes on notes (Nov 22).
+    page.addEventListener('bp-play-frame', (e) => playFrame(e.detail?.id));
+    function playFrame(id) {
+      const f = editor.byId.get(id);
+      if (!f) return;
+      playSequence(editor, page, itemsInFrame(editor, f).map((x) => x.id), { title: f.title || 'Frame' });
+    }
+    function playItems(sel) {
+      const frame = sel.length === 1 && sel[0].type === 'frame' ? sel[0] : null;
+      if (frame) { playFrame(frame.id); return; }
+      const list = sel.flatMap((x) => (x.type === 'frame' ? itemsInFrame(editor, x) : [x])).filter((x) => !['line', 'pen', 'border', 'frame'].includes(x.type));
+      playSequence(editor, page, orderSeq(editor, [...new Map(list.map((x) => [x.id, x])).values()]).map((x) => x.id));
+    }
+    function voiceItems(sel) {
+      const one = sel.length === 1 && ['sticky', 'text', 'shape'].includes(sel[0].type) && !sel[0].locked ? sel[0] : null;
+      if (!one) return [];
+      return [
+        { label: one.audio ? 'Re-record voice note' : 'Record voice note', icon: 'mic', onSelect: () => recordOnto(editor, page, one) },
+        one.audio ? { label: 'Remove voice note', icon: 'close', onSelect: () => editor.updateEls([one.id], { audio: undefined }) } : null,
+      ];
+    }
+
     function contextMenu(at, onElement, world) {
       const sel = editor.selected();
+      const playable = sel.length > 1 || sel.some((x) => x.type === 'frame');
       const items = onElement ? [
+        playable ? { label: sel.length === 1 ? 'Play frame' : 'Play in sequence', icon: 'play', onSelect: () => playItems(sel) } : null,
+        ...voiceItems(sel),
+        playable || voiceItems(sel).length ? '-' : null,
         { label: 'Copy', icon: 'copy', kbd: '⌘C', onSelect: () => editor.copy() },
         { label: 'Duplicate', icon: 'copy', kbd: '⌘D', onSelect: () => editor.duplicate() },
         { label: 'Bring to front', icon: 'front', kbd: ']', onSelect: () => editor.bringToFront() },

@@ -1,4 +1,5 @@
 // Creates and patches the DOM node for each board element.
+import { voiceChip } from '../space/media.js';
 import { h, s } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { css, onColor } from './palette.js';
@@ -89,8 +90,21 @@ function safeHref(url) {
   try { const u = new URL(url); return /^https?:$/.test(u.protocol) ? u.href : null; } catch { return null; }
 }
 
+// A note that carries a voice note shows a ▶ chip in its corner (Nov 22).
+function voiceBadge(node, el) {
+  const key = el.audio?.path || '';
+  if (key && node._voice?.isConnected && node._voice.dataset.path === key) return;
+  if (!key && !node._voice) return;
+  node._voice?.remove(); node._voice = null;
+  if (!key) return;
+  node._voice = voiceChip(el.audio);
+  node._voice.dataset.path = key;
+  node.append(node._voice);
+}
+
 export function updateNode(node, el, ctx) {
   node.classList.toggle('is-locked', !!el.locked);
+  if (el.type === 'sticky' || el.type === 'text' || el.type === 'shape') queueMicrotask(() => voiceBadge(node, el));
   switch (el.type) {
     case 'sticky': {
       place(node, el);
@@ -139,7 +153,13 @@ export function updateNode(node, el, ctx) {
       if (!node._title) {
         node._body = h('div', { class: 'el-frame-body' });
         node._title = h('div', { class: 'el-frame-title' });
-        node.append(node._body, node._title);
+        // ▶ plays what's inside, one object after another (Nov 22).
+        node._play = h('button', {
+          type: 'button', class: 'el-frame-play', 'data-noptr': '', 'aria-label': 'Play this frame', title: 'Play this frame in sequence',
+          onpointerdown: (e) => e.stopPropagation(),
+          onclick: (e) => { e.stopPropagation(); node.dispatchEvent(new CustomEvent('bp-play-frame', { bubbles: true, detail: { id: node.dataset.eid } })); },
+        }, icon('play', 11), h('span', {}, 'Play'));
+        node.append(node._body, node._title, node._play);
       }
       if (!node._title.isContentEditable) node._title.textContent = el.title || 'Frame';
       node._body.style.background = el.fill && el.fill !== 'none' ? css(el.fill) : '';

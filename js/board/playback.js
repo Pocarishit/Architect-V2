@@ -115,7 +115,7 @@ export function playSequence(editor, page, list, { title = 'Sequence', frameId =
   function paintRows() {
     rows.replaceChildren(...ids.map((id, k) => {
       const el = editor.byId.get(id);
-      const name = el ? (textOf(el).slice(0, 60) || ({ sticky: 'Note', image: 'Image', video: 'Video', widget: 'Object', shape: 'Shape' }[el.type] || 'Object')) : 'Removed';
+      const name = el ? (textOf(el) || ({ sticky: 'Note', image: 'Image', video: 'Video', widget: 'Object', shape: 'Shape' }[el.type] || 'Object')) : 'Removed';
       const up = h('button', { class: 'pl-mv', type: 'button', 'aria-label': 'Move up', disabled: k === 0, onclick: (e) => { e.stopPropagation(); move(k, k - 1); } }, icon('chevronUp', 13));
       const dn = h('button', { class: 'pl-mv', type: 'button', 'aria-label': 'Move down', disabled: k === ids.length - 1, onclick: (e) => { e.stopPropagation(); move(k, k + 1); } }, icon('chevronDown', 13));
       const row = h('li', { class: ['pl-row', k === i && 'is-on'], role: 'option', 'aria-selected': String(k === i), tabindex: 0, 'data-k': k,
@@ -135,7 +135,21 @@ export function playSequence(editor, page, list, { title = 'Sequence', frameId =
       return row;
     }));
     rows.querySelector('.pl-row.is-on')?.scrollIntoView({ block: 'nearest' });
+    paintBadges();
   }
+  // Small red numbered circles on the objects themselves, so you can see on the board which plays when.
+  function paintBadges() {
+    editor.vp.querySelectorAll('.pl-badge').forEach((b) => b.remove());
+    if (stopped) return;
+    ids.forEach((id, k) => {
+      const n = nodeOf(id);
+      if (!n) return;
+      n.append(h('span', { class: ['pl-badge', k === i && 'is-on'], 'aria-hidden': 'true' }, String(k + 1)));
+    });
+  }
+  const offChange = editor.on?.('change', () => requestAnimationFrame(() => {
+    if (!stopped && ids.some((id) => { const n = nodeOf(id); return n && !n.querySelector(':scope > .pl-badge'); })) paintBadges();
+  }));
   function move(from, to, focus = false) {
     if (to < 0 || to >= ids.length || from === to) return;
     const cur = ids[i];
@@ -259,6 +273,8 @@ export function playSequence(editor, page, list, { title = 'Sequence', frameId =
     try { window.speechSynthesis?.cancel(); } catch {}
     window.removeEventListener('keydown', onKey, true);
     editor.vp.querySelectorAll('.is-seq-on').forEach((n) => n.classList.remove('is-seq-on'));
+    editor.vp.querySelectorAll('.pl-badge').forEach((b) => b.remove());
+    offChange?.();
     hud.classList.add('out'); side.classList.add('out'); setTimeout(() => { hud.remove(); side.remove(); }, 200);
     page.classList.remove('is-playing-seq');
     editor.setCamera(cam0, { animate: true });

@@ -699,7 +699,7 @@ body.bp-busy .el.is-live .el-media { pointer-events: none; }
 .el-voice.is-playing .el-voice-ic { background: #111; color: #f2b733; }
 
 /* the object playing now */
-.el.is-seq-on { outline: 3px solid #f2b733; outline-offset: 6px; border-radius: 6px; box-shadow: 0 0 0 10px color-mix(in srgb, #f2b733 16%, transparent); transition: outline-color .2s; }
+.el.is-seq-on { z-index: 50; outline: 3px solid #f2b733; outline-offset: 6px; border-radius: 6px; box-shadow: 0 0 0 10px color-mix(in srgb, #f2b733 16%, transparent); transition: outline-color .2s; }
 .bp-page.is-playing-seq .bp-tools, .bp-page.is-playing-seq .bp-ctx { opacity: .25; pointer-events: none; }
 .pl-hud { overflow: hidden; }
 .pl-hud.out { opacity: 0; transition: opacity .18s; }
@@ -717,3 +717,43 @@ body.bp-busy .el.is-live .el-media { pointer-events: none; }
 @keyframes pl-blink { to { visibility: hidden; } }
 .pl-rec-t { font-family: var(--f-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
 .pl-rec-hint { font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); padding-right: 4px; }
+/* play order sidebar (Nov 22) */
+.pl-side {
+  position: absolute; z-index: 31; left: 14px; top: 64px; bottom: 76px; width: 260px;
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--paper, var(--bg)); border: 1px solid var(--line-2); border-radius: 16px;
+  box-shadow: 0 20px 44px -22px rgba(0, 0, 0, .7); overflow: hidden;
+  animation: pl-in .2s var(--ease, ease);
+}
+@keyframes pl-in { from { opacity: 0; transform: translateX(-8px); } }
+.pl-side.out { opacity: 0; transition: opacity .18s; }
+.pl-side-head { display: grid; gap: 2px; padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+.pl-side-t { font-family: var(--f-dot); font-weight: 800; font-size: 18px; letter-spacing: .06em; }
+.pl-side-sub { font-family: var(--f-mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
+.pl-rows { list-style: none; margin: 0; padding: 6px; overflow: auto; flex: 1; display: grid; gap: 4px; align-content: start; }
+.pl-row {
+  position: relative; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 6px 0 4px;
+  border-radius: 10px; cursor: pointer; color: var(--fg-2); background: transparent;
+  transition: background-color .12s, transform .16s var(--ease, ease);
+}
+.pl-row:hover { background: var(--s2); color: var(--fg); }
+.pl-row:focus-visible { outline: 2px solid var(--fg); outline-offset: -2px; }
+.pl-row.is-on { background: color-mix(in srgb, #f2b733 16%, transparent); color: var(--fg); box-shadow: inset 2px 0 0 #f2b733; }
+.pl-row.is-drag { z-index: 2; background: var(--s3, var(--s2)); box-shadow: 0 10px 24px -12px rgba(0, 0, 0, .8); transition: none; cursor: grabbing; }
+.pl-grip { flex: none; width: 18px; height: 28px; display: grid; place-items: center; color: var(--fg-4); cursor: grab; touch-action: none; }
+.pl-grip svg { fill: currentColor; }
+.pl-row:hover .pl-grip { color: var(--fg-2); }
+.pl-n { flex: none; font-family: var(--f-mono); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--fg-3); }
+.pl-row.is-on .pl-n { color: #f2b733; }
+.pl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.pl-has-voice { flex: none; color: #f2b733; display: grid; }
+.pl-mvs { flex: none; display: none; gap: 2px; }
+.pl-row:hover .pl-mvs, .pl-row:focus-within .pl-mvs { display: flex; }
+.pl-mv { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; color: var(--fg-3); }
+.pl-mv:hover:not(:disabled) { background: var(--s3, var(--s2)); color: var(--fg); }
+.pl-mv:disabled { opacity: .25; }
+.pl-side-reset { flex: none; margin: 6px; height: 34px; border-radius: 10px; font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); border: 1px dashed var(--line-2); }
+.pl-side-reset:hover { color: var(--fg); border-color: var(--fg-3); }
+@media (max-width: 719.98px) {
+  .pl-side { left: 8px; right: 8px; top: auto; bottom: calc(72px + env(safe-area-inset-bottom)); width: auto; max-height: 38vh; }
+}

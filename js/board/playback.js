@@ -28,7 +28,13 @@ export function itemsInFrame(editor, frame) {
     const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
     return cx >= f.x && cx <= f.x + f.w && cy >= f.y && cy <= f.y + f.h;
   });
-  return order(editor, inside);
+  const auto = order(editor, inside);
+  // A frame remembers the order you set in the sidebar (frame.seq). Anything added since goes on the end.
+  if (!Array.isArray(frame.seq) || !frame.seq.length) return auto;
+  const byId = new Map(inside.map((e) => [e.id, e]));
+  const kept = frame.seq.filter((id) => byId.has(id)).map((id) => byId.get(id));
+  const have = new Set(kept.map((e) => e.id));
+  return [...kept, ...auto.filter((e) => !have.has(e.id))];
 }
 
 export function order(editor, list) {
@@ -65,12 +71,14 @@ export function order(editor, list) {
 }
 
 /** Play a list of element ids in sequence on this board. */
-export function playSequence(editor, page, ids, { title = 'Sequence' } = {}) {
+export function playSequence(editor, page, list, { title = 'Sequence', frameId = null, paused: startPaused = false } = {}) {
   active?.stop();
+  let ids = [...list];
   if (!ids.length) { toast('Nothing in here to play yet.', { ms: 2000 }); return null; }
   const cam0 = { ...editor.cam };
   let i = -1, paused = false, stopped = false, cur = null, timer = 0, token = 0;
   let read = store.get(READ, true) !== false;
+  const heard = new Set(); // positions already played this run
 
   const count = h('span', { class: 'pl-count' });
   const label = h('span', { class: 'pl-label' });
@@ -88,7 +96,89 @@ export function playSequence(editor, page, ids, { title = 'Sequence' } = {}) {
     h('span', { class: 'hud-sep' }),
     h('button', { class: 'bp-icon', type: 'button', 'aria-label': 'Stop', title: 'Stop (Esc)', onclick: () => stop() }, icon('close', 18)),
     bar);
-  page.append(hud);
+  /* ---- the order sidebar (Nov 22): click a row to jump there; drag a row (or use ↑ ↓) to change the
+     order. A frame keeps the new order, so next time it plays the same way. ---- */
+  const rows = h('ol', { class: 'pl-rows', role: 'listbox', 'aria-label': 'Play order' });
+  const side = h('aside', { class: 'pl-side', 'aria-label': 'Play order' },
+    h('div', { class: 'pl-side-head' }, h('span', { class: 'pl-side-t' }, 'ORDER'), h('span', { class: 'pl-side-sub' }, frameId ? 'Drag to reorder · saved to the frame' : 'Drag to reorder')),
+    rows,
+    frameId ? h('button', { class: 'pl-side-reset', type: 'button', onclick: () => {
+      const f = editor.byId.get(frameId);
+      if (!f) return;
+      editor.updateEls([frameId], { seq: undefined });
+      const cur = ids[i];
+      ids = itemsInFrame(editor, { ...f, seq: undefined }).map((e) => e.id);
+      i = Math.max(0, ids.indexOf(cur));
+      paintRows(); paintCount();
+      toast('Back to reading order.', { ms: 1400 });
+    } }, 'Reset to reading order') : null);
+  function paintRows() {
+    rows.replaceChildren(...ids.map((id, k) => {
+      const el = editor.byId.get(id);
+      const name = el ? (textOf(el).slice(0, 60) || ({ sticky: 'Note', image: 'Image', video: 'Video', widget: 'Object', shape: 'Shape' }[el.type] || 'Object')) : 'Removed';
+      const up = h('button', { class: 'pl-mv', type: 'button', 'aria-label': 'Move up', disabled: k === 0, onclick: (e) => { e.stopPropagation(); move(k, k - 1); } }, icon('chevronUp', 13));
+      const dn = h('button', { class: 'pl-mv', type: 'button', 'aria-label': 'Move down', disabled: k === ids.length - 1, onclick: (e) => { e.stopPropagation(); move(k, k + 1); } }, icon('chevronDown', 13));
+      const row = h('li', { class: ['pl-row', k === i && 'is-on'], role: 'option', 'aria-selected': String(k === i), tabindex: 0, 'data-k': k,
+        onclick: () => go(k),
+        onkeydown: (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); go(k); }
+          if (e.altKey && e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); move(k, k - 1, true); }
+          if (e.altKey && e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); move(k, k + 1, true); }
+        },
+      },
+      h('span', { class: 'pl-grip', 'aria-hidden': 'true' }, icon('grip', 12)),
+      h('span', { class: 'pl-n' }, String(k + 1).padStart(2, '0')),
+      h('span', { class: 'pl-name' }, name),
+      el?.audio ? h('span', { class: 'pl-has-voice', title: 'Has a voice note' }, icon('mic', 12)) : null,
+      h('span', { class: 'pl-mvs' }, up, dn));
+      row.querySelector('.pl-grip').addEventListener('pointerdown', (e) => dragRow(e, k));
+      return row;
+    }));
+    rows.querySelector('.pl-row.is-on')?.scrollIntoView({ block: 'nearest' });
+  }
+  function move(from, to, focus = false) {
+    if (to < 0 || to >= ids.length || from === to) return;
+    const cur = ids[i];
+    const [x] = ids.splice(from, 1);
+    ids.splice(to, 0, x);
+    i = ids.indexOf(cur);
+    if (frameId && editor.byId.get(frameId)) editor.updateEls([frameId], { seq: [...ids] });
+    paintRows(); paintCount();
+    if (focus) rows.querySelector(`[data-k="${to}"]`)?.focus();
+  }
+  function dragRow(e, k) {
+    e.preventDefault(); e.stopPropagation();
+    const row = rows.children[k];
+    const items = [...rows.children];
+    const rects = items.map((r) => r.getBoundingClientRect());
+    const y0 = e.clientY;
+    let to = k;
+    row.classList.add('is-drag');
+    const mv = (ev) => {
+      const dy = ev.clientY - y0;
+      row.style.transform = `translateY(${dy}px)`;
+      const cy = rects[k].top + rects[k].height / 2 + dy;
+      to = rects.reduce((best, r, j) => (Math.abs(r.top + r.height / 2 - cy) < Math.abs(rects[best].top + rects[best].height / 2 - cy) ? j : best), k);
+      items.forEach((r, j) => {
+        if (j === k) return;
+        const shift = k < to && j > k && j <= to ? -rects[k].height - 4 : k > to && j < k && j >= to ? rects[k].height + 4 : 0;
+        r.style.transform = shift ? `translateY(${shift}px)` : '';
+      });
+    };
+    const upH = () => {
+      window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', upH); window.removeEventListener('pointercancel', upH);
+      items.forEach((r) => { r.style.transform = ''; });
+      row.classList.remove('is-drag');
+      if (to !== k) move(k, to); else paintRows();
+    };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', upH); window.addEventListener('pointercancel', upH);
+  }
+  function paintCount() {
+    count.textContent = `${String(i + 1).padStart(2, '0')} / ${String(ids.length).padStart(2, '0')}`;
+    bar.style.width = `${((i + 1) / ids.length) * 100}%`;
+  }
+
+  page.append(hud, side);
   page.classList.add('is-playing-seq');
   editor.finishEditing?.(); editor.clearSel?.();
 
@@ -120,15 +210,17 @@ export function playSequence(editor, page, ids, { title = 'Sequence' } = {}) {
     const my = ++token;
     const el = editor.byId.get(ids[i]);
     if (!el) { go(i + 1); return; }
-    count.textContent = `${String(i + 1).padStart(2, '0')} / ${String(ids.length).padStart(2, '0')}`;
+    paintCount();
+    paintRows();
     label.textContent = textOf(el).slice(0, 40) || ({ sticky: 'Note', image: 'Image', video: 'Video', widget: 'Object' }[el.type] || 'Object');
-    bar.style.width = `${((i + 1) / ids.length) * 100}%`;
     const r = rectOf(el, editor.byId);
     editor.fitRect(r, { pad: 90, maxZ: el.type === 'widget' ? 1.1 : 2.2 });
     ring(el.id);
     await new Promise((res) => setTimeout(res, 520)); // let the camera arrive
     if (my !== token || stopped) return;
     let done;
+    if (paused) { cur = null; return; }
+    heard.add(i); // parked on this one; ▶ plays it
     if (el.audio?.path) { cur = playClip(el.audio.path); done = cur.done; }
     else if (el.type === 'video') {
       const v = nodeOf(el.id)?.querySelector('video');
@@ -149,13 +241,16 @@ export function playSequence(editor, page, ids, { title = 'Sequence' } = {}) {
     if (paused) return; // resume will move on
     timer = setTimeout(() => { if (my === token && !paused) go(i + 1); }, 450);
   }
-  function toggle() {
-    paused = !paused;
+  function setPaused(p) {
+    paused = p;
     ppBtn.replaceChildren(icon(paused ? 'play' : 'pause', 16));
     ppBtn.setAttribute('aria-label', paused ? 'Play' : 'Pause');
-    if (paused) cur?.pause();
-    else if (cur) cur.resume();
-    if (!paused && !cur) go(i + 1);
+  }
+  function toggle() {
+    setPaused(!paused);
+    if (paused) { cur?.pause(); return; }
+    if (cur) cur.resume();
+    else go(heard.has(i) ? i + 1 : i);
   }
   function stop(finished = false) {
     if (stopped) return;
@@ -164,7 +259,7 @@ export function playSequence(editor, page, ids, { title = 'Sequence' } = {}) {
     try { window.speechSynthesis?.cancel(); } catch {}
     window.removeEventListener('keydown', onKey, true);
     editor.vp.querySelectorAll('.is-seq-on').forEach((n) => n.classList.remove('is-seq-on'));
-    hud.classList.add('out'); setTimeout(() => hud.remove(), 200);
+    hud.classList.add('out'); side.classList.add('out'); setTimeout(() => { hud.remove(); side.remove(); }, 200);
     page.classList.remove('is-playing-seq');
     editor.setCamera(cam0, { animate: true });
     if (finished) toast(`Played ${ids.length} ${ids.length === 1 ? 'object' : 'objects'}.`, { ms: 1600 });
@@ -172,6 +267,7 @@ export function playSequence(editor, page, ids, { title = 'Sequence' } = {}) {
   }
   const api = { stop };
   active = api;
+  if (startPaused) setPaused(true);
   go(0);
   return api;
 }

@@ -779,10 +779,10 @@ export function mountBoard(root, boardId, opts = {}) {
 
     // Play in sequence + voice notes on notes (Nov 22).
     page.addEventListener('bp-play-frame', (e) => playFrame(e.detail?.id));
-    function playFrame(id) {
+    function playFrame(id, o = {}) {
       const f = editor.byId.get(id);
       if (!f) return;
-      playSequence(editor, page, itemsInFrame(editor, f).map((x) => x.id), { title: f.title || 'Frame' });
+      playSequence(editor, page, itemsInFrame(editor, f).map((x) => x.id), { title: f.title || 'Frame', frameId: f.id, ...o });
     }
     function playItems(sel) {
       const frame = sel.length === 1 && sel[0].type === 'frame' ? sel[0] : null;
@@ -804,6 +804,7 @@ export function mountBoard(root, boardId, opts = {}) {
       const playable = sel.length > 1 || sel.some((x) => x.type === 'frame');
       const items = onElement ? [
         playable ? { label: sel.length === 1 ? 'Play frame' : 'Play in sequence', icon: 'play', onSelect: () => playItems(sel) } : null,
+        sel.length === 1 && sel[0].type === 'frame' ? { label: 'Reorder…', icon: 'list', onSelect: () => playFrame(sel[0].id, { paused: true }) } : null,
         ...voiceItems(sel),
         playable || voiceItems(sel).length ? '-' : null,
         { label: 'Copy', icon: 'copy', kbd: '⌘C', onSelect: () => editor.copy() },

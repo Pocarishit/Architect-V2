@@ -10,6 +10,9 @@ import { css } from './palette.js';
 import { sanitize, hasRichMarkup } from './richtext.js';
 import { looksLikeUrl, extractUrl } from './embed.js';
 
+// Objects that can tilt (Nov 22). Lines, pen strokes and borders are drawn by their own points.
+const ROTATABLE = new Set(['sticky', 'text', 'shape', 'frame', 'image', 'video', 'pdf', 'embed', 'link', 'widget']);
+
 export const CLIP_MARK = 'ARCHITECT/BLUEPRINT/1\n';
 const MIN_Z = 0.05;
 // CSS zoom with standard (Chrome 128+ / Firefox 126+ / Safari) semantics.
@@ -382,7 +385,7 @@ export class Editor {
   }
 
   renderOverlay() {
-    const o = this.overlay;
+    let o = this.overlay;
     o.replaceChildren();
     const z = this.cam.z;
     const box = (r, cls) => h('div', { class: cls, style: { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` } });
@@ -416,7 +419,20 @@ export class Editor {
         return;
       }
       const r = rectOf(el, this.byId);
+      // A tilted object gets a tilted frame: everything below is drawn into a wrapper turned around the
+      // object's center, so handles, dots and the rotator sit where the object actually is.
+      const rot = ROTATABLE.has(el.type) ? Number(el.rot) || 0 : 0;
+      const live = g?.type === 'rotate';
+      if (rot || live) {
+        const wrap = h('div', { class: 'ov-rot', style: { left: '0px', top: '0px', transformOrigin: `${r.x + r.w / 2}px ${r.y + r.h / 2}px`, transform: `rotate(${rot}deg)` } });
+        o.append(wrap);
+        o = wrap;
+      }
       o.append(box(r, `ov-sel${el.locked ? ' is-locked' : ''}`));
+      if (live) {
+        o.append(h('div', { class: 'ov-rot-tag', style: { left: `${r.x + r.w / 2}px`, top: `${r.y - 46 / z}px`, transform: `translate(-50%, -50%) rotate(${-rot}deg)` } }, `${Math.round(((rot % 360) + 360) % 360)}°`));
+        return;
+      }
       if (el.locked) { o.append(lockBadge(r)); return; }
       if (this.activeId === el.id && !busy) {
         // A playing video/embed takes every click, so it gets its own handle to move it by.
@@ -428,6 +444,11 @@ export class Editor {
         : el.type === 'image' || el.type === 'video' || el.type === 'pdf' ? ['nw', 'ne', 'se', 'sw']
           : ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
       dirs.forEach((d) => o.append(handle(d, r)));
+      // The rotator: a round handle on a short stem above the top edge. Drag it to tilt the object.
+      if (ROTATABLE.has(el.type) && !busy) {
+        o.append(h('div', { class: 'ov-stem', style: { left: `${r.x + r.w / 2}px`, top: `${r.y - 40 / z}px`, height: `${40 / z}px` } }));
+        o.append(h('div', { class: 'ov-rotor', 'data-handle': 'rot', title: 'Drag to rotate · Shift for 15° steps · double-click to straighten', style: { left: `${r.x + r.w / 2}px`, top: `${r.y - 40 / z}px` } }, icon('rotate', 11)));
+      }
       // Connection dots: drag one to draw a connector, click one to add a connected item.
       // Connector dots show on any selected object (notes and text included); they hide only while you're
       // typing inside it — the early return above for an element being edited.
@@ -941,6 +962,7 @@ export class Editor {
       if (d.startsWith('qc-')) { this.beginAnchor(start, d.slice(3)); return; }
       if (d === 'a' || d === 'b') { this.beginEndpoint(start, d); return; }
       if (d === 'grip') { this.beginMove(start); return; }
+      if (d === 'rot') { this.beginRotate(start); return; }
       this.beginResize(start, d);
       return;
     }
@@ -1216,6 +1238,46 @@ export class Editor {
     this.startGesture(g);
   }
 
+  // Rotation (Nov 22): swing the rotator around the object's center. Snaps lightly to straight and 45°
+  // marks; Shift steps in 15°. Double-clicking the rotator puts the object back upright.
+  beginRotate(start) {
+    const el = this.selected()[0];
+    if (!el || el.locked || !ROTATABLE.has(el.type)) return;
+    const now = performance.now();
+    if (this._rotTap && now - this._rotTap < 320) {
+      this._rotTap = 0;
+      this.updateEls([el.id], { rot: undefined });
+      this.emit('notice', 'Straightened');
+      return;
+    }
+    this._rotTap = now;
+    const before = this.els;
+    const r = rectOf(el, this.byId);
+    const c = { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+    const a0 = Math.atan2(start.p.y - c.y, start.p.x - c.x);
+    const r0 = Number(el.rot) || 0;
+    const g = {
+      type: 'rotate', pointerId: start.pointerId,
+      onMove: (p, e) => {
+        document.body.classList.add('bp-busy');
+        g.moved = true;
+        let deg = r0 + (Math.atan2(p.y - c.y, p.x - c.x) - a0) * 180 / Math.PI;
+        if (e.shiftKey) deg = Math.round(deg / 15) * 15;
+        else {
+          const mark = Math.round(deg / 45) * 45;
+          if (Math.abs(deg - mark) < 4) deg = mark; // light snap to straight and 45°
+        }
+        deg = ((deg % 360) + 540) % 360 - 180; // keep it in (-180, 180]
+        if (deg === -180) deg = 180;
+        deg = Math.round(deg * 10) / 10;
+        this.setEls(this.els.map((x) => (x.id === el.id ? { ...x, rot: deg || undefined } : x)), { commit: false });
+      },
+      onUp: () => { if (g.moved) { this._rotTap = 0; this.commitFrom(before); } this.renderOverlay(); this.emit('selection'); },
+    };
+    this.startGesture(g);
+    this.renderOverlay();
+  }
+
   beginResize(start, dir) {
     const sel = this.selected().filter((x) => !x.locked);
     if (!sel.length) return;
@@ -1230,7 +1292,10 @@ export class Editor {
       type: 'resize', pointerId: start.pointerId,
       onMove: (p, e) => {
         document.body.classList.add('bp-busy');
-        const dx = p.x - start.p.x, dy = p.y - start.p.y;
+        let dx = p.x - start.p.x, dy = p.y - start.p.y;
+        // A tilted object resizes along its own axes: turn the drag into the object's frame first.
+        const th = single && ROTATABLE.has(single.type) ? (Number(single.rot) || 0) * Math.PI / 180 : 0;
+        if (th) { const c = Math.cos(-th), sn = Math.sin(-th); [dx, dy] = [dx * c - dy * sn, dx * sn + dy * c]; }
         let { x, y, w, h: hh } = ob;
         if (dir.includes('e')) w = ob.w + dx;
         if (dir.includes('w')) { w = ob.w - dx; x = ob.x + dx; }
@@ -1247,13 +1312,19 @@ export class Editor {
           if (dir.includes('n')) y = ob.y + ob.h - hh;
         }
         this.guides = null;
-        if (this.prefs.guides !== false && !keep && !(e.ctrlKey || e.metaKey)) {
+        if (th) {
+          // Keep the opposite edge planted in the world: move the center by the turned offset.
+          const ox = ob.x + ob.w / 2, oy = ob.y + ob.h / 2;
+          const lx = x + w / 2 - ox, ly = y + hh / 2 - oy;
+          const c = Math.cos(th), sn = Math.sin(th);
+          x = ox + lx * c - ly * sn - w / 2; y = oy + lx * sn + ly * c - hh / 2;
+        } else if (this.prefs.guides !== false && !keep && !(e.ctrlKey || e.metaKey)) {
           g.targets ||= this.snapTargets(new Set(sel.map((x) => x.id)));
           const hit = this.snapEdges({ x, y, w, h: hh }, dir, g.targets);
           ({ x, y, w } = hit.r); hh = hit.r.h;
           this.guides = hit.guides;
         }
-        if (this.prefs.snap && !keep) {
+        if (this.prefs.snap && !keep && !th) {
           if (dir.includes('e')) w = snap(x + w) - x;
           if (dir.includes('s')) hh = snap(y + hh) - y;
           if (dir.includes('w')) { const nx = snap(x); w += x - nx; x = nx; }

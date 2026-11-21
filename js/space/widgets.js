@@ -35,6 +35,48 @@ export const WIDGETS = {
   radio: { label: 'Radio', icon: 'radio', w: 400, h: 500, hint: 'Your YouTube playlist, streamed live to the Space' },
 };
 
+// Fullscreen (Nov 22): the object's header and body move into a layer that covers the whole screen, and
+// back again on exit (button, Esc, or the same button in the header). The object itself stays on the board.
+export function fullscreenToggle(body, el, w, label) {
+  let layer = null, node = null, onKey = null;
+  const button = h('button', {
+    class: 'wg-btn wg-full-btn', type: 'button', 'data-noptr': '', title: `Fill the screen with ${label}`, 'aria-label': `Fill the screen with ${label}`, 'aria-pressed': 'false',
+    onclick: () => (layer ? exit() : enter()),
+  }, icon('fullscreen', 14));
+  function enter() {
+    node = body.parentNode;
+    if (!node || layer) return;
+    const head = node.querySelector(':scope > .wg-head');
+    layer = h('div', { class: 'el-widget wg-fullscreen', 'data-wkind': el.kind, 'data-surface': `full-${el.id}`, role: 'dialog', 'aria-label': `${label}, full screen` });
+    layer.append(head, body);
+    document.body.append(layer);
+    node.classList.add('is-fullscreen-src');
+    button.replaceChildren(icon('exitFullscreen', 14));
+    button.setAttribute('aria-pressed', 'true');
+    button.title = 'Exit full screen';
+    onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (e.target.closest?.('input, textarea, [contenteditable="true"]') || document.querySelector('.dlg, .menu, .popover')) return;
+      e.preventDefault(); e.stopPropagation(); exit();
+    };
+    window.addEventListener('keydown', onKey);
+    requestAnimationFrame(() => { layer?.classList.add('in'); window.dispatchEvent(new Event('resize')); });
+  }
+  function exit() {
+    if (!layer) return;
+    const head = layer.querySelector(':scope > .wg-head');
+    if (node) node.append(...[head, body].filter(Boolean));
+    node?.classList.remove('is-fullscreen-src');
+    layer.remove(); layer = null;
+    window.removeEventListener('keydown', onKey);
+    button.replaceChildren(icon('fullscreen', 14));
+    button.setAttribute('aria-pressed', 'false');
+    button.title = `Fill the screen with ${label}`;
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+  }
+  return { button, enter, exit, get on() { return !!layer; } };
+}
+
 const possessive = (name) => `${name || 'Someone'}’${/s$/i.test(name || '') ? '' : 's'}`;
 
 /**
@@ -80,6 +122,9 @@ export function createWidgetHost(host) {
   };
 }
 
+// Mount one kind's body outside the board (the phone's Blueprint list).
+export function mountKind(kind, body, el, w) { return (KINDS[kind] || KINDS.missing)(body, el, w); }
+
 const KINDS = {
   path(body, el, w) {
     w.setTitle(`${possessive(el.owner === w.me?.id ? w.me.username : el.ownerName)} Path`.toUpperCase());
@@ -116,7 +161,10 @@ const KINDS = {
 
   variables(body, el, w) {
     w.setTitle('VARIABLES');
-    return mountVariables(body, el, w);
+    const full = fullscreenToggle(body, el, w, 'Variables');
+    w.tools.append(full.button);
+    const ctl = mountVariables(body, el, w) || {};
+    return { ...ctl, destroy: () => { full.exit(); ctl.destroy?.(); } };
   },
 
   tracker(body, el, w) {

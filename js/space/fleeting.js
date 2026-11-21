@@ -644,9 +644,16 @@ export function mountFleeting(root, el0, w, opts = {}) {
     commitIdeas(ideas().filter((x) => x.id !== id));
   }
 
+  const pinned = new Map(); // idea id → its top-left (field px) while it's being written
   function editIdea(node, id) {
     const i = ideas().find((x) => x.id === id);
     if (!i || node.isContentEditable) return;
+    // Hold the pill's top-left where it is while you type: growing text widens it to the right, not both ways.
+    if (!pinned.has(id) && field) {
+      const n0 = nodes.get(id);
+      const m0 = motion(i, Date.now());
+      if (n0) pinned.set(id, { px: m0.x * Math.max(0, field.clientWidth - (n0.w || node.offsetWidth)), py: m0.y * Math.max(0, field.clientHeight - (n0.h || node.offsetHeight)) });
+    }
     hold++; dragId = id;
     node.contentEditable = 'true';
     node.classList.add('is-editing');
@@ -659,9 +666,16 @@ export function mountFleeting(root, el0, w, opts = {}) {
       node.classList.remove('is-editing');
       const text = node.textContent.replace(/\s+/g, ' ').trim();
       dragId = null;
+      const pin = pinned.get(id); pinned.delete(id);
+      let at = {};
+      if (pin && field && save && text) {
+        node.textContent = text;
+        const W = field.clientWidth, H = field.clientHeight;
+        at = { x: clamp01(pin.px / Math.max(1, W - node.offsetWidth)), y: clamp01(pin.py / Math.max(1, H - node.offsetHeight)), vx: 0, vy: 0 };
+      }
       if (save && text && text !== i.text) {
-        if (!i.text) setIdeas(ideas().map((x) => (x.id === id ? { ...x, text } : x))); // a fresh pill: one undo step, not two
-        else commitIdeas(ideas().map((x) => (x.id === id ? { ...x, text } : x)));
+        if (!i.text) setIdeas(ideas().map((x) => (x.id === id ? { ...x, text, ...at } : x))); // a fresh pill: one undo step, not two
+        else commitIdeas(ideas().map((x) => (x.id === id ? { ...x, text, ...at } : x)));
       } else if (!i.text) { setIdeas(ideas().filter((x) => x.id !== id)); hist.pop(); } // left empty: it was never there
       else node.textContent = i.text;
       const n = nodes.get(id); if (n) { n.w = node.offsetWidth; n.h = node.offsetHeight; }
@@ -720,13 +734,22 @@ export function mountFleeting(root, el0, w, opts = {}) {
     const fr = field.getBoundingClientRect();
     const scale = fr.width / (field.clientWidth || 1);
     const W = field.clientWidth, H = field.clientHeight;
-    const pw = 150, ph = 36; // a fresh pill's rough size, so it opens under the pointer
-    const x = clamp01(((cx - fr.left) / scale - 12) / Math.max(1, W - pw));
-    const y = clamp01(((cy - fr.top) / scale - ph / 2) / Math.max(1, H - ph));
+    // Born under the cursor (Nov 22): the click point is the pill's top-left corner, dead on. A pill's
+    // stored x/y is a fraction of the room left beside it, so it's worked out again once its real size is known.
+    const px = Math.max(0, Math.min(W - 24, (cx - fr.left) / scale)), py = Math.max(0, Math.min(H - 24, (cy - fr.top) / scale));
+    const pw = 150, ph = 36;
+    const x = clamp01(px / Math.max(1, W - pw));
+    const y = clamp01(py / Math.max(1, H - ph));
     const id = uid();
+    pinned.set(id, { px, py });
     commitIdeas([...ideas(), { id, text: '', by: me?.id || null, t0: Date.now(), parked: true, mv: me?.id || null, x, y, vx: 0, vy: 0 }]);
     let tries = 0;
-    const open = () => { const n = nodes.get(id); if (n) editIdea(n.node, id); else if (tries++ < 10) requestAnimationFrame(open); };
+    const open = () => {
+      const n = nodes.get(id);
+      if (!n) { if (tries++ < 10) requestAnimationFrame(open); return; }
+      n.node.style.transform = tf(Math.round(px), Math.round(py), n.tilt);
+      editIdea(n.node, id);
+    };
     requestAnimationFrame(open);
   }
 
@@ -928,7 +951,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     const x = f.x ?? 0.5;
     const far = x < 0.1 || x > 0.9; // pulled out into the open space: it sits a touch askew, like a loose note
     if (far) card.style.rotate = `${(glassOf(f.id).tilt * 0.55).toFixed(2)}deg`;
-    const node = h('div', { class: ['fi-frag', far && 'is-off'], 'data-id': f.id, style: { top: `${yOf(f.m)}px`, left: `${x * 100}%` } }, card);
+    const node = h('div', { class: ['fi-frag', far && 'is-off', f.tl && 'is-tl'], 'data-id': f.id, style: { top: `${yOf(f.m)}px`, left: `${x * 100}%` } }, card);
     if (!f.uploading) bindFrag(node, card, label, f);
     return node;
   }
@@ -950,12 +973,13 @@ export function mountFleeting(root, el0, w, opts = {}) {
     if (!tl || !card) return;
     const mid = tl.clientWidth / 2;
     const at = node.offsetLeft, half = card.offsetWidth / 2;
-    const left = at - half, right = at + half;
+    const topLeft = node.classList.contains('is-tl'); // anchored by its corner, not its middle
+    const left = topLeft ? at : at - half, right = topLeft ? at + half * 2 : at + half;
     let a = null;
-    if (right < mid - 6) a = { cls: 'to-r', from: half, len: mid - right };   // card on the left: line runs right to the spine
+    if (right < mid - 6) a = { cls: 'to-r', from: right - at, len: mid - right };   // card on the left: line runs right to the spine
     else if (left > mid + 6) a = { cls: 'to-l', from: mid - at, len: left - mid }; // card on the right
     if (!a) return;
-    node.prepend(h('i', { class: ['fi-link', a.cls], style: { left: `${a.from}px`, width: `${a.len}px` } }));
+    node.prepend(h('i', { class: ['fi-link', a.cls], style: { left: `${a.from}px`, width: `${a.len}px`, top: topLeft ? `${card.offsetHeight / 2}px` : '' } }));
   }
 
   function bindFrag(node, card, label, f) {
@@ -1029,11 +1053,13 @@ export function mountFleeting(root, el0, w, opts = {}) {
     if (e.target.closest('.fi-frag, button, a, input, [contenteditable="true"], .fi-story-empty button')) return;
     const r = tl.getBoundingClientRect();
     const TH = Number(tl.dataset.th);
-    const y = e.clientY - r.top;
+    const k = r.width / (tl.clientWidth || 1); // the Space's zoom: screen px → timeline px
+    const y = (e.clientY - r.top) / k;
     if (y < PT - 30 || y > PT + TH + 20) return;
     const m = Math.round(Math.min(1439, Math.max(0, ((y - PT) / TH) * 1440)));
     const x = clampX((e.clientX - r.left) / r.width);
-    const frag = addFragment({ kind: 'text', text: '' }, day, { m, x });
+    // Born under the cursor (Nov 22): the click is the new card's top-left corner, not its middle.
+    const frag = addFragment({ kind: 'text', text: '', tl: true }, day, { m, x });
     requestAnimationFrame(() => {
       const card = tl?.querySelector(`.fi-frag[data-id="${frag.id}"] .fi-card`);
       if (card) editFrag(card, frag);

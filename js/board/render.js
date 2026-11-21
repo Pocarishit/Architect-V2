@@ -31,6 +31,10 @@ function place(node, el, autoHeight = false) {
   st.top = `${el.y}px`;
   st.width = `${Math.max(1, el.w)}px`;
   st.height = autoHeight ? '' : `${Math.max(1, el.h)}px`;
+  // Rotation (Nov 22): every box-like object can tilt around its own center.
+  const rot = Number(el.rot) || 0;
+  st.transform = rot ? `rotate(${rot}deg)` : '';
+  st.transformOrigin = rot ? '50% 50%' : '';
 }
 
 function textBlock(node, el, { align = 'left', size = 18, placeholder = 'Type something' } = {}) {

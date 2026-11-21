@@ -22,6 +22,7 @@ import { go } from '../core/router.js';
 import { askSource } from '../space/radio.js';
 import { labelOf } from '../space/chat.js';
 import { openEmergencyRoom, comboWatcher } from '../space/er.js';
+import { mountMobile } from '../space/mobile.js';
 
 export function mountSpace(root) {
   const me = api.auth.current()?.user;
@@ -88,11 +89,12 @@ export function mountSpace(root) {
   }
 
   function mountSlot(m, id) {
-    const slot = slots[m] = { el: null, board: null, t: null, offs: [] };
+    const slot = slots[m] = { el: null, board: null, t: null, offs: [], host: null };
     const before = page.lastElementChild;
+    slot.host = { editor: () => slot.t?.editor || null, spaceId: id, personal: m === 'personal', me, openBoard, snapBack, detach, detachTicketCol, snapTicketCol, popTicket, snapTicket, expandTicket, poppedTickets, openMenuFor, reveal, addPortal, register, registerTts, warmShared };
     slot.board = mountBoard(page, id, {
       space: true,
-      mountWidget: createWidgetHost({ editor: () => slot.t?.editor || null, spaceId: id, personal: m === 'personal', me, openBoard, snapBack, detach, detachTicketCol, snapTicketCol, popTicket, snapTicket, expandTicket, poppedTickets, openMenuFor, reveal, addPortal, register, registerTts, warmShared }),
+      mountWidget: createWidgetHost(slot.host),
       extendMenu,
       onReady: (tools) => onReady(tools, slot, m),
     });
@@ -288,6 +290,7 @@ export function mountSpace(root) {
     let lastPop = [...poppedTickets()].sort().join();
     slot.offs.push(ed.on('change', () => { const sig = [...poppedTickets()].sort().join(); if (sig !== lastPop) { lastPop = sig; ticketsMoved(); } }));
     if (mode === m) mountDock();
+    sweepDeadKeys();
     // An old Paths / Ticket board link brought you here: fly to your Path.
     try { const f = sessionStorage.getItem('architect.focus'); if (f && mode === m) { sessionStorage.removeItem('architect.focus'); setTimeout(() => focusKind(f), 60); } } catch {}
     // "Open as a window" from a full-page Blueprint lands back here with the window open.
@@ -457,10 +460,9 @@ export function mountSpace(root) {
 
   function mountDock() {
     page.querySelector('.space-dock')?.remove();
-    { const old = page.querySelector('.space-slider'); old?._off?.(); old?.remove(); }
     const ed = editor();
     ed?.setViewOnly?.(viewMode);
-    if (phone()) { mountSlider(ed); return; }
+    if (phone()) { mountPhone(ed); return; }
     const cat = dockCatalog(ed);
     let suppress = false; // a long-press opened the customizer: the release isn't a tap
     const item = (ic, label, fn, extra = {}) => h('button', { class: 'sd-btn', type: 'button', 'aria-label': label, onclick: (e) => { if (suppress) { suppress = false; return; } fn(e.currentTarget); }, ...extra }, icon(ic, 20), h('span', {}, label));
@@ -482,150 +484,60 @@ export function mountSpace(root) {
     page.append(dock);
   }
 
-  /* ================= Mobile (Nov 19) =================
-     The phone shows one object at a time, sized for the thumb; the others stay where they are, so their
-     edges and lines run off the screen. The bottom of the screen is a slider: MAP (the whole board), then
-     every object on the board in reading order, then Ideas and Side Chat. Tap a label or drag the gold
-     knob; swipe the bar to step. A new object becomes a new stop. */
+  /* ================= Mobile (Nov 22) =================
+     On a phone Architect is its own interface (space/mobile.js): full-screen views — Path, Fleeting
+     Moments, Variables, Voice Chat, Radio, Blueprint — and a slider with a gold knob at the bottom. The
+     board stays untouched behind it; "Open the board" in the menu shows it, a pill brings you back. */
   const phone = () => innerWidth < 720;
-  let focusId = null;       // the object the phone is showing
-  let focusStyle = null;
-  const LABELS = { path: 'Path', fleeting: 'Moments', variables: 'Variables', blueprints: 'Blueprints', radio: 'Radio', chat: 'Chat', tts: 'Voice', timer: 'Timer', er: 'Emergency' };
-  function stopLabel(e) {
-    if (e.kind === 'path') return e.owner === me.id ? 'Path' : `${e.ownerName || 'Their'} Path`;
-    if (e.kind === 'column') return e.title || 'Setpoint';
-    if (e.kind === 'portal') return e.name || 'Blueprint';
-    if (e.kind === 'custom') return e.title || 'Widget';
-    return LABELS[e.kind] || (e.kind || 'Object').replace(/^\w/, (c) => c.toUpperCase());
-  }
-  function stopsOf(ed) {
-    const ws = ed.els.filter((e) => e.type === 'widget' && !ed.isHidden(e) && !e.privateTo || (e.type === 'widget' && e.privateTo === me.id && !ed.isHidden(e)));
-    // reading order: rows of roughly the same height, left to right
-    ws.sort((a, b) => (Math.abs(a.y - b.y) < 200 ? a.x - b.x : a.y - b.y));
-    return [{ id: 'map', label: 'Map' }, ...ws.map((e) => ({ id: e.id, label: stopLabel(e) })), { id: 'ideas', label: 'Ideas' }, { id: 'sidechat', label: 'Side Chat' }];
-  }
-  function clearFocus() {
-    focusId = null;
-    if (focusStyle) focusStyle.textContent = '';
-    page.classList.remove('has-phone-focus');
-  }
-  function phoneFocus(ed, el, animate = true) {
-    const bar = page.querySelector('.space-slider');
-    const r = ed.rect();
-    const top = Math.max(0, (page.querySelector('.bp-topbar, .topbar')?.getBoundingClientRect().bottom || r.top) - r.top);
-    const W = Math.round(r.width), H = Math.round(r.height - top - (bar?.offsetHeight || 84) - 8);
-    focusId = el.id;
-    focusStyle ||= h('style', { 'data-phone-focus': '' });
-    if (!focusStyle.isConnected) document.head.append(focusStyle);
-    const sel = `.bp-world [data-eid="${CSS.escape(el.id)}"]`;
-    focusStyle.textContent = `${sel} { width: ${W}px !important; height: ${H}px !important; z-index: 40 !important; border-radius: 0 !important; }
-      ${sel} .wg-head { position: sticky; top: 0; }`;
-    page.classList.add('has-phone-focus');
-    ed.select([]);
-    ed.setCamera({ x: -el.x, y: -el.y + top, z: 1 }, { animate });
-  }
-  function goStop(ed, st, animate = true) {
-    if (!st) return;
-    if (st.id === 'map') { clearFocus(); ed.zoomToFit(animate); }
-    else if (st.id === 'ideas' || st.id === 'sidechat') { window.dispatchEvent(new CustomEvent('architect:sidechat-open', { detail: { ideas: st.id === 'ideas' } })); }
-    else { const el = ed.byId.get(st.id); if (el) phoneFocus(ed, el, animate); }
-    store.set(`architect.phone.stop.${spaceId}`, st.id);
-    page.querySelector('.space-slider')?._paint?.(st.id);
-  }
-  function mountSlider(ed) {
+  let mob = null;
+  let boardPill = null;
+  function mountPhone(ed) {
     if (!ed) return;
-    let stops = stopsOf(ed);
-    let cur = store.get(`architect.phone.stop.${spaceId}`, null);
-    if (!stops.some((x) => x.id === cur)) cur = stops.find((x) => ed.byId.get(x.id)?.kind === 'path')?.id || 'map';
-    const track = h('div', { class: 'ss-track' });
-    const rail = h('div', { class: 'ss-rail' }, h('i', { class: 'ss-line' }));
-    const knob = h('span', { class: 'ss-knob', role: 'slider', tabindex: 0, 'aria-label': 'Object' });
-    rail.append(knob);
-    track.append(rail);
-    const menuBtn = h('button', { class: 'ss-menu', type: 'button', 'aria-label': 'Menu' }, icon('more', 18));
-    menuBtn.addEventListener('click', () => {
-      const r = menuBtn.getBoundingClientRect();
-      menu({ x: r.left, y: r.top - 8 }, [
-        { label: viewMode ? 'View mode: on' : 'View mode', icon: 'eye', checked: viewMode, onSelect: () => setViewMode(!viewMode) },
-        { label: mode === 'personal' ? 'Go to the Shared Space' : 'Go to your Personal Space', icon: 'home', onSelect: () => toggleSpace() },
-        { label: 'Voice', icon: 'speaker', onSelect: () => sayBar() },
-        '-', ...spaceItems(ed.viewCenter()),
-      ], { side: 'top' });
+    if (mob) { mob.rebind(ed); return; }
+    mob = mountMobile({
+      page, me,
+      editor: () => editor(),
+      host: () => slots[mode]?.host || null,
+      mode: () => mode,
+      toggleSpace: () => toggleSpace(),
+      addWidget: (kind) => addWidget(kind, editor()?.viewCenter()),
+      menuItems: phoneMenu,
+      showBoard,
     });
-    const bar = h('nav', { class: 'space-slider', 'aria-label': 'Objects on this board' }, menuBtn, track);
-    const SP = 74; // px between stops
-    const paint = (id = cur) => {
-      cur = id;
-      stops = stopsOf(ed);
-      const i = Math.max(0, stops.findIndex((x) => x.id === cur));
-      rail.style.width = `${Math.max(track.clientWidth - 8, (stops.length - 1) * SP + 60)}px`;
-      const step = stops.length > 1 ? (rail.clientWidth - 60) / (stops.length - 1) : 0;
-      rail.querySelectorAll('.ss-stop').forEach((n) => n.remove());
-      stops.forEach((st, j) => {
-        const b = h('button', { type: 'button', class: ['ss-stop', j === i && 'is-on', st.id === 'map' && 'is-map'], style: { left: `${30 + j * step}px` }, onclick: () => goStop(ed, st) }, h('i'), h('span', {}, st.label));
-        rail.append(b);
-      });
-      rail.dataset.step = step;
-      knob.style.left = `${30 + i * step}px`;
-      knob.setAttribute('aria-valuetext', stops[i]?.label || '');
-      const kx = 30 + i * step;
-      if (kx < track.scrollLeft + 40 || kx > track.scrollLeft + track.clientWidth - 40) track.scrollTo({ left: kx - track.clientWidth / 2, behavior: 'smooth' });
-    };
-    bar._paint = paint;
-    // drag the knob
-    knob.addEventListener('pointerdown', (e) => {
-      e.preventDefault(); e.stopPropagation();
-      knob.setPointerCapture?.(e.pointerId);
-      knob.classList.add('is-drag');
-      const step = Number(rail.dataset.step) || 1;
-      const rr = rail.getBoundingClientRect();
-      const near = (x) => Math.max(0, Math.min(stops.length - 1, Math.round((x - rr.left - 30) / (step || 1))));
-      const move = (ev) => {
-        const x = Math.max(30, Math.min(30 + (stops.length - 1) * step, ev.clientX - rr.left));
-        knob.style.left = `${x}px`;
-        const j = near(ev.clientX);
-        rail.querySelectorAll('.ss-stop').forEach((n, k) => n.classList.toggle('is-near', k === j));
-      };
-      const up = (ev) => {
-        knob.removeEventListener('pointermove', move); knob.removeEventListener('pointerup', up); knob.removeEventListener('pointercancel', up);
-        knob.classList.remove('is-drag');
-        goStop(ed, stops[near(ev.clientX)]);
-      };
-      knob.addEventListener('pointermove', move); knob.addEventListener('pointerup', up); knob.addEventListener('pointercancel', up);
-    });
-    knob.addEventListener('keydown', (e) => {
-      const i = stops.findIndex((x) => x.id === cur);
-      if (e.key === 'ArrowRight') { e.preventDefault(); goStop(ed, stops[Math.min(stops.length - 1, i + 1)]); }
-      if (e.key === 'ArrowLeft') { e.preventDefault(); goStop(ed, stops[Math.max(0, i - 1)]); }
-    });
-    // swipe the bar to step one object
-    let sw = null;
-    bar.addEventListener('touchstart', (e) => { if (e.target.closest('.ss-knob')) return; const t = e.touches[0]; sw = { x: t.clientX, y: t.clientY, sl: track.scrollLeft, t: Date.now() }; }, { passive: true });
-    bar.addEventListener('touchend', (e) => {
-      if (!sw) return;
-      const t = e.changedTouches[0], dx = t.clientX - sw.x, dy = t.clientY - sw.y;
-      const scrolled = Math.abs(track.scrollLeft - sw.sl) > 4;
-      sw = null;
-      if (scrolled || Math.abs(dx) < 50 || Math.abs(dy) > Math.abs(dx)) return;
-      const i = stops.findIndex((x) => x.id === cur);
-      goStop(ed, stops[Math.max(0, Math.min(stops.length - 1, i + (dx < 0 ? 1 : -1)))]);
-    }, { passive: true });
-    page.append(bar);
-    requestAnimationFrame(() => { paint(cur); goStop(ed, stops.find((x) => x.id === cur) || stops[0], false); });
-    // a new object becomes a new stop
-    let sig = stops.map((x) => x.id + x.label).join();
-    const off = ed.on('change', () => {
-      const next = stopsOf(ed).map((x) => x.id + x.label).join();
-      if (next !== sig) { sig = next; paint(); }
-      if (focusId && !ed.byId.has(focusId)) clearFocus();
-    });
-    bar._off = off;
+  }
+  function unmountPhone() {
+    boardPill?.remove(); boardPill = null;
+    mob?.destroy(); mob = null;
+  }
+  // Peek at the board itself, then come back with one tap.
+  function showBoard() {
+    if (!mob) return;
+    mob.hide();
+    boardPill?.remove();
+    boardPill = h('button', { class: 'mob-back-pill', type: 'button', onclick: () => { boardPill?.remove(); boardPill = null; mob?.reveal(editor()); } }, icon('chevronLeft', 15), 'Back to views');
+    page.append(boardPill);
+    editor()?.zoomToFit(false);
+  }
+  function phoneMenu() {
+    return [
+      { header: mode === 'personal' ? 'Personal space' : 'Shared space' },
+      { label: 'Invite…', icon: 'share', onSelect: async () => openSettings({ tab: 'members', spaceId: await idFor('shared') }) },
+      { label: 'Settings & API…', icon: 'settings', onSelect: async () => openSettings({ spaceId: await idFor('shared') }) },
+      '-',
+      { header: 'Theme' },
+      ...themeItems(),
+      '-',
+      { label: 'Change password', icon: 'key', onSelect: changePassword },
+      { label: 'Sign out', icon: 'logout', onSelect: () => api.auth.signOut() },
+    ];
   }
   let wasPhone = phone();
   const onPhoneResize = () => {
     const p2 = phone();
-    if (p2 !== wasPhone) { wasPhone = p2; if (!p2) clearFocus(); mountDock(); return; }
-    if (p2 && focusId) { const ed = editor(); const el = ed?.byId.get(focusId); if (el) phoneFocus(ed, el, false); }
+    if (p2 === wasPhone) return;
+    wasPhone = p2;
+    if (!p2) unmountPhone();
+    mountDock();
   };
   window.addEventListener('resize', onPhoneResize);
 
@@ -702,6 +614,7 @@ export function mountSpace(root) {
   let bpWin = null;
   function openBoard(boardId, { window: asWindow } = {}) {
     if (!boardId) return;
+    if (innerWidth < 720) { go(`board/${boardId}`); return; } // a phone opens blueprints full screen
     const useWindow = asWindow ?? getPref('bpCompact', true) !== false;
     if (!useWindow) { go(`board/${boardId}`); return; }
     if (bpWin?.boardId === boardId) return;
@@ -1051,8 +964,86 @@ export function mountSpace(root) {
     if (el.type === 'widget' && el.kind === 'portal') { openBoard(el.boardId); return true; }
     ed.select([id]);
     const big = el.type === 'widget' && FILL.has(el.kind);
-    ed.fitRect(rectOf(el, ed.byId), big ? { maxZ: 2.5, pad: innerWidth < 720 ? 6 : 24 } : { maxZ: el.type === 'widget' ? 1 : 1.5, pad: 60 });
+    const cam = big ? fitCam(ed, rectOf(el, ed.byId), { pad: innerWidth < 720 ? 6 : 24, maxZ: 2.5, floor: 0 }) : readableCam(ed, el);
+    ed.setCamera(cam, { animate: true });
+    spotlight(ed, el, cam);
     return true;
+  }
+
+  /* ---- Shortcut with a spotlight (Nov 22) ----
+     The zoom comes from the object itself: big enough to read, not just to fit. A small tile arrives large;
+     a big section settles at its own scale (never shrunk past readable) and lines up from its top edge. */
+  function fitCam(ed, rc, { pad = 60, maxZ = 1, floor = 0 } = {}) {
+    const r = ed.rect();
+    const w = Math.max(rc.w, 1), hh = Math.max(rc.h, 1);
+    const fit = Math.min((r.width - pad * 2) / w, (r.height - pad * 2) / hh);
+    const z = Math.max(floor, Math.min(fit, maxZ));
+    const cx = rc.x + w / 2;
+    // Taller than the screen at this zoom: start at its top instead of its middle.
+    const cy = hh * z > r.height - pad * 2 ? rc.y + (r.height / 2 - pad) / z : rc.y + hh / 2;
+    return { x: r.width / 2 - cx * z, y: r.height / 2 - cy * z, z };
+  }
+  function readableCam(ed, el) {
+    const rc = boxOf(el, ed);
+    const small = innerWidth < 720;
+    const pad = small ? 14 : 72;
+    // Notes and tiles: up to 2.6× so their text is comfortable. Widgets read at 1:1 or a little more.
+    const maxZ = el.type === 'widget' ? 1.25 : el.type === 'frame' ? 1.6 : 2.6;
+    // Readable floor: never zoom a section out past this just to cram it in.
+    const floor = el.type === 'widget' ? (small ? 0.55 : 0.8) : el.type === 'frame' ? 0.45 : 0.7;
+    return fitCam(ed, rc, { pad, maxZ, floor });
+  }
+  // The space a (possibly tilted) object really covers.
+  function boxOf(el, ed) {
+    const rc = rectOf(el, ed.byId);
+    const a = (Number(el.rot) || 0) * Math.PI / 180;
+    if (!a) return rc;
+    const c = Math.abs(Math.cos(a)), sn = Math.abs(Math.sin(a));
+    const w = rc.w * c + rc.h * sn, hh = rc.w * sn + rc.h * c;
+    return { x: rc.x + rc.w / 2 - w / 2, y: rc.y + rc.h / 2 - hh / 2, w, h: hh };
+  }
+
+  // Everything outside the target falls into shadow. The shade follows the object while the camera flies
+  // in, then lifts the moment you pan or zoom away (or press Escape, or jump somewhere else).
+  let spotOff = null;
+  function spotlight(ed, el, target) {
+    spotOff?.();
+    const vp = ed.vp;
+    const node = vp.querySelector(`[data-eid="${CSS.escape(el.id)}"]`);
+    if (!node) return;
+    const shade = h('div', { class: 'spot-shade', 'aria-hidden': 'true' }, h('i', { class: 'spot-hole' }));
+    const hole = shade.firstChild;
+    vp.append(shade);
+    const radius = el.type === 'widget' ? 18 : 6;
+    const place = () => {
+      const vr = vp.getBoundingClientRect(), nr = node.getBoundingClientRect();
+      const m = 10;
+      Object.assign(hole.style, { left: `${nr.left - vr.left - m}px`, top: `${nr.top - vr.top - m}px`, width: `${nr.width + m * 2}px`, height: `${nr.height + m * 2}px`, borderRadius: `${radius + m}px` });
+    };
+    place();
+    requestAnimationFrame(() => shade.classList.add('in'));
+    const settleAt = performance.now() + 520;
+    const near = (c) => Math.abs(c.x - target.x) < 2 && Math.abs(c.y - target.y) < 2 && Math.abs(c.z / target.z - 1) < 0.004;
+    let gone = false;
+    let offChange = null;
+    const lift = () => {
+      if (gone) return;
+      gone = true;
+      offCam(); offChange?.(); window.removeEventListener('keydown', onKey, true);
+      shade.classList.remove('in'); shade.classList.add('out');
+      setTimeout(() => shade.remove(), 320);
+      if (spotOff === lift) spotOff = null;
+    };
+    const offCam = ed.on('camera', (c) => {
+      if (!node.isConnected) { lift(); return; }
+      if (performance.now() > settleAt && !near(c)) { lift(); return; }
+      place();
+    });
+    const onKey = (e) => { if (e.key === 'Escape') lift(); };
+    window.addEventListener('keydown', onKey, true);
+    // The object itself can move (a teammate drags it): keep the hole on it.
+    offChange = ed.on('change', () => { if (!gone) { if (!ed.byId.get(el.id)) lift(); else requestAnimationFrame(place); } });
+    spotOff = lift;
   }
   // The object in this space that answers to a key: the same object if it's here, else its counterpart.
   function counterpart(ed, id) {
@@ -1072,13 +1063,34 @@ export function mountSpace(root) {
     // Your own Path first; otherwise the first one on the canvas.
     return (list.find((e) => e.owner === me.id) || list[0])?.id || null;
   }
+  // Nov 22: no more "That shortcut's object isn't in this space." pills. A shortcut that works opens; one
+  // whose object can't be reached in either space is cleared out quietly (from Personal and Shared alike).
   function openObject(id) {
     const target = counterpart(editor(), id);
     if (target && focusObject(editor(), target)) return true;
-    const kind = keyKinds()[id];
-    const name = kind?.startsWith('widget:') ? WIDGETS[kind.slice(7)]?.label : null;
-    toast(name ? `No ${name} in this space.` : 'That shortcut’s object isn’t in this space.', { ms: 2200 });
-    return true;
+    if (deadKey(id)) dropKeys([id]);
+    return false;
+  }
+  // Dead = no counterpart in any space that's loaded, and both spaces have been looked at.
+  function deadKey(id) {
+    if (!slots.shared?.t || !slots.personal?.t) {
+      // Only one space is loaded: an object-only key (not a kind) that isn't here can't be anywhere else
+      // either if it was never recorded in the other space — keep it until both are known.
+      return false;
+    }
+    return !Object.values(slots).some((sl) => counterpart(sl?.t?.editor, id));
+  }
+  function dropKeys(list) {
+    if (!list.length) return;
+    const keys = { ...objKeys() }, kinds = { ...keyKinds() };
+    for (const id of list) { delete keys[id]; delete kinds[id]; }
+    setPref('objectKeys', keys).catch(() => {});
+    setPref('objectKeyKinds', kinds).catch(() => {});
+  }
+  // Sweep once both spaces are up (the shared one warms in the background).
+  function sweepDeadKeys() {
+    if (!slots.shared?.t || !slots.personal?.t) return;
+    dropKeys(Object.keys(objKeys()).filter(deadKey));
   }
 
   /* ---------------- Emergency Room (E + R) ---------------- */
@@ -1162,8 +1174,8 @@ export function mountSpace(root) {
       destroyed = true;
       window.removeEventListener('architect:warm-shared', onWarm);
       window.removeEventListener('resize', onPhoneResize);
-      page.querySelector('.space-slider')?._off?.();
-      focusStyle?.remove();
+      unmountPhone();
+      spotOff?.();
       bpWin?.close(); bpWin = null;
       ticketEsc.forEach((off) => off()); ticketEsc.clear();
       offs.forEach((f) => { try { f(); } catch {} });

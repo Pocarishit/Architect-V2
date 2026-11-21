@@ -165,15 +165,16 @@ export function mountFreeView(o) {
       node = h('div', { class: 'vr-fv-note is-img', 'data-card': c.id, style: { left: `${c.x}px`, top: `${c.y}px`, width: `${c.w || IMG_W}px`, ...(c.h ? { height: `${c.h}px` } : {}) } },
         url ? h('img', { src: url, alt: '', draggable: false }) : h('span', { class: 'vr-fv-img-ph' }, icon('image', 18)));
     } else {
-      const text = h('div', { class: 'vr-fv-note-text' }, c.text || '');
+      const text = h('div', { class: 'vr-fv-note-text', style: c.fs ? { fontSize: `${c.fs}px` } : {} }, c.text || '');
       node = h('div', { class: ['vr-fv-note', k === 'text' && 'is-text', c.h && 'is-sized'], 'data-card': c.id, style: { left: `${c.x}px`, top: `${c.y}px`, width: `${c.w || (k === 'text' ? TEXT_W : NOTE_W)}px`, ...(c.h ? { minHeight: `${c.h}px` } : {}) } },
         k === 'note' ? h('span', { class: 'vr-fv-note-tag' }, 'NOTE') : null, text);
       node.addEventListener('dblclick', (e) => { e.stopPropagation(); editCard(node, c.id); });
     }
     addHandles(node, {
-      ratio: k === 'img', card: true,
-      done: (r) => patchCard(c.id, { x: r.x, y: r.y, w: r.w, h: r.h }),
-      reset: () => patchCard(c.id, { w: k === 'img' ? IMG_W : k === 'text' ? TEXT_W : NOTE_W, h: k === 'img' ? Math.round(IMG_W * ((c.h || IMG_W) / (c.w || IMG_W))) : undefined }),
+      // Text (Nov 22): pulling a corner grows the letters with the box; edges just re-wrap it.
+      ratio: k === 'img' || k === 'text', card: true, text: k === 'text',
+      done: (r) => patchCard(c.id, { x: r.x, y: r.y, w: r.w, h: k === 'text' && r.fs ? undefined : r.h, ...(r.fs ? { fs: r.fs } : {}) }),
+      reset: () => patchCard(c.id, { w: k === 'img' ? IMG_W : k === 'text' ? TEXT_W : NOTE_W, h: k === 'img' ? Math.round(IMG_W * ((c.h || IMG_W) / (c.w || IMG_W))) : undefined, ...(k === 'text' ? { fs: undefined } : {}) }),
     });
     node.addEventListener('contextmenu', (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -408,7 +409,14 @@ export function mountFreeView(o) {
     const r = world.getBoundingClientRect(), k = scaleOf();
     return { x: (e.clientX - r.left) / k, y: (e.clientY - r.top) / k };
   }
-  const wall = () => flow?.offsetWidth || scroller.clientWidth; // the right edge nothing passes
+  // Nov 22 — the borders match reality.
+  //  · Outside a chat (the object-level grid) there is no chat panel, so there's no wall: the canvas runs
+  //    to its true edge and grows to the right as well as the left.
+  //  · Inside a chat the wall is the chat's right edge at every zoom: it's worked out in board space from
+  //    the visible width, so zooming out can't let anything slide past it.
+  const openRight = !!o.openRight;
+  const visW = () => Math.max(1, Math.floor((scroller.clientWidth || 1) / zoom));
+  const wall = () => (openRight ? Infinity : visW()); // the right edge nothing passes
   function viewCenter() {
     return { x: (scroller.scrollLeft + scroller.clientWidth / 2) / zoom - L, y: (scroller.scrollTop + scroller.clientHeight / 2) / zoom };
   }
@@ -424,19 +432,23 @@ export function mountFreeView(o) {
   // The wall stays put at the column's right edge; the canvas grows left (and down) to hold everything.
   function size() {
     if (!flow) return;
-    const W = scroller.clientWidth;
-    flow.style.width = `${W}px`;
+    const V = visW();
+    flow.style.width = `${openRight ? Math.max(1, scroller.clientWidth) : V}px`;
     const nodes = [...world.querySelectorAll('.vr-fv-item, .vr-fv-note')];
     // Anything sitting past the wall (an older layout, or a narrower chat) is shown against it.
-    for (const n of nodes) {
-      const w = Math.min(n.offsetWidth, W);
-      if (n.offsetLeft + w > W) n.style.left = `${W - w}px`;
+    if (!openRight) {
+      for (const n of nodes) {
+        const w = Math.min(n.offsetWidth, V);
+        if (n.offsetLeft + w > V) n.style.left = `${V - w}px`;
+      }
     }
-    let minX = 0, hgt = scroller.clientHeight;
-    for (const n of nodes) { minX = Math.min(minX, n.offsetLeft); hgt = Math.max(hgt, n.offsetTop + n.offsetHeight + 160); }
-    for (const k of free().ink) for (const [px, py] of k.pts) { minX = Math.min(minX, px); hgt = Math.max(hgt, py + 80); }
-    for (const raw of free().shapes) { const sh = shapeOf(raw); minX = Math.min(minX, sh.x); hgt = Math.max(hgt, sh.y + sh.h + 80); }
+    let minX = 0, maxX = 0, hgt = scroller.clientHeight / zoom;
+    for (const n of nodes) { minX = Math.min(minX, n.offsetLeft); maxX = Math.max(maxX, n.offsetLeft + n.offsetWidth); hgt = Math.max(hgt, n.offsetTop + n.offsetHeight + 160); }
+    for (const k of free().ink) for (const [px, py] of k.pts) { minX = Math.min(minX, px); maxX = Math.max(maxX, px); hgt = Math.max(hgt, py + 80); }
+    for (const raw of free().shapes) { const sh = shapeOf(raw); minX = Math.min(minX, sh.x); maxX = Math.max(maxX, sh.x + sh.w); hgt = Math.max(hgt, sh.y + sh.h + 80); }
     hgt = Math.max(hgt, flow.offsetHeight + 24);
+    // Open on the right (grid): the canvas reaches past the furthest object; a chat stops at its wall.
+    const W = openRight ? Math.max(V, flow.offsetWidth, Math.ceil(maxX + LEFT_PAD)) : V;
     const nextL = minX < 0 ? Math.ceil(-minX + LEFT_PAD) : 0;
     if (nextL !== L) {
       const d = nextL - L;
@@ -688,11 +700,13 @@ export function mountFreeView(o) {
   }
 
   /* ---------------- resize from any edge or corner ---------------- */
-  function resizeEl(e, node, dir, { ratio = false, card = false, done }) {
+  function resizeEl(e, node, dir, { ratio = false, card = false, text = false, done }) {
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const start = local(e);
     const x0 = node.offsetLeft, y0 = node.offsetTop, w0 = node.offsetWidth, h0 = node.offsetHeight;
+    const txt = text ? node.querySelector('.vr-fv-note-text') : null;
+    const fs0 = txt ? parseFloat(getComputedStyle(txt).fontSize) || 18 : 0;
     const W = wall();
     let r = { x: x0, y: y0, w: w0, h: h0 };
     const corner = dir.length === 2;
@@ -717,16 +731,23 @@ export function mountFreeView(o) {
       const nx = dir.includes('w') ? x0 + w0 - nw : x0;
       const ny = dir.includes('n') ? Math.max(0, y0 + h0 - nh) : y0;
       r = { x: Math.round(nx), y: Math.round(ny), w: nw, h: nh };
+      if (txt && keep) {
+        // The type scales with the box, so the corner drag reads as "make this text bigger".
+        r.fs = Math.round(Math.max(8, Math.min(400, fs0 * (nw / w0))) * 10) / 10;
+        txt.style.fontSize = `${r.fs}px`;
+      } else if (txt) { txt.style.fontSize = `${fs0}px`; delete r.fs; }
       node.style.left = `${r.x}px`; node.style.top = `${r.y}px`;
+      if (txt && keep) node.style.minHeight = '';
       if (card) {
         node.style.width = `${nw}px`;
-        if (node.classList.contains('is-img')) node.style.height = `${nh}px`; else { node.style.minHeight = `${nh}px`; node.classList.add('is-sized'); }
+        if (node.classList.contains('is-img')) node.style.height = `${nh}px`;
+        else if (!(txt && keep)) { node.style.minHeight = `${nh}px`; node.classList.add('is-sized'); }
       } else applySize(node, { w: nw, h: nh });
       autoScroll(ev);
       size(); draw();
     }, () => {
       node.classList.remove('is-sizing');
-      if (r.w !== w0 || r.h !== h0 || r.x !== x0 || r.y !== y0) done(r); else draw();
+      if (r.w !== w0 || r.h !== h0 || r.x !== x0 || r.y !== y0 || r.fs) done(r); else draw();
     });
   }
 
@@ -746,6 +767,7 @@ export function mountFreeView(o) {
     const bx = (scroller.scrollLeft + px) / zoom, by = (scroller.scrollTop + py) / zoom;
     zoom = next;
     fitSizer();
+    size(); draw(); // the wall is re-measured at the new zoom
     scroller.scrollLeft = bx * zoom - px;
     scroller.scrollTop = by * zoom - py;
     store.set(`vr.fv.zoom.${x.id}`, Math.round(zoom * 1000) / 1000);

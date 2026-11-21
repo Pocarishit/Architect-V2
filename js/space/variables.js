@@ -307,7 +307,7 @@ export function mountVariables(root, el0, w) {
       // Object-level Free View: every tile and variable is an item; the grid is the "column" they leave.
       const items = () => [...kids(here()).map((k) => ({ id: k.id })), ...inSec(here()).map((x) => ({ id: x.id }))];
       gfree = mountFreeView({
-        item: '.vr-it', bubble: ':scope', noun: 'tile', home: 'the grid', top: true,
+        item: '.vr-it', bubble: ':scope', noun: 'tile', home: 'the grid', top: true, openRight: true, // no chat here: no wall
         className: 'vr-fv vr-fv-grid', role: 'region', stageClass: 'is-grid',
         lockRatio: true, baseW: 170, // corners keep a tile's shape; its face and name grow with it
         media: { pick: pickMedia, upload: uploadMedia, url: urlOf },

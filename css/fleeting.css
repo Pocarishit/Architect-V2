@@ -111,6 +111,8 @@ body.fi-dragging, body.fi-dragging * { cursor: grabbing !important; }
 }
 .fi-card:hover { border-color: var(--fg-4); }
 .fi-frag.is-moving { z-index: 4; }
+/* Click-born cards (Nov 22): the click point is the card's top-left corner. */
+.fi-frag.is-tl .fi-card { translate: 0 0; }
 .fi-frag.is-moving .fi-card { cursor: grabbing; border-color: var(--fg-3); box-shadow: inset 3px 0 0 var(--sp), 0 22px 40px -16px rgba(0, 0, 0, .8); }
 .fi-card.is-uploading { opacity: .6; cursor: progress; }
 .fi-frag-sp {

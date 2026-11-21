@@ -610,6 +610,17 @@ body.is-space .shell-head { display: none; }
 .er-compose .sc-plus.is-busy { cursor: progress; opacity: .6; }
 .er-compose .sc-plus:disabled, .er-compose .sc-input:disabled { opacity: .4; cursor: default; }
 .er-mic[hidden] { display: none; }
+.er-mic.is-busy { opacity: .55; cursor: progress; }
+.er-compose .sc-plus[hidden], .er-compose .sc-input[hidden] { display: none; }
+/* Recording strip (Nov 22): your actual voice, sent as a clip */
+.er-rec { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 14px 0 4px; border-radius: 999px; background: color-mix(in srgb, var(--red) 14%, var(--s2)); }
+.er-rec[hidden] { display: none; }
+.er-rec-x { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; color: var(--fg-2); }
+.er-rec-x:hover { background: var(--s3, var(--s2)); color: var(--fg); }
+.er-rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); animation: er-blink 1s steps(2, start) infinite; }
+@keyframes er-blink { to { visibility: hidden; } }
+.er-rec-time { font-family: var(--f-mono); font-size: 13px; letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+.er-rec-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
 .er-mic.is-live { background: var(--red); color: #fff; animation: er-pulse 1.2s ease-in-out infinite; }
 @keyframes er-pulse { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--red) 25%, transparent); } }
 

@@ -351,3 +351,22 @@
 .sc-hk:focus .sc-hk-key { border-style: solid; border-color: var(--fg-3); }
 .sc-hk p { margin: 0; font-size: 12.5px; }
 .sc-ideas { position: relative; }
+
+/* ---------- Voice messages (Nov 22) ---------- */
+.sc-msg.is-voice .sc-bubble { min-width: 230px; }
+.vn { display: flex; align-items: center; gap: 10px; padding: 2px 2px 14px; }
+.vn-play {
+  flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  background: currentColor; transition: transform .12s;
+}
+.vn-play svg { color: var(--fg); stroke: var(--fg); }
+.vn-play svg path[d^="M8 5.5"] { fill: var(--fg); }
+.sc-msg.is-theirs .vn-play svg { color: var(--s3); stroke: var(--s3); }
+.sc-msg.is-theirs .vn-play svg path[d^="M8 5.5"] { fill: var(--s3); }
+.vn-play:active { transform: scale(.94); }
+.vn-bars { position: relative; flex: 1; min-width: 110px; height: 26px; display: flex; align-items: center; gap: 2px; cursor: pointer; }
+.vn-bars b { flex: 1; min-width: 2px; border-radius: 2px; background: currentColor; opacity: .32; }
+.vn-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: currentColor; opacity: .16; border-radius: 4px; pointer-events: none; transition: width .2s linear; }
+.vn.is-playing .vn-bars b { opacity: .55; }
+.vn-time { flex: none; font-family: var(--f-mono); font-size: 11px; font-variant-numeric: tabular-nums; opacity: .75; min-width: 30px; }
+.vn.is-loading .vn-play { opacity: .5; }

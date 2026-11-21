@@ -15,7 +15,7 @@ import { mountBoard } from '../board/board.js';
 import { getSurface, setSurface } from '../board/editor.js';
 import { onEscapeFull } from '../core/guard.js';
 import { go } from '../core/router.js';
-import { uploadMedia, mediaFiles, pickMedia } from './media.js';
+import { uploadMedia, mediaFiles, pickMedia, canRecord, startRecording, fmtDur } from './media.js';
 import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
 import { speak, ttsSupported } from './chat.js';
 
@@ -26,7 +26,6 @@ const POLL_MS = 3500;
 const MAX_MSGS = 2000;
 const VOICE = 'architect.er.voice';
 const CHAT_OPEN = 'architect.er.chatOpen';
-const Recognition = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 
 /* ---------------- E + R: press them together, or E then R ---------------- */
 // Returns true when this keydown completes the combo. E has no tool of its own any more.
@@ -99,13 +98,18 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
   const openedAt = Date.now();
   let heard = new Set();
   const voiceBtn = h('button', { class: 'er-hbtn', type: 'button', onclick: () => setVoice(!voice) });
-  const mic = h('button', { class: 'sc-plus er-mic', type: 'button', 'aria-label': 'Talk', title: 'Talk — your words become a message', onclick: () => (rec ? stopMic() : startMic()) }, micIcon());
+  // The mic sends your actual voice (Nov 22): tap to record, tap again to send, × to throw it away.
+  const mic = h('button', { class: 'sc-plus er-mic', type: 'button', 'aria-label': 'Record a voice message', title: 'Record a voice message', onclick: () => (rec ? stopMic(true) : startMic()) }, micIcon());
+  const recTime = h('span', { class: 'er-rec-time' }, '0:00');
+  const recBar = h('div', { class: 'er-rec', hidden: true, 'aria-live': 'polite' },
+    h('button', { class: 'er-rec-x', type: 'button', 'aria-label': 'Discard recording', title: 'Discard', onclick: () => stopMic(false) }, icon('close', 15)),
+    h('i', { class: 'er-rec-dot', 'aria-hidden': 'true' }), recTime, h('span', { class: 'er-rec-hint' }, 'Tap the mic to send'));
   const hideBtn = h('button', { class: 'er-hbtn', type: 'button', 'aria-label': 'Hide chat', title: 'Hide chat', onclick: () => setChatOpen(false) }, icon('chevronLeft', 15));
   const showBtn = h('button', { class: 'er-rail', type: 'button', 'aria-label': 'Show chat', title: 'Show chat', onclick: () => setChatOpen(true) }, icon('chevronRight', 15), h('span', { class: 'er-rail-name' }));
   const chat = h('aside', { class: 'er-chat' },
     h('header', { class: 'er-head' }, nameEl, drop, voiceBtn, hideBtn),
     list,
-    h('div', { class: 'sc-compose er-compose' }, plus, ta, mic),
+    h('div', { class: 'sc-compose er-compose' }, plus, ta, recBar, mic),
     showBtn);
   const boardHost = h('div', { class: 'er-board' });
   const room = h('div', { class: 'er-room', role: 'dialog', 'aria-label': 'Emergency Room' }, chat, boardHost);
@@ -113,17 +117,17 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
   function paintVoice() {
     voiceBtn.replaceChildren(icon(voice ? 'speaker' : 'mute', 15));
     voiceBtn.classList.toggle('is-on', voice);
-    voiceBtn.title = voice ? 'Voice mode on — messages are read out loud' : 'Voice mode off';
+    voiceBtn.title = voice ? 'Voice mode on — voice messages play as they arrive, text is read out loud' : 'Voice mode off';
     voiceBtn.setAttribute('aria-label', voice ? 'Turn voice mode off' : 'Turn voice mode on');
     voiceBtn.setAttribute('aria-pressed', String(voice));
-    mic.hidden = !voice || !Recognition;
+    mic.hidden = !canRecord();
   }
   function setVoice(on) {
     if (on && !ttsSupported()) { toast('This browser can’t read messages out loud.', { tone: 'error' }); return; }
     voice = on; store.set(VOICE, on);
-    if (!on) { stopMic(); try { window.speechSynthesis.cancel(); } catch {} }
+    if (!on) { try { window.speechSynthesis.cancel(); } catch {} }
     paintVoice();
-    if (on) toast('Voice mode on — messages are read out loud.', { ms: 2000 });
+    if (on) toast('Voice mode on — voice messages play as they arrive.', { ms: 2000 });
   }
   function setChatOpen(open) {
     store.set(CHAT_OPEN, open);
@@ -133,28 +137,63 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
   paintVoice();
   setChatOpen(store.get(CHAT_OPEN, true) !== false);
 
-  // Mic: free browser speech recognition. Talk, pause, and what you said is sent.
-  function startMic() {
-    if (!Recognition || rec || !cur) return;
+  // Mic: records a clip in the browser (free) and sends it as a voice message.
+  async function startMic() {
+    if (rec || !cur || sending) return;
+    rec = { pending: true };
+    mic.classList.add('is-live');
     try {
-      rec = new Recognition();
-      rec.lang = navigator.language || 'en-US';
-      rec.interimResults = true;
-      rec.continuous = false;
-      const before = ta.value ? `${ta.value.trim()} ` : '';
-      rec.onresult = (e) => {
-        let text = '';
-        for (const r of e.results) text += r[0].transcript;
-        ta.value = before + text; grow(ta);
-        if (e.results[e.results.length - 1].isFinal) send();
-      };
-      rec.onerror = (e) => { if (e.error === 'not-allowed') toast('Allow the microphone to talk here.', { tone: 'error' }); };
-      rec.onend = () => { rec = null; mic.classList.remove('is-live'); };
-      rec.start();
-      mic.classList.add('is-live');
-    } catch { rec = null; mic.classList.remove('is-live'); }
+      const r = await startRecording({ onTick: (sec) => { recTime.textContent = fmtDur(sec) || '0:00'; if (sec >= 600) stopMic(true); } });
+      if (!rec || closed) { r.cancel(); return; } // cancelled while the mic was opening
+      rec = r;
+      recTime.textContent = '0:00';
+      recBar.hidden = false; ta.hidden = true; plus.hidden = true;
+      try { window.speechSynthesis?.cancel(); } catch {}
+    } catch (e) {
+      rec = null; mic.classList.remove('is-live');
+      toast(e?.name === 'NotAllowedError' ? 'Allow the microphone to send voice messages.' : 'Couldn’t open the microphone.', { tone: 'error', ms: 4000 });
+    }
   }
-  function stopMic() { try { rec?.stop(); } catch {} rec = null; mic.classList.remove('is-live'); }
+  async function stopMic(send = false) {
+    const r = rec;
+    rec = null;
+    mic.classList.remove('is-live');
+    recBar.hidden = true; ta.hidden = false; plus.hidden = false;
+    if (!r || r.pending) return;
+    if (!send) { r.cancel(); return; }
+    const clip = await r.stop();
+    if (!clip) { toast('That was too short to send.', { ms: 1800 }); return; }
+    if (!cur) return;
+    sending = true; mic.classList.add('is-busy');
+    try {
+      const up = await uploadMedia(clip.file, { dur: clip.dur });
+      push(note({ files: [{ kind: 'audio', path: up.path, name: up.name, dur: clip.dur }] }));
+    } catch (e) { toast(e?.message || friendlyError(e), { tone: 'error', ms: 5000 }); }
+    finally { sending = false; mic.classList.remove('is-busy'); }
+  }
+  // Voice mode: someone else's voice message plays by itself as it lands, one after another.
+  const queue = [];
+  let playingQ = false;
+  function hear(m) {
+    if (m.files?.some((f) => f.kind === 'audio')) { queue.push(m.id); if (!playingQ) nextClip(); }
+    else if (m.text) speak(m);
+  }
+  function nextClip() {
+    const id = queue.shift();
+    if (!id || closed) { playingQ = false; return; }
+    playingQ = true;
+    const vn = list.querySelector(`.sc-msg[data-id="${CSS.escape(id)}"] .vn`);
+    if (!vn?.play) { setTimeout(nextClip, 0); return; }
+    let done = false;
+    const go2 = () => { if (done) return; done = true; list.removeEventListener('vn-ended', onEnd); nextClip(); };
+    const onEnd = () => go2();
+    list.addEventListener('vn-ended', onEnd);
+    const attempt = (n) => vn.play().catch(() => {
+      if (n < 8 && !closed) setTimeout(() => attempt(n + 1), 400); // the clip's link is still on its way
+      else { if (n >= 8) toast('Tap ▶ to hear the new voice message.', { ms: 2600 }); go2(); }
+    });
+    attempt(0);
+  }
   if (prefersReducedMotion?.()) node.classList.add('is-still');
   root.append(node);
   setSurface(SURFACE);
@@ -207,7 +246,7 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
     store.set(LAST, p.id);
     nameEl.textContent = (p.name || 'Problem').toUpperCase();
     showBtn.lastChild.textContent = nameEl.textContent;
-    stopMic();
+    stopMic(false);
     ta.disabled = false; plus.disabled = false;
     ta.value = ''; draft = '';
     // The board: the whole right side.
@@ -243,9 +282,10 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
     if (!first && s === sig) return;
     sig = s; msgs = next;
     if (first) heard = new Set(next.map((m) => m.id));
-    else if (voice) for (const m of next) if (!heard.has(m.id) && m.by !== me?.id && m.ts > openedAt - 15_000) speak(m);
+    const fresh = !first && voice ? next.filter((m) => !heard.has(m.id) && m.by !== me?.id && m.ts > openedAt - 15_000) : [];
     next.forEach((m) => heard.add(m.id));
     paint(first);
+    fresh.forEach(hear);
   }
 
   function paint(toBottom) {
@@ -388,7 +428,7 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
     if (closed) return;
     closed = true;
     clearInterval(poll);
-    stopMic();
+    stopMic(false);
     try { if (voice) window.speechSynthesis.cancel(); } catch {}
     escOff();
     combo.off();

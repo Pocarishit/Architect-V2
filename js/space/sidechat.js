@@ -8,7 +8,7 @@ import { icon } from '../core/icons.js';
 import { menu, toast, dialog, confirmDialog, promptDialog, closeFloating } from '../core/ui.js';
 import { store, prefersReducedMotion, isMac } from '../core/util.js';
 import { api, configured } from '../data/api.js';
-import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia } from './media.js';
+import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia, voiceNote } from './media.js';
 
 export const DEFAULT_CHATS = ['Assimilation', 'Worldwright', 'Psyche', 'Allostasis', 'Behaviour'];
 const GROUP_MS = 5 * 60_000;
@@ -162,6 +162,7 @@ const clockSvg = () => { const s = icon('clock', 11); s.classList.add('sc-clock'
 export function bubbleRow(m, { cont = false, theirs = false, who = '', onAsset, onQuote, onMenu, onDbl } = {}) {
   const files = (m.files || []).map((f) => {
     if (f.kind === 'anytype') return h('span', { class: 'sc-file is-any' }, icon('paperclip', 13), f.name || 'Attachment');
+    if (f.kind === 'audio') return voiceNote(f, { onAsset });
     const url = f.path ? urlOf(f.path, () => onAsset?.()) : null;
     return h('button', { type: 'button', class: ['sc-file', `is-${f.kind}`], 'aria-label': f.kind === 'video' ? 'Play video' : 'View photo', onclick: () => lightbox(f) },
       f.kind === 'photo' ? (url ? h('img', { src: url, alt: '', loading: 'lazy' }) : h('span', { class: 'sc-file-ph' })) : h('span', { class: 'sc-file-vid' }, icon('play', 16), f.name || 'Video'));
@@ -172,7 +173,7 @@ export function bubbleRow(m, { cont = false, theirs = false, who = '', onAsset, 
     m.status === 'failed' ? h('span', { class: 'sc-fail', title: m.error || 'Not sent' }, '!') : m.status === 'sending' ? clockSvg() : null,
     h('time', {}, hhmm(m.at)));
   return h('div', {
-    class: ['sc-msg', cont && 'is-cont', theirs && 'is-theirs', m.status && `is-${m.status}`, m.files?.length && !m.text && 'is-media'], 'data-id': m.id,
+    class: ['sc-msg', cont && 'is-cont', theirs && 'is-theirs', m.status && `is-${m.status}`, m.files?.length && !m.text && !m.files.every((f) => f.kind === 'audio') && 'is-media', m.files?.some((f) => f.kind === 'audio') && 'is-voice'], 'data-id': m.id,
     style: { '--meta-w': `${40 + (m.pinned ? 14 : 0) + (m.edited ? 42 : 0) + (m.status ? 16 : 0)}px` },
     oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); onMenu?.(e); },
     ondblclick: (e) => onDbl?.(e),

@@ -30,14 +30,14 @@ export function urlOf(path, onReady) {
 }
 
 /** Photos are downscaled (long side 1800px) before upload; videos go up as they are. */
-export async function uploadMedia(file) {
-  const kind = /^video\//.test(file.type) ? 'video' : /^image\//.test(file.type) ? 'photo' : null;
+export async function uploadMedia(file, { dur: knownDur } = {}) {
+  const kind = /^video\//.test(file.type) ? 'video' : /^image\//.test(file.type) ? 'photo' : /^audio\//.test(file.type) ? 'audio' : null;
   if (!kind) throw new Error('Only photos and videos can go here.');
   const max = api.media?.maxBytes || 50 * 1024 * 1024;
   let up = file;
   if (kind === 'photo' && !/gif|svg/.test(file.type)) up = await shrink(file, 1800).catch(() => file);
   if (up.size > max) throw new Error(`${file.name || 'That file'} is over ${Math.round(max / 1048576)} MB.`);
-  const dur = kind === 'video' ? await durationOf(file) : 0;
+  const dur = knownDur || (kind === 'video' ? await durationOf(file) : 0);
   const { path, url } = await api.media.upload(up);
   signed.set(path, url || null);
   return { kind, path, name: file.name || '', dur };
@@ -107,4 +107,103 @@ export function pickMedia({ multiple = true, accept = 'image/*,video/*' } = {}) 
     inp.click();
     setTimeout(() => { if (!inp.files?.length) inp.remove(); }, 120_000);
   });
+}
+
+/* ---------------- Voice notes (Nov 22) ----------------
+   Your actual voice: the mic records a clip (free, in the browser), it goes up like any other media file,
+   and everyone in the room hears it as you said it. */
+export const canRecord = () => !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+
+/** Start recording. Resolves to { stop() → Promise<{file, dur}|null>, cancel(), started }. */
+export async function startRecording({ onTick } = {}) {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/aac'];
+  const mime = types.find((t) => { try { return MediaRecorder.isTypeSupported(t); } catch { return false; } }) || '';
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 64000 } : undefined);
+  const chunks = [];
+  rec.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data); };
+  const started = Date.now();
+  const tick = setInterval(() => onTick?.(Math.floor((Date.now() - started) / 1000)), 250);
+  rec.start(250);
+  const end = () => { clearInterval(tick); stream.getTracks().forEach((t) => t.stop()); };
+  return {
+    started,
+    stop: () => new Promise((res) => {
+      if (rec.state === 'inactive') { end(); res(null); return; }
+      rec.onstop = () => {
+        end();
+        const type = (rec.mimeType || mime || 'audio/webm').split(';')[0];
+        const blob = new Blob(chunks, { type });
+        const dur = Math.max(1, Math.round((Date.now() - started) / 1000));
+        if (blob.size < 800) { res(null); return; }
+        const ext = type.includes('mp4') || type.includes('aac') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
+        res({ file: new File([blob], `voice-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.${ext}`, { type }), dur });
+      };
+      try { rec.stop(); } catch { end(); res(null); }
+    }),
+    cancel: () => { try { rec.onstop = null; rec.stop(); } catch {} end(); },
+  };
+}
+
+// One clip plays at a time across the app.
+let nowPlaying = null;
+const clips = new Map(); // path → Audio
+/** A voice note in a chat bubble: play/pause, a progress line, the length. */
+export function voiceNote(f, { onAsset } = {}) {
+  let audio = null;
+  const btn = h('button', { type: 'button', class: 'vn-play', 'aria-label': 'Play voice message' }, icon('play', 14));
+  const fill = h('i', { class: 'vn-fill' });
+  const bars = h('span', { class: 'vn-bars', 'aria-hidden': 'true' }, ...Array.from({ length: 26 }, (_, i) => h('b', { style: { height: `${30 + Math.round(60 * Math.abs(Math.sin((i + 1) * 1.7 + (f.dur || 3))))}%` } })), fill);
+  const time = h('span', { class: 'vn-time' }, fmtDur(f.dur || 0) || '0:00');
+  const node = h('div', { class: 'vn', 'data-noptr': '' }, btn, bars, time);
+  const paint = () => {
+    const on = audio && !audio.paused;
+    node.classList.toggle('is-playing', !!on);
+    btn.replaceChildren(icon(on ? 'pause' : 'play', 14));
+    btn.setAttribute('aria-label', on ? 'Pause voice message' : 'Play voice message');
+  };
+  function ensure() {
+    if (audio) return audio;
+    const url = urlOf(f.path, () => onAsset?.());
+    if (!url) { node.classList.add('is-loading'); return null; }
+    // One Audio per clip, so a chat that redraws mid-play keeps the same sound (and its controls).
+    audio = clips.get(f.path) || new Audio(url);
+    clips.set(f.path, audio);
+    audio.preload = 'auto';
+    audio.addEventListener('timeupdate', () => {
+      const d = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : (f.dur || 1);
+      fill.style.width = `${Math.min(100, (audio.currentTime / d) * 100)}%`;
+      time.textContent = fmtDur(Math.floor(audio.currentTime)) || '0:00';
+    });
+    audio.addEventListener('ended', () => { fill.style.width = '0%'; time.textContent = fmtDur(f.dur || 0) || '0:00'; if (nowPlaying === audio) nowPlaying = null; paint(); node.dispatchEvent(new CustomEvent('vn-ended', { bubbles: true })); });
+    audio.addEventListener('pause', paint);
+    audio.addEventListener('play', paint);
+    return audio;
+  }
+  node.play = () => {
+    const a = ensure();
+    if (!a) return Promise.reject(new Error('not ready'));
+    if (nowPlaying && nowPlaying !== a) nowPlaying.pause();
+    nowPlaying = a;
+    return a.play();
+  };
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const a = ensure();
+    if (!a) return;
+    if (a.paused) node.play().catch(() => {}); else a.pause();
+  });
+  // Tap along the line to jump.
+  bars.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const a = ensure();
+    if (!a) return;
+    const r = bars.getBoundingClientRect();
+    const d = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : (f.dur || 0);
+    if (d) a.currentTime = Math.max(0, Math.min(d, ((e.clientX - r.left) / r.width) * d));
+    if (a.paused) node.play().catch(() => {});
+  });
+  urlOf(f.path, () => { node.classList.remove('is-loading'); onAsset?.(); });
+  if (clips.has(f.path)) { ensure(); paint(); }
+  return node;
 }

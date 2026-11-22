@@ -8,6 +8,10 @@ export function createSupabaseBackend(cfg) {
   const base = String(cfg.supabaseUrl).trim().replace(/\/+$/, '');
   const key = String(cfg.supabaseKey).trim();
   const bucket = cfg.mediaBucket || 'architect-media';
+  // New media goes to Cloudflare R2 through your media Worker when one is set in config.js (Nov 22).
+  // Its paths start with "r2/"; everything uploaded before keeps working from Supabase Storage.
+  const r2 = String(cfg.mediaWorker || '').trim().replace(/\/+$/, '');
+  const r2Url = (path) => `${r2 || ''}/f/${path.slice(3).split('/').map(encodeURIComponent).join('/')}`;
   const domain = (cfg.authDomain || 'architect.local').replace(/^@/, '');
 
   let session = store.get(SESSION_KEY);
@@ -136,10 +140,11 @@ export function createSupabaseBackend(cfg) {
     },
 
     db: {
-      async select(table, { columns = '*', order, filters = {} } = {}) {
+      async select(table, { columns = '*', order, filters = {}, limit } = {}) {
         const params = { select: columns };
         if (order) params.order = order;
-        for (const [k, v] of Object.entries(filters)) params[k] = v === null ? 'is.null' : Array.isArray(v) ? `in.(${v.join(',')})` : `eq.${v}`;
+        if (limit) params.limit = String(limit);
+        for (const [k, v] of Object.entries(filters)) params[k] = v === null ? 'is.null' : Array.isArray(v) ? `in.(${v.join(',')})` : v && typeof v === 'object' && 'gt' in v ? `gt.${v.gt}` : `eq.${v}`;
         return (await rest(`${table}?${q(params)}`)) || [];
       },
       async get(table, id, columns = '*') {
@@ -181,24 +186,61 @@ export function createSupabaseBackend(cfg) {
       maxBytes: 50 * 1024 * 1024,
       async upload(file) {
         const ext = (String(file.name || '').split('.').pop() || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'bin';
+        if (r2) {
+          await ensureFresh();
+          if (!session) throw new AppError('You are signed out. Sign in again.', 'signed_out', 401);
+          let res;
+          try {
+            res = await fetch(`${r2}/upload?ext=${ext}`, {
+              method: 'PUT', body: file,
+              headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': file.type || 'application/octet-stream' },
+            });
+          } catch { throw new AppError('Can’t reach the media server. Check your connection.', 'network'); }
+          if (!res.ok) throw new AppError((await res.text().catch(() => '')) || `Upload failed (${res.status}).`, 'upload', res.status);
+          const { key: k } = await res.json();
+          const path = `r2/${k}`;
+          return { path, url: r2Url(path) };
+        }
         const path = `${session.user.id}/${uid()}.${ext}`;
         await call(`${base}/storage/v1/object/${bucket}/${path}`, {
           method: 'POST',
           body: file,
-          headers: { 'Content-Type': file.type || 'application/octet-stream', 'x-upsert': 'false', 'cache-control': '3600' },
+          headers: { 'Content-Type': file.type || 'application/octet-stream', 'x-upsert': 'false', 'cache-control': 'max-age=31536000, immutable' },
         });
         const urls = await backend.media.sign([path]);
         return { path, url: urls[path] };
       },
+      // Egress (Nov 22): a signed link is kept on this device until a day before it expires. The same
+      // link every visit means the browser serves photos, videos and voice notes from its own cache
+      // instead of downloading them from Supabase again on every reload.
       async sign(paths) {
-        const list = [...new Set(paths)].filter(Boolean);
-        if (!list.length) return {};
-        const res = await call(`${base}/storage/v1/object/sign/${bucket}`, {
-          method: 'POST', body: { expiresIn: 60 * 60 * 24 * 7, paths: list },
-        });
+        const all = [...new Set(paths)].filter(Boolean);
+        if (!all.length) return {};
+        const KEY = 'architect.sb.signed';
+        const now = Date.now();
+        const kept = store.get(KEY, {}) || {};
         const map = {};
-        for (const r of Array.isArray(res) ? res : []) {
-          if (r?.signedURL && r.path) map[r.path] = encodeURI(`${base}/storage/v1${r.signedURL}`);
+        const list = [];
+        for (const p of all) {
+          if (p.startsWith('r2/')) { map[p] = r2Url(p); continue; } // R2 links don't need signing
+          const k = kept[p];
+          if (k?.url && k.exp - now > 86_400_000) map[p] = k.url; else list.push(p);
+        }
+        if (list.length) {
+          const res = await call(`${base}/storage/v1/object/sign/${bucket}`, {
+            method: 'POST', body: { expiresIn: 60 * 60 * 24 * 7, paths: list },
+          });
+          for (const r of Array.isArray(res) ? res : []) {
+            if (r?.signedURL && r.path) {
+              map[r.path] = encodeURI(`${base}/storage/v1${r.signedURL}`);
+              kept[r.path] = { url: map[r.path], exp: now + 7 * 86_400_000 };
+            }
+          }
+          // keep the list tidy: drop expired links, cap the size
+          for (const [p, k] of Object.entries(kept)) if (!k?.exp || k.exp < now) delete kept[p];
+          const keys = Object.keys(kept);
+          if (keys.length > 3000) keys.sort((a, b) => kept[a].exp - kept[b].exp).slice(0, keys.length - 3000).forEach((p) => delete kept[p]);
+          try { store.set(KEY, kept); } catch {}
         }
         return map;
       },

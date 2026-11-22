@@ -110,6 +110,11 @@ function flushNow() {
 async function pull() {
   if (!remote || !data || dirty || document.hidden || !uidKey) return;
   try {
+    // Egress (Nov 22): ask "changed?" first; the whole row only comes down when it did.
+    if (row?.updated_at && api.mode !== 'local') {
+      const st = await api.db.select(TABLE, { columns: 'updated_at', filters: { user_id: uidKey } });
+      if (st[0]?.updated_at === row.updated_at) return;
+    }
     const rows = await api.db.select(TABLE, { filters: { user_id: uidKey } });
     const r = rows[0];
     if (!r?.data || dirty) return;

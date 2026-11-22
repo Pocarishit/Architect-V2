@@ -102,14 +102,15 @@ export function createLocalBackend() {
       },
     },
     db: {
-      async select(table, { columns = '*', order, filters = {} } = {}) {
+      async select(table, { columns = '*', order, filters = {}, limit } = {}) {
         need();
-        let list = rows(table).filter((r) => Object.entries(filters).every(([k, v]) => (v === null ? r[k] == null : Array.isArray(v) ? v.map(String).includes(String(r[k])) : String(r[k]) === String(v))));
+        let list = rows(table).filter((r) => Object.entries(filters).every(([k, v]) => (v === null ? r[k] == null : Array.isArray(v) ? v.map(String).includes(String(r[k])) : v && typeof v === 'object' && 'gt' in v ? String(r[k]) > String(v.gt) : String(r[k]) === String(v))));
         if (order) {
           const [col, dir] = order.split('.');
           const m = dir === 'desc' ? -1 : 1;
           list.sort((a, b) => (a[col] > b[col] ? m : a[col] < b[col] ? -m : 0));
         }
+        if (limit) list = list.slice(0, limit);
         return list.map((r) => pick(r, columns));
       },
       async get(table, id, columns = '*') {

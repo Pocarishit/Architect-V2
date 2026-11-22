@@ -22,7 +22,7 @@ import { speak, ttsSupported } from './chat.js';
 export const ER_KINDS = ['er', 'er-chat'];
 const SURFACE = 'er-room';
 const LAST = 'architect.er.last';
-const POLL_MS = 3500;
+const POLL_MS = 4000;
 const MAX_MSGS = 2000;
 const VOICE = 'architect.er.voice';
 const CHAT_OPEN = 'architect.er.chatOpen';
@@ -56,7 +56,12 @@ function micIcon() {
 /* ---------------- data ---------------- */
 const listProblems = () => api.db.select('blueprints', { columns: 'id,name,user_id,created_at', filters: { kind: 'er' }, order: 'created_at.asc' });
 async function chatRowOf(problemId) {
-  const rows = await api.db.select('blueprints', { columns: 'id,name,data', filters: { kind: 'er-chat', name: problemId } });
+  const rows = await api.db.select('blueprints', { columns: 'id,name,data,updated_at', filters: { kind: 'er-chat', name: problemId } });
+  return rows[0] || null;
+}
+// Egress (Nov 22): the poll asks only "did it change?" (a few bytes) and pulls the whole chat when it did.
+async function chatStampOf(problemId) {
+  const rows = await api.db.select('blueprints', { columns: 'id,updated_at', filters: { kind: 'er-chat', name: problemId } });
   return rows[0] || null;
 }
 async function shareWithSpace(rowIds, spaceId, me) {
@@ -80,6 +85,7 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
   let sending = false;
   let poll = 0;
   let closed = false;
+  let stamp = null, stampOf = null; // the chat row's updated_at as last downloaded
   const combo = comboWatcher();
 
   const nameEl = h('button', { class: 'er-name', type: 'button', title: 'Double-click to rename', ondblclick: () => cur && rename(cur) }, 'PROBLEM');
@@ -276,7 +282,15 @@ export function openEmergencyRoom(root, { me, spaceId = () => null, onClose } = 
     const p = cur;
     if (!p) return;
     let row;
+    if (!first && stampOf === p.id && api.mode !== 'local') {
+      try {
+        const st = await chatStampOf(p.id);
+        if (closed || cur !== p) return;
+        if (st && st.updated_at === stamp) return; // nothing new: no download
+      } catch { return; }
+    }
     try { row = await chatRowOf(p.id); } catch (e) { if (first) toast(friendlyError(e), { tone: 'error' }); return; }
+    stamp = row?.updated_at || null; stampOf = p.id;
     if (closed || cur !== p) return;
     chatId = row?.id || null;
     const next = Array.isArray(row?.data?.messages) ? row.data.messages : [];

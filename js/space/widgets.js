@@ -289,7 +289,18 @@ const KINDS = {
       } catch (e) { toast(friendlyError(e), { tone: 'error' }); }
     }
     load();
-    const poll = setInterval(() => { if (!document.hidden) load(); }, 60_000);
+    // Egress (Nov 22): list (with thumbnails) only re-downloads when a blueprint actually changed.
+    let stampBp = '';
+    const poll = setInterval(async () => {
+      if (document.hidden) return;
+      try {
+        const r = await api.db.select('blueprints', { columns: 'updated_at', order: 'updated_at.desc', filters: { kind: 'board' }, limit: 1 });
+        const st = r[0]?.updated_at || '';
+        if (stampBp && st === stampBp) return;
+        stampBp = st;
+      } catch {}
+      load();
+    }, 90_000);
     window.addEventListener('architect:blueprints-changed', load);
     return { destroy: () => { clearInterval(poll); window.removeEventListener('architect:blueprints-changed', load); } };
   },

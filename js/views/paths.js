@@ -1359,7 +1359,28 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   const reloadSoon = () => { clearTimeout(reloadT); reloadT = setTimeout(() => { if (idleNow()) load(); else reloadSoon(); }, 250); };
   const onChanged = (e) => { if (e.detail?.owner === owner && e.detail.from !== instance) reloadSoon(); };
   if (embedded) window.addEventListener('architect:paths-changed', onChanged);
-  const livePoll = embedded ? setInterval(() => { if (!document.hidden && !loading) reloadSoon(); }, readOnly ? 15_000 : 30_000) : 0;
+  // Egress (Nov 22): the live poll first asks for the newest change time (a few bytes) and only reloads
+  // the whole Path when it moved. A full reload still happens every 5 minutes to catch deletions.
+  let lastStamp = '', lastFull = Date.now();
+  async function changedSince() {
+    if (Date.now() - lastFull > 300_000) return true;
+    try {
+      const f = owner ? { user_id: owner } : {};
+      const [a, b] = await Promise.all([
+        api.db.select('path_columns', { columns: 'updated_at', filters: f, order: 'updated_at.desc', limit: 1 }),
+        api.db.select('path_tasks', { columns: 'updated_at', filters: f, order: 'updated_at.desc', limit: 1 }),
+      ]);
+      const st = `${a[0]?.updated_at || ''}|${b[0]?.updated_at || ''}`;
+      if (!lastStamp) { lastStamp = st; return false; }
+      if (st === lastStamp) return false;
+      lastStamp = st;
+      return true;
+    } catch { return false; }
+  }
+  const livePoll = embedded ? setInterval(async () => {
+    if (document.hidden || loading) return;
+    if (await changedSince()) { lastFull = Date.now(); reloadSoon(); }
+  }, readOnly ? 20_000 : 30_000) : 0;
 
   // An idea dragged out of Fleeting Ideas and dropped on one of your columns becomes a task there.
   const onDropTask = (e) => {

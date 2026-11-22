@@ -71,6 +71,8 @@ function accountStore(me) {
     source: {
       kind: 'account', canReply: true, canUpload: true,
       async messages(chat) { return (await run((d) => d.select('side_messages', { filters: { chat_id: chat.id }, order: 'created_at.asc' }))).map(fromRow); },
+      // Egress (Nov 22): just what arrived after `since` — usually nothing, so the poll costs a few bytes.
+      async newer(chat, since) { return (await run((d) => d.select('side_messages', { filters: { chat_id: chat.id, created_at: { gt: new Date(since).toISOString() } }, order: 'created_at.asc' }))).map(fromRow); },
       async send(chat, m) { return fromRow(await run((d) => d.insert('side_messages', toRow(chat, m)))); },
       edit: (chat, id, text) => run((d) => d.update('side_messages', id, { body: text, edited: true })),
       remove: (chat, ids) => run((d) => d.remove('side_messages', ids)),
@@ -717,12 +719,24 @@ export function mountSideChat({ me }) {
   const stopPoll = () => { clearInterval(poll); poll = null; };
   const onFocus = () => { if (open) load(active, true); };
   window.addEventListener('focus', onFocus);
+  const fullAt = new Map(); // chat id → when it was last pulled in full
   async function load(id = active, quiet = false) {
     const chat = chatById(id);
     if (!chat) return;
     try {
-      const msgs = await src().messages(chat);
-      cache.set(id, msgs);
+      const S = src();
+      const have = cache.get(id);
+      const last = have?.length ? Math.max(...have.map((m) => m.at || 0)) : 0;
+      // Quiet polls pull only new messages; edits/deletes from another device catch up on the full pull.
+      if (quiet && S.newer && have && last && Date.now() - (fullAt.get(id) || 0) < 180_000) {
+        const add = await S.newer(chat, last);
+        if (!add.length) return;
+        const ids = new Set(have.map((m) => m.id));
+        cache.set(id, [...have, ...add.filter((m) => !ids.has(m.id))]);
+      } else {
+        cache.set(id, await S.messages(chat));
+        fullAt.set(id, Date.now());
+      }
       errors.delete(id);
     } catch (e) {
       if (!quiet || !cache.has(id)) errors.set(id, e);

@@ -8,10 +8,6 @@ export function createSupabaseBackend(cfg) {
   const base = String(cfg.supabaseUrl).trim().replace(/\/+$/, '');
   const key = String(cfg.supabaseKey).trim();
   const bucket = cfg.mediaBucket || 'architect-media';
-  // New media goes to Cloudflare R2 through your media Worker when one is set in config.js (Nov 22).
-  // Its paths start with "r2/"; everything uploaded before keeps working from Supabase Storage.
-  const r2 = String(cfg.mediaWorker || '').trim().replace(/\/+$/, '');
-  const r2Url = (path) => `${r2 || ''}/f/${path.slice(3).split('/').map(encodeURIComponent).join('/')}`;
   const domain = (cfg.authDomain || 'architect.local').replace(/^@/, '');
 
   let session = store.get(SESSION_KEY);
@@ -186,21 +182,6 @@ export function createSupabaseBackend(cfg) {
       maxBytes: 50 * 1024 * 1024,
       async upload(file) {
         const ext = (String(file.name || '').split('.').pop() || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'bin';
-        if (r2) {
-          await ensureFresh();
-          if (!session) throw new AppError('You are signed out. Sign in again.', 'signed_out', 401);
-          let res;
-          try {
-            res = await fetch(`${r2}/upload?ext=${ext}`, {
-              method: 'PUT', body: file,
-              headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': file.type || 'application/octet-stream' },
-            });
-          } catch { throw new AppError('Can’t reach the media server. Check your connection.', 'network'); }
-          if (!res.ok) throw new AppError((await res.text().catch(() => '')) || `Upload failed (${res.status}).`, 'upload', res.status);
-          const { key: k } = await res.json();
-          const path = `r2/${k}`;
-          return { path, url: r2Url(path) };
-        }
         const path = `${session.user.id}/${uid()}.${ext}`;
         await call(`${base}/storage/v1/object/${bucket}/${path}`, {
           method: 'POST',
@@ -222,7 +203,6 @@ export function createSupabaseBackend(cfg) {
         const map = {};
         const list = [];
         for (const p of all) {
-          if (p.startsWith('r2/')) { map[p] = r2Url(p); continue; } // R2 links don't need signing
           const k = kept[p];
           if (k?.url && k.exp - now > 86_400_000) map[p] = k.url; else list.push(p);
         }

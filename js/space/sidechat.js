@@ -1,4 +1,8 @@
 // Side Chat — private chats that float over every page.
+// Nov 24: on desktop the Organ chats (Assimilation, Worldwright, Psyche, Allostasis, Behaviour…) moved into
+// Variables — an Organs space you create and name — and the floating launcher is gone. The same chats,
+// messages and Anytype link run there through mountSideChat({ embed }) below. Phones keep the panel as a
+// sheet, opened from the bottom slider's menu (no launcher).
 // A smiley launcher sits anywhere on screen (drag it). Click it and your chats drop down
 // beneath it; pick one and the panel grows out of the launcher, attached to it. Each row is one chat. Messages live on your Architect
 // account by default (supabase/sidechat.sql, owner-only), or in Anytype when you
@@ -191,7 +195,12 @@ export const dayRow = (t) => { const d = dayLabel(t); return h('div', { class: '
 export { dayLabel as chatDayLabel, GROUP_MS as CHAT_GROUP_MS };
 
 /* ============================================================ */
-export function mountSideChat({ me }) {
+/**
+ * embed: an element to live in (the Variables sidebar's Organs space): no launcher, no floating panel.
+ * launcher: false — no smiley; the panel opens from 'architect:sidechat-open' only (phones).
+ * onChats(chats): called whenever the list of chats changes.
+ */
+export function mountSideChat({ me, embed = null, launcher = true, onChats = null }) {
   const uidKey = me?.id || 'anon';
   const K = { geo: 'architect.sidechat.geo', launch: 'architect.sidechat.launch', open: `architect.sidechat.open.${uidKey}`, active: `architect.sidechat.active.${uidKey}` };
   const acct = accountStore(me || {});
@@ -258,7 +267,8 @@ export function mountSideChat({ me }) {
   const handles = ['n', 's', 'w', 'e', 'nw', 'ne', 'sw', 'se'].map((d) => h('span', { class: `sc-rs sc-rs-${d}`, 'data-dir': d, 'aria-hidden': 'true' }));
   // The active chat's name sits in the top bar beside the smiley; under the smiley runs the avatar rail.
   const headName = h('h2', { class: 'sc-head-name' });
-  const head = h('header', { class: 'sc-head' }, headName);
+  const head = h('header', { class: 'sc-head' }, headName,
+    !launcher && !embed ? h('button', { class: 'sc-rail-act sc-close', type: 'button', 'aria-label': 'Close', title: 'Close', onclick: () => setOpen(false) }, icon('close', 15)) : null);
   const railList = h('div', { class: 'sc-rail-list', role: 'tablist', 'aria-label': 'Chats', 'aria-orientation': 'vertical' });
   const railActs = h('div', { class: 'sc-rail-acts' },
     h('button', { class: 'sc-rail-act', type: 'button', 'aria-label': 'New chat', title: 'New chat', onclick: () => addChat() }, icon('plus', 15)),
@@ -271,7 +281,9 @@ export function mountSideChat({ me }) {
   const main = h('div', { class: 'sc-main' }, head, status, body, ideasBox, selbar, foot);
   const panel = h('section', { class: 'sc-panel', role: 'dialog', 'aria-label': 'Side chat', 'data-noptr': '', hidden: true },
     main, rail, ...handles);
-  document.body.append(panel, drop, launch);
+  if (embed) { panel.classList.add('is-embed'); panel.hidden = false; embed.append(panel); }
+  else if (launcher) document.body.append(panel, drop, launch);
+  else { panel.classList.add('no-launcher'); document.body.append(panel); }
 
   /* ---------- geometry: everything hangs off the launcher ---------- */
   const sheet = () => innerWidth < 720;
@@ -285,6 +297,7 @@ export function mountSideChat({ me }) {
     return { x: clamp(fx * innerWidth - LS / 2, M, innerWidth - LS - M), y: clamp(fy * innerHeight - LS / 2, M, innerHeight - LS - M) };
   }
   function placeLaunch(pos = launchPos()) {
+    if (embed) return;
     if (open && sheet()) pos = { x: innerWidth - LS - P, y: P }; // phones: the smiley docks in the sheet's corner
     launch.style.left = `${pos.x}px`; launch.style.top = `${pos.y}px`; launch.style.right = '';
     launch.dataset.side = pos.x + LS / 2 < innerWidth / 2 ? 'left' : 'right';
@@ -303,8 +316,9 @@ export function mountSideChat({ me }) {
   }
   // The panel wraps the smiley: the smiley sits in the panel's corner, the rail runs along that edge.
   function placePanel() {
-    panel.classList.toggle('is-sheet', sheet());
-    if (sheet()) { panel.style.cssText = ''; panel.dataset.side = 'sw'; placeLaunch(); return; }
+    if (embed) return;
+    panel.classList.toggle('is-sheet', sheet() || !launcher);
+    if (sheet() || !launcher) { panel.style.cssText = ''; panel.dataset.side = 'sw'; placeLaunch(); return; }
     const L = launch.getBoundingClientRect();
     const want = size();
     const right = L.left + L.width / 2 >= innerWidth / 2;
@@ -321,6 +335,7 @@ export function mountSideChat({ me }) {
     panel.dataset.side = `${down ? 's' : 'n'}${right ? 'w' : 'e'}`;
   }
   function placeDrop() {
+    if (embed) return;
     const L = launch.getBoundingClientRect();
     const w = 232;
     const hh = Math.min(drop.scrollHeight || 320, innerHeight - 2 * M);
@@ -416,6 +431,7 @@ export function mountSideChat({ me }) {
 
   /* ---------- open / close ---------- */
   function setOpen(v) {
+    if (embed) { if (v && !open) { open = true; start(); } return; } // embedded: always open
     if (v === open) return;
     open = v;
     store.set(K.open, v);
@@ -468,6 +484,7 @@ export function mountSideChat({ me }) {
     headName.textContent = ideasOn ? 'Ideas' : c0?.name || (loaded ? 'No chat' : '');
     headName.title = ideasOn ? 'Your ideas' : c0?.name || '';
     paintRail(linked);
+    onChats?.(chats);
     if (drop.hidden) return;
     const pick = (id) => { setDrop(false); if (id !== active) select(id); setOpen(true); };
     const rows = chats.map((c) => {
@@ -566,6 +583,26 @@ export function mountSideChat({ me }) {
       setOpen(true);
     } catch (e) { toast(e.message, { tone: 'error' }); }
   }
+  async function addNamed(name) {
+    const n = String(name || '').trim().slice(0, 40);
+    if (!n) return null;
+    try {
+      const c = await acct.addChat({ id: newId(), name: n, position: (chats.at(-1)?.position ?? -1) + 1 });
+      chats.push(c);
+      select(c.id);
+      return c;
+    } catch (e) { toast(e.message, { tone: 'error' }); return null; }
+  }
+  // Drag-to-reorder from the sidebar: put chat `id` at index `to`.
+  function moveTo(id, to) {
+    const c = chatById(id);
+    if (!c) return;
+    const rest = chats.filter((x) => x !== c);
+    rest.splice(Math.max(0, Math.min(rest.length, to)), 0, c);
+    chats = rest;
+    chats.forEach((x, k) => { if (x.position !== k) { x.position = k; acct.patchChat(x.id, { position: k }).catch(() => {}); } });
+    paintTabs();
+  }
   async function renameChat(c) {
     const name = await promptDialog('Rename chat', { value: c.name, maxLength: 40 });
     if (!name || name === c.name) return;
@@ -597,9 +634,34 @@ export function mountSideChat({ me }) {
       if (!chats.length) paint(true);
     } catch (e) { toast(e.message, { tone: 'error' }); }
   }
+  // Nov 24: pick the Anytype chat from the list your Anytype connection can see (or paste an ID).
+  async function anytypeChats() {
+    const cfg = anyCfg();
+    if (!cfg?.key || !cfg.space) return [];
+    try {
+      const base = String(cfg.base || '').replace(/\/+$/, '');
+      const r = await fetch(`${base}/v2/spaces/${encodeURIComponent(cfg.space)}/chats?limit=100`, { headers: { Authorization: `Bearer ${cfg.key}`, 'Anytype-Version': cfg.version || '2025-11-08', Accept: 'application/json' }, signal: AbortSignal.timeout?.(6000) });
+      if (!r.ok) return [];
+      const j = await r.json();
+      return (j.data || j.chats || []).filter((x) => x?.id).map((x) => ({ id: x.id, name: x.name || x.title || x.id }));
+    } catch { return []; }
+  }
   async function linkChat(c) {
-    const v = await promptDialog(`Link ${c.name} to Anytype`, { value: c.anytype_id || '', label: 'Anytype chat ID', placeholder: 'bafyrei…', maxLength: 120, ok: 'Link' });
-    if (v == null) return;
+    const found = await anytypeChats();
+    let v;
+    if (found.length) {
+      const sel = h('select', { class: 'input', 'aria-label': 'Anytype chat' },
+        h('option', { value: '' }, '— Not synced —'),
+        ...found.map((x) => h('option', { value: x.id, selected: x.id === c.anytype_id }, x.name)));
+      const manual = h('input', { class: 'input', placeholder: 'or paste an Anytype chat ID', maxlength: 120, value: found.some((x) => x.id === c.anytype_id) ? '' : c.anytype_id || '' });
+      const ok = await dialog({ title: `${c.name} syncs with…`, width: 420, body: h('div', { class: 'stack' }, sel, manual, h('p', { class: 'dlg-text' }, 'Its messages are read from and written to that Anytype chat, through the Anytype connection on this device.')),
+        actions: [{ label: 'Cancel', value: false }, { label: 'Save', primary: true, value: true }] });
+      if (!ok) return;
+      v = manual.value.trim() || sel.value;
+    } else {
+      v = await promptDialog(`Sync ${c.name} with Anytype`, { value: c.anytype_id || '', label: 'Anytype chat ID', placeholder: 'bafyrei…', maxLength: 120, ok: 'Save' });
+      if (v == null) return;
+    }
     c.anytype_id = v || null;
     acct.patchChat(c.id, { anytype_id: c.anytype_id }).catch(() => {});
     cache.delete(c.id); errors.delete(c.id); lastSig = '';
@@ -612,7 +674,7 @@ export function mountSideChat({ me }) {
       { label: 'Rename', icon: 'edit', onSelect: () => renameChat(c) },
       { label: c.photo ? 'Change picture' : 'Add picture', icon: 'image', onSelect: () => setPhoto(c) },
       c.photo ? { label: 'Remove picture', icon: 'close', onSelect: () => { c.photo = null; paintTabs(); acct.patchChat(c.id, { photo: null }).catch(() => {}); } } : null,
-      src().kind === 'anytype' ? { label: c.anytype_id ? 'Change Anytype chat…' : 'Link to Anytype chat…', icon: 'link', onSelect: () => linkChat(c) } : null,
+      embed || src().kind === 'anytype' ? { label: c.anytype_id ? 'Change the Anytype object it syncs with…' : 'Sync with an Anytype object…', icon: 'anytype', onSelect: () => (src().kind === 'anytype' || anyCfg()?.key ? linkChat(c) : connectAnytype()) } : null,
       '-',
       i > 0 ? { label: 'Move up', icon: 'chevronUp', onSelect: () => moveChat(c, -1) } : null,
       i < chats.length - 1 ? { label: 'Move down', icon: 'chevronDown', onSelect: () => moveChat(c, 1) } : null,
@@ -1081,7 +1143,7 @@ export function mountSideChat({ me }) {
   const inPanel = (t) => t instanceof Node && panel.contains(t);
   const onKey = (e) => {
     // The Side Chat shortcut (bound once in Options): opens it from anywhere, no smiley click.
-    const hk = hotkey();
+    const hk = embed ? null : hotkey();
     if (hk && !e.repeat && matchKey(e, hk) && !document.querySelector('.dlg-overlay') && (hk.ctrl || hk.alt || hk.meta || !isTypingTarget(e.target) || inPanel(e.target))) {
       e.preventDefault(); e.stopImmediatePropagation();
       if (open && inPanel(document.activeElement)) setOpen(false);
@@ -1122,7 +1184,7 @@ export function mountSideChat({ me }) {
   window.addEventListener('keydown', onKey, true);
   // The phone's slider (and anything else) can open Side Chat — straight to the ideas, or to the chats.
   const onOpenReq = (e) => { setOpen(true); setIdeas(!!e.detail?.ideas); };
-  window.addEventListener('architect:sidechat-open', onOpenReq);
+  if (!embed) window.addEventListener('architect:sidechat-open', onOpenReq);
   window.addEventListener('paste', onPaste, true);
   panel.addEventListener('dragover', (e) => { if (!ideasOn && [...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); e.stopPropagation(); panel.classList.add('is-drop'); } });
   panel.addEventListener('dragleave', (e) => { if (!panel.contains(e.relatedTarget)) panel.classList.remove('is-drop'); });
@@ -1130,11 +1192,24 @@ export function mountSideChat({ me }) {
 
   // Warm up quietly so the first open is instant; come back open if it was open.
   const idle = window.requestIdleCallback || ((f) => setTimeout(f, 1500));
-  idle(() => { ensureChats().then(() => { if (store.get(K.open, false)) setOpen(true); else if (active) load(active, true); }); }, { timeout: 4000 });
+  if (embed) ensureChats().then(() => setOpen(true));
+  else idle(() => { ensureChats().then(() => { if (launcher && store.get(K.open, false)) setOpen(true); else if (active) load(active, true); }); }, { timeout: 4000 });
 
   return {
     open: () => setOpen(true),
     toggle: () => setOpen(!open),
+    // Driven from the Variables sidebar (embed):
+    chats: () => chats,
+    active: () => (ideasOn ? 'ideas' : active),
+    loaded: () => loaded,
+    select: (id) => { if (ideasOn) setIdeas(false); if (id && id !== active) select(id); else paintTabs(); },
+    ideas: (on = true) => setIdeas(on),
+    add: (name) => addNamed(name),
+    menu: (at, id) => { const c = chatById(id); if (c) tabMenu(at, c); },
+    rename: (id, name) => { const c = chatById(id); if (c && name && name !== c.name) { c.name = name; paintTabs(); acct.patchChat(c.id, { name }).catch((e) => toast(e.message, { tone: 'error' })); } },
+    move: (id, to) => moveTo(id, to),
+    options: (anchor) => optionsMenu(anchor),
+    anytype: () => src().kind === 'anytype',
     destroy() {
       stopPoll();
       window.removeEventListener('resize', onResize);

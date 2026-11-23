@@ -102,7 +102,10 @@ export function mountShell(root, { session }) {
   };
   const offSync = api.offline?.on(paintSync);
   if (api.offline) paintSync(api.offline.state());
-  const side = mountSideChat({ me: session.user });
+  // Nov 24: no floating Side Chat on desktop — the Organ chats live in Variables (an Organs space). Phones
+  // keep the panel, opened from the bottom slider's menu, without the smiley launcher.
+  const phone = matchMedia('(hover: none) and (pointer: coarse)').matches || innerWidth < 720;
+  const side = phone ? mountSideChat({ me: session.user, launcher: false }) : { destroy() {} };
 
   return {
     outlet,

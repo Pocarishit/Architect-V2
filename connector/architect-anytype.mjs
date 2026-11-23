@@ -5,6 +5,11 @@
 // loopback API, http://127.0.0.1:31009 — never exposed to the phone or the internet), normalizes the
 // allowed fields, and publishes them to your Architect account over HTTPS with its own revocable token.
 // Your phone reads the result from Architect after sign-in: no IP address, port, key or shared Wi-Fi.
+// Two-way (Nov 24, supabase/nov24-anytype.sql): changes you make to a linked item in Architect (check,
+// uncheck, rename, add, delete) are queued on your account; this connector picks them up and applies them
+// in Anytype, then re-reads the mapping so both sides match. Anytype's own checkbox state is published too.
+// Page sections are edited through Anytype's markdown body (a copy of the page is saved first, in
+// backups/); collections through object properties.
 //
 // No dependencies (Node 18+). Secrets live in the OS credential store: Windows DPAPI (per user), macOS
 // Keychain, or a 0600 file on Linux — never in config.json, never in logs.
@@ -27,7 +32,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0'; // Nov 24: two-way — Architect-side check / rename / add / delete are applied in Anytype
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const UI_PORT = 31019;
 const MAX_ITEMS = 500;
@@ -165,6 +170,11 @@ function anytype(cfg, key) {
     collection: (sid, cid) => all(`/spaces/${encodeURIComponent(sid)}/collections/${encodeURIComponent(cid)}/objects`),
     objects: (sid) => all(`/spaces/${encodeURIComponent(sid)}/objects`, { max: 20000 }),
     search: (sid, query) => call('POST', `/spaces/${encodeURIComponent(sid)}/search?limit=100`, { query }).then((j) => (Array.isArray(j) ? j : j?.data || [])),
+    // writes (two-way, Nov 24)
+    patch: (sid, oid, body) => call('PATCH', `/spaces/${encodeURIComponent(sid)}/objects/${encodeURIComponent(oid)}`, body).then(unwrap),
+    create: (sid, body) => call('POST', `/spaces/${encodeURIComponent(sid)}/objects`, body).then(unwrap),
+    archive: (sid, oid) => call('DELETE', `/spaces/${encodeURIComponent(sid)}/objects/${encodeURIComponent(oid)}`),
+    addToList: (sid, lid, ids) => call('POST', `/spaces/${encodeURIComponent(sid)}/lists/${encodeURIComponent(lid)}/objects`, { objects: ids }),
   };
 }
 const unwrap = (j) => j?.object || j?.data || j?.document || j || {};
@@ -239,6 +249,17 @@ function dateProp(o, key) {
   return m ? m[1] : null;
 }
 
+/** A checkbox property (done / completed / checked) as true / false, or null when there isn't one. */
+function doneProp(o) {
+  const keys = ['done', 'completed', 'checked', 'is_done'];
+  const p = o?.properties;
+  const val = (x) => (typeof x === 'boolean' ? x : typeof x?.checkbox === 'boolean' ? x.checkbox : typeof x?.value === 'boolean' ? x.value : null);
+  if (Array.isArray(p)) { const x = p.find((y) => keys.includes(String(y?.key || '').toLowerCase())); return x ? val(x) : null; }
+  if (p && typeof p === 'object') { for (const k of keys) if (k in p) { const v = val(p[k]); if (v != null) return v; } }
+  return typeof o?.done === 'boolean' ? o.done : null;
+}
+const isCheckbox = (b) => /checkbox|check|todo|task/.test(b.kind || '');
+
 /* ================= reading one mapping ================= */
 class ReadError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
 /** A complete read of a mapping's scope → items, or a ReadError (never a partial list). */
@@ -253,7 +274,7 @@ async function readMapping(at, m) {
       const at0 = bl.findIndex((b) => b.id === m.section_block_id);
       if (at0 < 0) throw new ReadError(`The heading “${m.section_name || 'Path items'}” isn’t in that page any more.`, 'missing_section');
       if (!(bl[at0].rank > 0)) throw new ReadError('The chosen block is no longer a heading.', 'missing_section');
-      sectionItems(bl, at0).forEach((b, i) => items.push({ source_object_id: m.source_id, source_block_id: b.id, sort: i + 1, fields: { title: b.text.slice(0, 500) } }));
+      sectionItems(bl, at0).forEach((b, i) => items.push({ source_object_id: m.source_id, source_block_id: b.id, sort: i + 1, fields: { title: b.text.slice(0, 500), ...(isCheckbox(b) ? { done: !!b.checked } : {}) } }));
     } else {
       const rows = m.source_kind === 'collection' ? await at.collection(m.source_space_id, m.source_id) : (m.object_ids || []).map((id) => ({ id }));
       const allowIds = new Set(m.object_ids || []);
@@ -270,6 +291,7 @@ async function readMapping(at, m) {
         if (!title) continue;
         const f = { title: title.slice(0, 500) };
         if (fields.has('date') && m.date_property) { const d = dateProp(o, m.date_property); if (d) f.date = d; }
+        const dn = doneProp(o); if (dn != null) f.done = dn;
         items.push({ source_object_id: r.id, source_block_id: null, sort: ++i, fields: f });
       }
     }
@@ -280,6 +302,99 @@ async function readMapping(at, m) {
   }
   if (items.length > MAX_ITEMS) throw new ReadError(`${items.length} items — narrow the section or collection (max ${MAX_ITEMS}).`, 'too_many');
   return items;
+}
+
+/* ================= two-way: applying Architect's changes in Anytype (Nov 24) ================= */
+const LIST_RE = /^(\s*)(?:([-*+])|(\d+[.)]))\s+(\[[ xX]\]\s+)?(.*)$/;
+const HEAD_RE = /^\s*(#{1,6})\s+(.*)$/;
+/** The lines of a section in a page's markdown: { head, items: [{ i, text, box, checked }], end }. */
+function mdSection(md, name) {
+  const lines = String(md || '').split('\n');
+  const want = cleanText(name).toLowerCase();
+  const head = lines.findIndex((l) => { const m = l.match(HEAD_RE); return m && cleanText(m[2]).toLowerCase() === want; });
+  if (head < 0) return { lines, head: -1, items: [], end: -1 };
+  const rank = lines[head].match(HEAD_RE)[1].length;
+  const items = [];
+  let end = lines.length;
+  for (let i = head + 1; i < lines.length; i++) {
+    const h = lines[i].match(HEAD_RE);
+    if (h && h[1].length <= rank) { end = i; break; }
+    const m = lines[i].match(LIST_RE);
+    if (m && cleanText(m[5])) items.push({ i, text: cleanText(m[5]), box: !!m[4], checked: /\[[xX]\]/.test(m[4] || ''), m });
+  }
+  return { lines, head, items, end };
+}
+function findItem(sec, title, sort) {
+  const t = cleanText(title).toLowerCase();
+  const at = Number(sort) - 1;
+  if (sec.items[at] && sec.items[at].text.toLowerCase() === t) return sec.items[at];
+  return sec.items.find((x) => x.text.toLowerCase() === t) || null;
+}
+function backup(oid, md) {
+  try {
+    const dir = path.join(DIR, 'backups');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${oid.slice(-16)}-${Date.now()}.md`), md);
+    const files = fs.readdirSync(dir).sort();
+    for (const f of files.slice(0, Math.max(0, files.length - 40))) fs.rmSync(path.join(dir, f), { force: true });
+  } catch {}
+}
+/** One Architect-side change, applied in Anytype. Returns what it made (for an add). */
+async function applyOp(at, o) {
+  const m = o.mapping || {};
+  const it = o.item || null;
+  const title = String(o.payload?.title || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+  if (o.op !== 'add' && !it) throw new Error('That item isn’t in the import any more.');
+  if (m.source_kind === 'section') {
+    const doc = await at.object(m.source_space_id, m.source_id);
+    const md = doc?.markdown ?? doc?.body ?? null;
+    if (typeof md !== 'string') throw new Error('Anytype didn’t return this page’s text, so it can’t be edited from Architect.');
+    const sec = mdSection(md, m.section_name);
+    if (sec.head < 0) throw new Error(`The heading “${m.section_name}” isn’t in that page any more.`);
+    const lines = [...sec.lines];
+    if (o.op === 'add') {
+      const after = sec.items.length ? sec.items[sec.items.length - 1].i : sec.head;
+      lines.splice(after + 1, 0, `- [ ] ${title}`);
+    } else {
+      const x = findItem(sec, it.fields?.title || '', it.sort);
+      if (!x) throw new Error('Couldn’t find that item in the page (was it changed in Anytype?).');
+      const [, ind, bullet, num, , text] = x.m;
+      const lead = `${ind}${bullet || num} `;
+      if (o.op === 'delete') lines.splice(x.i, 1);
+      else if (o.op === 'rename') lines[x.i] = `${lead}${x.box ? (x.checked ? '[x] ' : '[ ] ') : ''}${title}`;
+      else if (o.op === 'check') {
+        const want = !!o.payload?.done;
+        if (!x.box && !want) return null; // a plain bullet is already "not done"
+        lines[x.i] = `${lead}${want ? '[x]' : '[ ]'} ${text}`;
+      }
+    }
+    const next = lines.join('\n');
+    if (next === md) return null;
+    backup(m.source_id, md);
+    await at.patch(m.source_space_id, m.source_id, { markdown: next });
+    // Anytype answers 200 even when it ignores a body edit — read it back to be sure.
+    const check = await at.object(m.source_space_id, m.source_id);
+    const got = mdSection(check?.markdown ?? '', m.section_name);
+    const ok = o.op === 'delete' ? !findItem(got, it.fields?.title || '', -1) || got.items.length < sec.items.length
+      : o.op === 'add' ? got.items.some((x) => x.text.toLowerCase() === cleanText(title).toLowerCase())
+      : o.op === 'rename' ? got.items.some((x) => x.text.toLowerCase() === cleanText(title).toLowerCase())
+      : (findItem(got, it.fields?.title || '', it.sort)?.checked ?? false) === !!o.payload?.done;
+    if (!ok) throw new Error('Anytype didn’t apply the page edit.');
+    return null;
+  }
+  // Collections and picked objects: one object per item.
+  const sid = m.source_space_id;
+  if (o.op === 'check') { await at.patch(sid, it.source_object_id, { properties: [{ key: 'done', checkbox: !!o.payload?.done }] }); return null; }
+  if (o.op === 'rename') { await at.patch(sid, it.source_object_id, { name: title }); return null; }
+  if (o.op === 'delete') { await at.archive(sid, it.source_object_id); return null; }
+  if (o.op === 'add') {
+    if (m.source_kind !== 'collection') throw new Error('This mapping is a fixed list of objects — add the item in Anytype.');
+    const made = await at.create(sid, { name: title, type_key: 'task' });
+    if (!made?.id) throw new Error('Anytype didn’t create the object.');
+    await at.addToList(sid, m.source_id, [made.id]);
+    return { source_object_id: made.id };
+  }
+  throw new Error(`Unknown change "${o.op}".`);
 }
 
 /* ================= the sync engine ================= */
@@ -326,6 +441,7 @@ function engine(cfg) {
     if (!force && reason === 'manual' && Date.now() - state.lastRun < 15_000) return []; // debounce Sync now
     state.running = true;
     try {
+      await applyOps(); // Architect-side changes first, so the read that follows already includes them
       if (force) state.backoff.clear();
       const list = (await mappings()).filter((m) => m.enabled && !m.paused && m.dest_kind === 'path');
       const out = [];
@@ -339,7 +455,38 @@ function engine(cfg) {
       return [];
     } finally { state.running = false; }
   }
+  // Architect-side changes waiting for this PC: apply them, acknowledge each, then re-read what they touched.
+  let applying = false;
+  async function applyOps() {
+    if (!at || applying || state.revoked) return 0;
+    applying = true;
+    try {
+      let ops = [];
+      try { ops = (await rpc(cfg, 'anytype_take_ops', { token })) || []; }
+      catch (e) { if (e instanceof ArchitectError && e.code === 'revoked') state.revoked = true; return 0; } // (no nov24-anytype.sql yet: nothing to do)
+      if (!ops.length) return 0;
+      const touched = new Set();
+      for (const o of ops) {
+        try {
+          const made = await applyOp(at, o);
+          await rpc(cfg, 'anytype_ack_op', { token, p_id: o.id, ok: true, p_message: '', p_result: made });
+          touched.add(o.mapping?.id);
+          log(`⇄ ${o.op} applied in Anytype`);
+        } catch (e) {
+          const msg = e instanceof AnytypeError || e instanceof Error ? e.message : 'failed';
+          try { await rpc(cfg, 'anytype_ack_op', { token, p_id: o.id, ok: false, p_message: msg, p_result: null }); } catch {}
+          log(`✗ ${o.op}: ${redact(msg)}`);
+        }
+      }
+      if (touched.size) {
+        const list = (await mappings()).filter((m) => touched.has(m.id) && m.enabled && !m.paused);
+        for (const m of list) await runOne(m);
+      }
+      return ops.length;
+    } finally { applying = false; }
+  }
   async function poll() {
+    await applyOps();
     try {
       const p = await rpc(cfg, 'anytype_poll', { token });
       if (p?.sync_requested_at && p.sync_requested_at !== state.lastPollReq) {
@@ -350,16 +497,16 @@ function engine(cfg) {
     } catch (e) { if (e instanceof ArchitectError && e.code === 'revoked') { state.revoked = true; log('This PC was disconnected in Architect.'); } }
   }
   function start() {
-    log(`Architect Anytype connector ${VERSION} — syncing every ${cfg.pollMinutes} min; Sync now is checked every 45 s.`);
+    log(`Architect Anytype connector ${VERSION} — syncing every ${cfg.pollMinutes} min; Sync now and Architect-side changes are checked every 20 s.`);
     runAll('startup');
     setInterval(() => runAll('timer'), Math.max(1, cfg.pollMinutes) * 60_000);
-    setInterval(poll, 45_000);
+    setInterval(poll, 20_000); // Sync now and Architect-side changes are picked up within ~20 s
     poll();
     // Resume / reconnect: a long gap between ticks means the PC slept.
     let last = Date.now();
     setInterval(() => { const now = Date.now(); if (now - last > 90_000) runAll('resume', { force: true }); last = now; }, 15_000);
   }
-  return { token, key, at, state, mappings, runAll, runOne, start, readMapping: (m) => readMapping(at, m) };
+  return { token, key, at, state, mappings, runAll, runOne, applyOps, start, readMapping: (m) => readMapping(at, m) };
 }
 
 /* ================= the local mapping editor (127.0.0.1 only) ================= */
@@ -578,7 +725,7 @@ async function main() {
 }
 
 // Exported for tests.
-export { flatBlocks, headingsOf, sectionItems, readMapping, cleanText, dateProp, anytype, engine, serveUi, readConfig };
+export { flatBlocks, headingsOf, sectionItems, readMapping, cleanText, dateProp, anytype, engine, serveUi, readConfig, mdSection, applyOp, doneProp };
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((e) => { console.error(redact(e.message)); process.exit(1); });

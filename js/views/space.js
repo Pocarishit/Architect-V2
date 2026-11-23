@@ -27,6 +27,8 @@ import { mountSidebar } from '../space/sidebar.js';
 import { startBench } from '../board/bench.js';
 import { pickTask, taskEl } from '../board/taskcard.js';
 import { myTasks } from '../data/tasks.js';
+import { bgOf, paintBg, moveBg } from '../space/backgrounds.js';
+import { openSayComposer, enterOpensComposer } from '../space/saycomposer.js';
 
 export function mountSpace(root) {
   const me = api.auth.current()?.user;
@@ -73,7 +75,7 @@ export function mountSpace(root) {
     closeFloating();
     bpWin?.close(); bpWin = null;
     page.querySelector(':scope > .bp-loading')?.remove();
-    page.querySelector('.say-bar')?.remove();
+    page.querySelector('.say-bar, .say-pop')?.remove();
     park(slots[mode]);
     mode = m; spaceId = id;
     page.dataset.mode = m;
@@ -273,7 +275,7 @@ export function mountSpace(root) {
     if (mode === m) t = tools;
     else ed.surface = 'parked'; // you tabbed away while it was loading
     tools.page.classList.toggle('show-chrome', !!getPref('spaceChrome', false));
-    if (m === 'personal') applyPersonalBg();
+    applyBg(m);
     migrate(ed);
     importCustomVariables(ed);
     // Everyone gets their own Path on the shared canvas.
@@ -701,6 +703,8 @@ export function mountSpace(root) {
     ed.addEls([el]);
     if (kind === 'custom') editCustom({ current: () => ed.byId.get(el.id) || el, patch: (x) => ed.updateEls([el.id], x) });
     if (kind === 'radio') askSource().then((src) => {
+      // A Spotify playlist plays for you alone (Personal or Shared list, Nov 24) — not as the live stream.
+      if (src?.ext?.provider === 'Spotify') { setTimeout(() => window.dispatchEvent(new CustomEvent('architect:radio-spotify', { detail: { id: el.id, url: src.url } })), 120); return; }
       if (src && ed.byId.get(el.id)) ed.updateEls([el.id], { src: src.url, list: src.list, vid0: src.vid, mode: 'stream', st: { by: me.id, name: me.username, index: 0, vid: src.vid, t: 0, playing: false, at: Date.now() } });
     });
     return el;
@@ -730,32 +734,22 @@ export function mountSpace(root) {
     toast(`Chat connected to “${labelOf(target)}”.`, { ms: 2200 });
   }
 
-  /* ---------------- Voice chat: say something out loud (Enter) ---------------- */
+  /* ---------------- Voice chat: Enter to talk from any view (Nov 24) ----------------
+     A small composer over whatever's on screen (the canvas or a sidebar view): typed messages are read out
+     loud, the mic sends your voice. An open Variables chat is the destination when there is one. */
   function sayBar() {
-    if (page.querySelector('.say-bar')) { page.querySelector('.say-bar input')?.focus(); return; }
-    const ed = editor();
-    const input = h('input', { class: 'say-input', maxlength: 600, placeholder: 'Say something — everyone hears it', 'aria-label': 'Say something out loud' });
-    const close = () => bar.remove();
-    const send = () => {
-      const t = input.value.trim();
-      if (!t) { close(); return; }
-      let ctl = [...ttsCtl.entries()].find(([id]) => ed.byId.get(id) && !ed.isHidden(ed.byId.get(id)))?.[1];
-      if (!ctl) {
+    openSayComposer({
+      host: page,
+      voiceChat: () => {
+        const ed = editor();
+        const ctl = [...ttsCtl.entries()].find(([id]) => ed?.byId.get(id) && !ed.isHidden(ed.byId.get(id)))?.[1];
+        if (ctl) return ctl;
+        if (!ed) return null;
         const el = addWidget('tts', ed.viewCenter());
         toast('Voice chat added to the Space.', { ms: 2200 });
-        setTimeout(() => ttsCtl.get(el.id)?.send(t), 80);
-      } else ctl.send(t);
-      input.value = '';
-    };
-    input.addEventListener('keydown', (e) => {
-      e.stopPropagation();
-      if (e.key === 'Enter') { e.preventDefault(); send(); }
-      else if (e.key === 'Escape') { e.preventDefault(); close(); }
+        return { send: (t, files) => setTimeout(() => ttsCtl.get(el.id)?.send(t, files), 80) };
+      },
     });
-    input.addEventListener('blur', () => setTimeout(() => { if (!input.value.trim()) close(); }, 150));
-    const bar = h('div', { class: 'say-bar' }, icon('speaker', 16), input, h('kbd', {}, 'Enter'));
-    page.append(bar);
-    input.focus();
   }
 
   /* ---------------- menus ---------------- */
@@ -908,21 +902,31 @@ export function mountSpace(root) {
     });
   }
 
-  /* ---------------- Personal Space background ----------------
-     A PNG of your own behind your personal Space. The shared Space keeps its plain canvas. */
-  async function applyPersonalBg() {
-    const page2 = slots.personal?.t?.page;
+  /* ---------------- Space backgrounds (Nov 24) ----------------
+     Each Space has its own background, chosen in Settings → Personalize — a built-in pattern or your own
+     PNG (Fill / Tile). It's your preference only: in the shared Space, everyone keeps their own. Patterns
+     and tiles follow the canvas as it pans and zooms. */
+  const bgCam = new Map(); // space → camera unsubscribe
+  function applyPersonalBg() { applyBg('personal'); applyBg('shared'); }
+  async function applyBg(m) {
+    const tools = slots[m]?.t;
+    const page2 = tools?.page;
     if (!page2) return;
-    const path = getPref('personalBg', null);
-    if (!path) { page2.classList.remove('has-personal-bg'); page2.style.removeProperty('--personal-bg'); return; }
-    try {
-      const urls = await api.media.sign([path]);
-      const url = urls?.[path];
-      if (!url) throw new Error('no url');
-      page2.style.setProperty('--personal-bg', `url("${url.replace(/"/g, '%22')}")`);
-      page2.classList.add('has-personal-bg');
-    } catch { page2.classList.remove('has-personal-bg'); }
+    page2.classList.remove('has-personal-bg');
+    const bg = bgOf(m);
+    const ed = tools.editor;
+    await paintBg(page2, bg, ed?.cam);
+    bgCam.get(m)?.();
+    bgCam.delete(m);
+    const follows = bg.kind === 'pattern' && bg.pattern !== 'plain' || bg.kind === 'image' && bg.layout === 'tile';
+    if (follows && ed?.on) {
+      let raf = 0;
+      bgCam.set(m, ed.on('camera', (c) => { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; moveBg(page2, c || ed.cam); }); }));
+    }
   }
+  const onBgChange = () => applyPersonalBg();
+  window.addEventListener('architect:space-bg', onBgChange);
+  offs.push(() => { window.removeEventListener('architect:space-bg', onBgChange); bgCam.forEach((f) => { try { f(); } catch {} }); bgCam.clear(); });
 
   /* ---------------- privacy ---------------- */
   function setPrivate(sel, on) {
@@ -1166,7 +1170,7 @@ export function mountSpace(root) {
     if (er?.open || !editor()) return;
     closeFloating();
     bpWin?.close(); bpWin = null;
-    page.querySelector('.say-bar')?.remove();
+    page.querySelector('.say-bar, .say-pop')?.remove();
     er = openEmergencyRoom(page, { me, spaceId: () => ids.shared || (mode === 'shared' ? spaceId : null), onClose: () => { er = null; } });
   }
   offs.push(() => { er?.close(); erCombo.off(); });
@@ -1216,9 +1220,6 @@ export function mountSpace(root) {
     if (p) { e.preventDefault(); e.stopPropagation(); goTo(p); return; }
     const obj = Object.entries(objKeys()).find(([, k]) => k === combo);
     if (obj && openObject(obj[0])) { e.preventDefault(); e.stopPropagation(); return; }
-    if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !ed.sel.size) {
-      e.preventDefault(); e.stopPropagation(); sayBar(); return;
-    }
     if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault(); e.stopPropagation();
       const at = lastPointer || { x: innerWidth / 2, y: innerHeight / 2 };
@@ -1227,6 +1228,18 @@ export function mountSpace(root) {
   };
   window.addEventListener('keydown', onKeyDown, true);
   offs.push(() => window.removeEventListener('keydown', onKeyDown, true));
+  // Enter to talk — on the canvas and in every sidebar view (a Blueprint keeps Enter for editing text).
+  const onEnter = (e) => {
+    if (!enterOpensComposer(e)) return;
+    const surf = getSurface();
+    if (surf && surf !== 'sidebar') return;
+    const ed = editor();
+    if (!surf && ed && (ed.sel.size || ed.editingId)) return;
+    e.preventDefault(); e.stopPropagation();
+    sayBar();
+  };
+  window.addEventListener('keydown', onEnter, true);
+  offs.push(() => window.removeEventListener('keydown', onEnter, true));
 
   /* ---------------- group → Blueprint ---------------- */
   async function toBlueprint(list) {

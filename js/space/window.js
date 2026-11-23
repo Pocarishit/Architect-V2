@@ -1,8 +1,10 @@
 // A Blueprint opened as a window over the Space ("compact"): not full screen, not another page.
-// Drag it by its bar, resize from the corner, expand to full screen, Ctrl+Esc (or Esc twice) to close.
+// Nov 24: no title bar of its own — the Blueprint's header (board name + save status) is the only header.
+// Drag the window by that header, resize from the corner; full screen and close sit at the header's right
+// end (and in ··· ); Ctrl+Esc (or Esc twice) still closes it.
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { store, kbd } from '../core/util.js';
+import { store } from '../core/util.js';
 import { onEscapeFull } from '../core/guard.js';
 import { mountBoard } from '../board/board.js';
 import { setSurface } from '../board/editor.js';
@@ -25,17 +27,9 @@ function fit(g) {
 export function openBoardWindow(root, boardId, { onExpand, onClose } = {}) {
   const surface = `win-${boardId}`;
   let geo = fit(store.get(GEO, null) || defaultGeo());
-  const name = h('span', { class: 'bpw-name' }, 'Blueprint');
   const body = h('div', { class: 'bpw-body' });
-  const btn = (ic, label, fn) => h('button', { class: 'bpw-btn', type: 'button', 'aria-label': label, title: label, onclick: fn, 'data-noptr': '' }, icon(ic, 15));
-  const bar = h('div', { class: 'bpw-bar' },
-    h('span', { class: 'wg-grip', 'aria-hidden': 'true' }),
-    name,
-    h('span', { class: 'bpw-hint' }, kbd('Ctrl+Esc')),
-    btn('expand', 'Full screen', () => expand()),
-    btn('close', 'Close window', () => close()));
   const grip = h('div', { class: 'bpw-resize', 'aria-hidden': 'true' });
-  const node = h('div', { class: 'bp-window', role: 'dialog', 'aria-label': 'Blueprint window', 'data-surface': surface }, bar, body, grip);
+  const node = h('div', { class: 'bp-window is-headless', role: 'dialog', 'aria-label': 'Blueprint window', 'data-surface': surface }, body, grip);
   root.append(node);
   const paint = () => { Object.assign(node.style, { left: `${geo.x}px`, top: `${geo.y}px`, width: `${geo.w}px`, height: `${geo.h}px` }); };
   paint();
@@ -43,12 +37,12 @@ export function openBoardWindow(root, boardId, { onExpand, onClose } = {}) {
   setSurface(surface);
 
   const board = mountBoard(body, boardId, {
-    windowed: { surface, onExpand: () => expand(), onClose: () => close(), onName: (n) => { name.textContent = n || 'Blueprint'; } },
+    windowed: { surface, onExpand: () => expand(), onClose: () => close(), onName: (n) => { node.setAttribute('aria-label', `${n || 'Blueprint'} — window`); } },
   });
 
   // Drag by the bar, resize from the corner (pointer events, so it works with touch too).
   const drag = (e, mode) => {
-    if (e.button !== 0 || (mode === 'move' && e.target.closest('[data-noptr]'))) return;
+    if (e.button !== 0) return;
     e.preventDefault();
     const start = { x: e.clientX, y: e.clientY, g: { ...geo } };
     const target = e.currentTarget;
@@ -72,8 +66,15 @@ export function openBoardWindow(root, boardId, { onExpand, onClose } = {}) {
     target.addEventListener('pointerup', up);
     target.addEventListener('pointercancel', up);
   };
-  bar.addEventListener('pointerdown', (e) => drag(e, 'move'));
-  bar.addEventListener('dblclick', (e) => { if (!e.target.closest('[data-noptr]')) expand(); });
+  // The Blueprint header is the handle: its pills' empty space and the BLUEPRINT mark (not the name field,
+  // buttons or people) move the window; a double-click there goes full screen.
+  const onHeader = (e) => {
+    const t = e.target;
+    if (!(t instanceof Element) || !t.closest('.bp-top .bp-pill')) return false;
+    return !t.closest('input, button, a, select, textarea, [contenteditable="true"], .bp-people, [data-noptr]');
+  };
+  body.addEventListener('pointerdown', (e) => { if (onHeader(e)) drag(e, 'move'); });
+  body.addEventListener('dblclick', (e) => { if (onHeader(e)) expand(); });
   grip.addEventListener('pointerdown', (e) => drag(e, 'size'));
   const onResize = () => { geo = fit(geo); paint(); };
   window.addEventListener('resize', onResize);

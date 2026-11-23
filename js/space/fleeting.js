@@ -1066,6 +1066,52 @@ export function mountFleeting(root, el0, w, opts = {}) {
     });
   });
 
+  // Nov 24 — hold the right mouse button and drag to pan Story in any direction (left/right included), so
+  // cards beside the timeline are in reach without the horizontal scrollbar. Scrolling still works as
+  // before; a right-click that doesn't move still opens the menu, a right-drag only pans.
+  let rpan = null, eatMenuUntil = 0;
+  const zoomK = () => (stage.getBoundingClientRect().width / (stage.offsetWidth || 1)) || 1;
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.button !== 2 || e.pointerType !== 'mouse' || view() !== 'story') return;
+    if (e.target.closest('[contenteditable="true"], input, textarea')) return;
+    rpan = { id: e.pointerId, x: e.clientX, y: e.clientY, l: stage.scrollLeft, t: stage.scrollTop, k: zoomK(), moved: false, menu: null, raf: 0, nx: 0, ny: 0 };
+    e.stopPropagation();
+    window.addEventListener('pointermove', rpanMove, true);
+    window.addEventListener('pointerup', rpanUp, true);
+    window.addEventListener('pointercancel', rpanUp, true);
+  });
+  function rpanMove(e) {
+    if (!rpan || e.pointerId !== rpan.id) return;
+    const dx = e.clientX - rpan.x, dy = e.clientY - rpan.y;
+    if (!rpan.moved) {
+      if (Math.hypot(dx, dy) < 5) return;
+      rpan.moved = true;
+      stage.classList.add('is-rpanning');
+      try { stage.setPointerCapture(e.pointerId); } catch {}
+    }
+    e.preventDefault(); e.stopPropagation();
+    rpan.nx = rpan.l - dx / rpan.k; rpan.ny = rpan.t - dy / rpan.k;
+    if (!rpan.raf) rpan.raf = requestAnimationFrame(() => { if (!rpan) return; rpan.raf = 0; stage.scrollLeft = rpan.nx; stage.scrollTop = rpan.ny; });
+  }
+  function rpanUp(e) {
+    if (!rpan || e.pointerId !== rpan.id) return;
+    const p = rpan;
+    rpan = null;
+    window.removeEventListener('pointermove', rpanMove, true);
+    window.removeEventListener('pointerup', rpanUp, true);
+    window.removeEventListener('pointercancel', rpanUp, true);
+    stage.classList.remove('is-rpanning');
+    if (p.raf) { cancelAnimationFrame(p.raf); stage.scrollLeft = p.nx; stage.scrollTop = p.ny; }
+    try { stage.releasePointerCapture(e.pointerId); } catch {}
+    if (p.moved) { eatMenuUntil = Date.now() + 400; return; } // Windows sends the menu after the button comes up
+    // A plain right-click whose menu arrived while the button was still down (macOS): open it now.
+    if (p.menu) p.menu.target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: p.menu.x, clientY: p.menu.y, button: 2, buttons: 0 }));
+  }
+  stage.addEventListener('contextmenu', (e) => {
+    if (rpan && e.isTrusted) { e.preventDefault(); e.stopImmediatePropagation(); rpan.menu = { target: e.target, x: e.clientX, y: e.clientY }; return; }
+    if (Date.now() < eatMenuUntil && e.isTrusted) { eatMenuUntil = 0; e.preventDefault(); e.stopImmediatePropagation(); }
+  }, true);
+
   function editFrag(card, f) {
     let t = card.querySelector('.fi-frag-text');
     if (!t) { t = h('span', { class: 'fi-frag-text' }); card.append(t); }

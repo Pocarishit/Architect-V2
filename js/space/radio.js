@@ -7,6 +7,7 @@ import { icon } from '../core/icons.js';
 import { toast, promptDialog, menu, popover, closeFloating } from '../core/ui.js';
 import { store, uid } from '../core/util.js';
 import { parseMediaLink, mountLinkPlayer } from './radiolinks.js';
+import { spotifyButton, spotifyLink, askScope, addPlaylist } from './spotify.js';
 import { unfurl } from '../board/embed.js';
 
 let ytLoading = null;
@@ -126,18 +127,44 @@ export function mountRadio(body, el, w) {
   const holder = h('div', { class: 'rd-yt' });
   const tune = h('button', { class: 'rd-tune', type: 'button', onclick: () => tuneIn() }, icon('broadcast', 16), h('span', {}, 'Tune in'));
   const extBox = h('div', { class: 'rd-extbox', hidden: true }); // a link from another platform plays here
-  stage.append(holder, extBox, tune);
+  const spotBox = h('div', { class: 'rd-extbox rd-spotbox', hidden: true }); // your own Spotify playlist (Nov 24)
+  stage.append(holder, extBox, spotBox, tune);
   const title = h('span', { class: 'rd-title' }, 'Radio');
   const artist = h('span', { class: 'rd-artist' }, '');
   const live = h('span', { class: 'rd-live' });
   const caption = h('div', { class: 'rd-cap' }, h('span', { class: 'rd-cap-text' }, title, artist), live);
-  const empty = h('button', { class: 'rd-empty', type: 'button', onclick: () => setSource() }, icon('music', 22), h('b', {}, 'Add a playlist or video'), h('span', {}, 'YouTube, X, Threads, TikTok, Instagram, Facebook…'));
+  const empty = h('button', { class: 'rd-empty', type: 'button', onclick: () => setSource() }, icon('music', 22), h('b', {}, 'Add a playlist or video'), h('span', {}, 'YouTube, Spotify, X, Threads, TikTok, Instagram, Facebook…'));
   const card = h('div', { class: 'rd is-stream' }, stage, caption);
   body.append(h('div', { class: 'rd-wrap' }, card, empty));
 
   // Title bar: the burger drops the queue.
   const burger = h('button', { class: 'wg-btn rd-burger', type: 'button', title: 'Queue', 'aria-label': 'Queue', 'aria-haspopup': 'dialog', onclick: (e) => openQueue(e.currentTarget) }, icon('burger', 15));
-  w.tools.append(burger);
+  w.tools.append(spotifyButton({ onPlay: (item, scope) => playSpotify(item, scope) }), burger);
+
+  /* ---- Spotify (Nov 24): your own playback, never the shared stream ----
+     A Spotify playlist plays in Spotify's player here for you alone; the live YouTube stream is paused on
+     this screen only (nobody else's Radio changes). The × puts you back on the stream. */
+  let spot = null, spotPlayer = null;
+  const spotClose = h('button', { type: 'button', class: 'rd-spot-x', title: 'Back to the Radio stream', 'aria-label': 'Back to the Radio stream', onclick: () => stopSpotify() }, icon('close', 13));
+  function playSpotify(item, scope) {
+    spot = { ...item, scope };
+    try { if (ready && player.getPlayerState?.() === 1) { applying = true; player.pauseVideo(); setTimeout(() => { applying = false; }, 600); } } catch {}
+    spotPlayer?.destroy();
+    spotPlayer = mountLinkPlayer(spotBox, { provider: 'Spotify', url: item.url, embed: item.embed, shape: 'audio', label: item.title || 'Spotify playlist' });
+    spotBox.append(spotClose);
+    paint();
+  }
+  function stopSpotify() { spot = null; spotPlayer?.destroy(); spotPlayer = null; paint(); }
+  // A Spotify link pasted into the Radio's own boxes: Personal or Shared, then it plays (for you).
+  async function spotifyFrom(raw) {
+    const s = spotifyLink(raw);
+    if (!s) return false;
+    if (s.error) { toast(s.error, { tone: 'error', ms: 5000 }); return true; }
+    const scope = await askScope();
+    if (!scope) return true;
+    try { const r = await addPlaylist(raw, scope); playSpotify(r.item, scope); } catch (e) { toast(e.message, { tone: 'error' }); }
+    return true;
+  }
 
   const st = () => w.current().st || {};
   const mode = () => 'stream'; // Nov 19: the Radio is always a live stream (Playlist mode retired)
@@ -183,6 +210,7 @@ export function mountRadio(body, el, w) {
 
   // Move the player to match a state (the shared one in Stream mode, yours in Playlist mode).
   function apply(s, fromMe = false) {
+    if (spot) { paint(); return; } // you're on your own Spotify playlist: the stream waits
     if (s && linkNow(s)) { syncExt(s); try { if (ready && player.getPlayerState?.() === 1) { applying = true; player.pauseVideo(); setTimeout(() => { applying = false; }, 600); } } catch {} paint(); return; }
     syncExt(s);
     if (!ready || !s) return;
@@ -219,6 +247,7 @@ export function mountRadio(body, el, w) {
   async function setSource() {
     const src = await askSource(w.current().src || '');
     if (!src) return;
+    if (src.ext?.provider === 'Spotify' && await spotifyFrom(src.url)) return;
     tunedIn = true;
     if (src.ext) { // a link from another platform starts a fresh queue
       w.live({ src: src.url, list: null, vid0: null, queue: [src.ext], st: { by: me.id, name: me.username, index: 0, vid: null, link: src.ext.id, t: 0, playing: true, at: Date.now() } });
@@ -298,6 +327,7 @@ export function mountRadio(body, el, w) {
     paintQueue();
   }
   async function addLink(raw) {
+    if (await spotifyFrom(raw)) return true;
     const src = parseSource(raw);
     let items;
     if (!src) {
@@ -572,10 +602,21 @@ export function mountRadio(body, el, w) {
   function paint() {
     const cur = w.current();
     const has = !!cur.src;
-    card.hidden = !has;
-    empty.hidden = has;
+    card.hidden = !has && !spot;
+    empty.hidden = has || !!spot;
     burger.hidden = !has;
     w.setTitle('RADIO');
+    card.classList.toggle('is-spotify', !!spot);
+    if (spot) {
+      holder.style.visibility = 'hidden'; extBox.hidden = true;
+      title.textContent = spot.title || `Spotify ${spot.what || 'playlist'}`;
+      artist.textContent = ` · Spotify · ${spot.scope === 'shared' ? 'Shared' : 'Personal'}`;
+      live.replaceChildren(h('span', {}, 'Only you'));
+      live.title = 'Spotify plays for you alone — nobody else’s Radio changes.';
+      tune.hidden = true;
+      return;
+    }
+    extBox.hidden = !linkNow(st());
     const s = st();
     const data = ready ? (player.getVideoData?.() || {}) : {};
     const n = queue().length;
@@ -605,6 +646,9 @@ export function mountRadio(body, el, w) {
     } catch {}
   }, 1000);
 
+  const onSpotReq = (e) => { if (e.detail?.id === el.id && e.detail.url) spotifyFrom(e.detail.url); };
+  window.addEventListener('architect:radio-spotify', onSpotReq);
+
   build();
   paint();
 
@@ -621,6 +665,6 @@ export function mountRadio(body, el, w) {
       if (streaming() && tunedIn && !iControl() && next.st?.at) apply(next.st);
       else paint();
     },
-    destroy() { destroyed = true; clearInterval(tick); ext?.destroy(); try { player?.destroy?.(); } catch {} },
+    destroy() { destroyed = true; clearInterval(tick); ext?.destroy(); spotPlayer?.destroy(); window.removeEventListener('architect:radio-spotify', onSpotReq); try { player?.destroy?.(); } catch {} },
   };
 }

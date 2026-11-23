@@ -13,8 +13,10 @@ import { releases, pushRelease, rollback } from '../data/releases.js';
 import { THEMES, setTheme, currentTheme } from './shell.js';
 import { CATALOGUE } from '../data/catalogue.js';
 import { integrations } from './integrations.js';
+import { PATTERNS, bgOf, setBg, paintBg } from '../space/backgrounds.js';
+import { updatesCanvas } from './updates.js';
 
-const TABS = [['profile', 'Profile'], ['general', 'General'], ['members', 'Members'], ['integrations', 'Integrations'], ['api', 'API'], ['custom', 'Updates']];
+const TABS = [['profile', 'Profile'], ['general', 'General'], ['personalize', 'Personalize'], ['members', 'Members'], ['integrations', 'Integrations'], ['api', 'API'], ['custom', 'Updates & Fixes']];
 
 /** actions: hooks into the Space (shortcuts, bench, camera points, toolbar, snap, personal background). */
 export async function openSettings({ tab = 'profile', spaceId = null, actions = {} } = {}) {
@@ -25,10 +27,13 @@ export async function openSettings({ tab = 'profile', spaceId = null, actions = 
   const pane = h('div', { class: 'set-pane' });
   const paint = () => {
     nav.replaceChildren(...TABS.map(([id, label]) => h('button', { type: 'button', role: 'tab', class: cur === id ? 'is-on' : null, 'aria-selected': String(cur === id), onclick: () => { cur = id; paint(); } }, label)));
-    pane.replaceChildren(({ profile, general, members, integrations, api: apiTab, custom: updates })[cur]({ me, spaceId, actions }));
+    pane.classList.toggle('is-canvas', cur === 'custom');
+    pane.closest('.dlg')?.classList.toggle('is-wide', cur === 'custom');
+    pane.replaceChildren(({ profile, general, personalize, members, integrations, api: apiTab, custom: updatesTab })[cur]({ me, spaceId, actions }));
   };
   paint();
   dialog({ title: 'Settings', width: 640, className: 'set-dlg', body: h('div', { class: 'set' }, nav, pane), actions: [{ label: 'Done', primary: true, value: true }] });
+  requestAnimationFrame(() => pane.closest('.dlg')?.classList.toggle('is-wide', cur === 'custom'));
 }
 
 /* ---------------- Profile ---------------- */
@@ -77,41 +82,8 @@ function general({ actions = {} }) {
   }, h('span', { class: 'theme-dots', 'aria-hidden': 'true' }, t.dots.map((c) => h('i', { style: { background: c } }))), t.name)));
   paintThemes();
 
-  // Personal Space background: a PNG behind your personal Space only.
-  const prev = h('div', { class: 'set-bg-prev' }, 'NONE');
-  const showBg = async () => {
-    const path = getPref('personalBg', null);
-    if (!path) { prev.style.backgroundImage = ''; prev.textContent = 'NONE'; return; }
-    prev.textContent = '';
-    try { const u = (await api.media.sign([path]))[path]; prev.style.backgroundImage = u ? `url("${u.replace(/"/g, '%22')}")` : ''; } catch {}
-  };
-  showBg();
-  const file = h('input', { type: 'file', accept: 'image/png', hidden: true });
-  file.addEventListener('change', async () => {
-    const f = file.files[0];
-    file.value = '';
-    if (!f) return;
-    if (f.type !== 'image/png') { toast('Pick a PNG image.', { tone: 'error' }); return; }
-    if (f.size > 15 * 1024 * 1024) { toast('That PNG is over 15 MB.', { tone: 'error' }); return; }
-    try {
-      const { path } = await api.media.upload(f);
-      await setPref('personalBg', path);
-      await showBg();
-      actions.personalBg?.();
-      toast('Your personal Space has its new background.', { ms: 2400 });
-    } catch (e) { toast(friendlyError(e), { tone: 'error', ms: 5000 }); }
-  });
-  const bg = h('div', { class: 'set-bg' }, prev,
-    h('div', { class: 'stack' },
-      h('p', { class: 'dlg-text' }, 'A PNG of your own behind your personal Space. The shared Space keeps its canvas.'),
-      h('div', { class: 'set-row' },
-        h('button', { class: 'btn sm', type: 'button', onclick: () => file.click() }, icon('upload', 14), 'Upload PNG'),
-        h('button', { class: 'btn sm', type: 'button', onclick: async () => { await setPref('personalBg', null).catch(() => {}); showBg(); actions.personalBg?.(); } }, 'Remove'))),
-    file);
-
   return h('div', { class: 'stack' },
     sec('Theme', themes),
-    sec('Personal Space background', bg),
     actions.toolbar || actions.snap || actions.cameraPoints ? sec('Canvas',
       h('div', { class: 'set-row' }, sw('Show toolbar', actions.toolbar, actions.setToolbar), sw('Snap objects together', actions.snap, actions.setSnap)),
       actions.cameraPoints ? h('div', { class: 'set-row' },
@@ -121,6 +93,69 @@ function general({ actions = {} }) {
       h('div', { class: 'set-row' },
         actions.shortcuts ? h('button', { class: 'btn sm', type: 'button', onclick: () => actions.shortcuts() }, icon('keyboard', 14), 'Keyboard shortcuts', h('kbd', {}, '?')) : null,
         actions.bench ? h('button', { class: 'btn sm', type: 'button', onclick: () => actions.bench() }, icon('fit', 14), 'Performance test (500 objects)') : null)) : null);
+}
+
+/* ---------------- Personalize: Space backgrounds (Nov 24) ---------------- */
+// Personal Space and Shared Space each get their own background — a built-in pattern or your own PNG
+// (Fill, or Tile with a scale). Both are your preference only: nobody else's view changes.
+function personalize() {
+  const sec = (title, ...kids) => h('section', { class: 'set-section' }, h('h3', {}, title), ...kids);
+  const block = (space, text) => {
+    let bg = bgOf(space);
+    const prev = h('div', { class: 'sbg-prev' }, 'NONE');
+    const opts = h('div', { class: 'sbg-opts', role: 'radiogroup', 'aria-label': `${space === 'shared' ? 'Shared' : 'Personal'} Space background` });
+    const layout = h('div', { class: 'sbg-opts' });
+    const scaleIn = h('input', { type: 'range', min: 10, max: 400, step: 5, value: Math.round((bg.scale || 1) * 100), 'aria-label': 'Tile size' });
+    const scaleVal = h('b', {}, `${Math.round((bg.scale || 1) * 100)}%`);
+    const scale = h('label', { class: 'sbg-scale' }, 'TILE SIZE', scaleIn, scaleVal);
+    const file = h('input', { type: 'file', accept: 'image/png', hidden: true });
+    const save = async (next) => {
+      bg = next;
+      paint();
+      try { await setBg(space, next); } catch (e) { toast(friendlyError(e), { tone: 'error' }); }
+    };
+    const choice = (label, on, fn) => h('button', { type: 'button', class: ['btn sm', on && 'is-on'], role: 'radio', 'aria-checked': String(!!on), onclick: fn }, label);
+    function paint() {
+      const img = bg.kind === 'image';
+      opts.replaceChildren(
+        ...PATTERNS.map((p) => choice(p.label, bg.kind === 'pattern' && bg.pattern === p.id, () => save({ kind: 'pattern', pattern: p.id }))),
+        choice(img ? 'Your PNG' : 'Upload PNG…', img, () => (img ? null : file.click())),
+        ...(bg.kind !== 'none' ? [choice('Default', false, () => save({ kind: 'none' }))] : []));
+      layout.hidden = !img; scale.hidden = !(img && bg.layout === 'tile');
+      if (img) layout.replaceChildren(
+        choice('Fill', bg.layout !== 'tile', () => save({ ...bg, layout: 'fill' })),
+        choice('Tile', bg.layout === 'tile', () => save({ ...bg, layout: 'tile', scale: bg.scale || 1 })),
+        h('button', { type: 'button', class: 'btn sm', onclick: () => file.click() }, icon('upload', 13), 'Replace PNG'));
+      scaleVal.textContent = `${Math.round((bg.scale || 1) * 100)}%`;
+      prev.textContent = bg.kind === 'none' ? 'DEFAULT' : '';
+      // The preview shows a pattern or tile at a smaller scale, like a zoomed-out canvas.
+      paintBg(prev, bg, { x: 0, y: 0, z: bg.kind === 'image' && bg.layout === 'tile' ? 0.35 : 0.7 });
+    }
+    let t = 0;
+    scaleIn.addEventListener('input', () => {
+      bg = { ...bg, scale: Number(scaleIn.value) / 100 };
+      scaleVal.textContent = `${scaleIn.value}%`;
+      paintBg(prev, bg, { x: 0, y: 0, z: 0.35 });
+      clearTimeout(t); t = setTimeout(() => save(bg), 250);
+    });
+    file.addEventListener('change', async () => {
+      const f = file.files[0];
+      file.value = '';
+      if (!f) return;
+      if (f.type !== 'image/png') { toast('Pick a PNG image.', { tone: 'error' }); return; }
+      if (f.size > 15 * 1024 * 1024) { toast('That PNG is over 15 MB.', { tone: 'error' }); return; }
+      try {
+        const { path } = await api.media.upload(f);
+        await save({ kind: 'image', path, layout: bg.kind === 'image' ? bg.layout : 'fill', scale: bg.scale || 1 });
+        toast(`Your ${space === 'shared' ? 'Shared' : 'Personal'} Space has its new background.`, { ms: 2200 });
+      } catch (e) { toast(friendlyError(e), { tone: 'error', ms: 5000 }); }
+    });
+    paint();
+    return h('div', { class: 'sbg' }, prev, h('div', { class: 'stack' }, h('p', { class: 'dlg-text' }, text), opts, layout, scale), file);
+  };
+  return h('div', { class: 'stack' },
+    sec('Personal Space background', block('personal', 'Behind your personal Space only. The Shared Space and the objects on the board stay as they are.')),
+    sec('Shared Space background', block('shared', 'Only you see this one: everyone else in the Shared Space keeps their own background. The board itself doesn’t change.')));
 }
 
 /* ---------------- Members ---------------- */
@@ -251,6 +286,13 @@ function apiTab({ me }) {
         'updates.push {css?, js?, note?} · updates.list · updates.current · updates.rollback {version?}',
       ].join('\n'))));
   return wrap;
+}
+
+/* ---------------- Updates & Fixes (Nov 24) ---------------- */
+// The canvas of update notes + previews with Push Update / Schedule (views/updates.js). The Catalogue of
+// what shipped, and your own custom CSS / JS, fold away underneath it.
+function updatesTab() {
+  return updatesCanvas({ extras: () => h('details', { class: 'set-adv' }, h('summary', {}, 'Catalogue · custom CSS & JS'), updates()) });
 }
 
 /* ---------------- Updates: the Catalogue (Nov 23b) ---------------- */

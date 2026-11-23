@@ -28,6 +28,7 @@ const missing = (e) => /relation .* does not exist|Could not find the table|42P0
 const emit = (keys = null) => { for (const fn of subs) { try { fn(data, keys); } catch {} } };
 
 function reset() {
+  past.length = 0; future.length = 0;
   clearTimeout(timer); clearInterval(poller);
   data = null; row = null; remote = true; loading = null; dirty = false; poller = 0;
 }
@@ -75,9 +76,37 @@ export const myVars = () => data;
 export const myVarsRemote = () => remote;
 export function onMyVars(fn) { subs.add(fn); return () => subs.delete(fn); }
 
+/* Undo / redo (Nov 24): every change to your Variables (renames, colors, moves, resizes, reordering, Free View
+   layouts, notes) can be stepped back with Ctrl/⌘+Z while you're in Variables — separately from the
+   Blueprint's own undo. Changes that land within a moment of each other (a drag) undo together. */
+const past = [], future = [];
+let lastAt = 0, stepping = false;
+const snapOf = (d) => ({ sections: d.sections, entries: d.entries, vfree: d.vfree });
+function remember(patch) {
+  const keys = Object.keys(patch);
+  if (stepping || !data || keys.every((k) => k === 'ideas')) return;
+  if (Date.now() - lastAt > 700 || !past.length) { past.push(snapOf(data)); if (past.length > 80) past.shift(); }
+  lastAt = Date.now();
+  future.length = 0;
+}
+function step(from, to) {
+  if (!data || !from.length) return false;
+  to.push(snapOf(data));
+  const snap = from.pop();
+  stepping = true;
+  try { setMyVars(snap); } finally { stepping = false; }
+  lastAt = 0;
+  return true;
+}
+export const undoMyVars = () => step(past, future);
+export const redoMyVars = () => step(future, past);
+export const canUndoMyVars = () => past.length > 0;
+export const canRedoMyVars = () => future.length > 0;
+
 /** Replace (part of) your Variables. Every open Variables object repaints at once; the save is batched. */
 export function setMyVars(patch) {
   if (!data) return;
+  remember(patch);
   data = { ...data, ...patch, rev: Date.now() };
   store.set(localKey(), data);
   dirty = true;
@@ -123,3 +152,16 @@ async function pull() {
     if (next.rev > (data.rev || 0)) { data = next; store.set(localKey(), data); emit(); }
   } catch {}
 }
+
+/** Your Variables as a data source (the same shape a shared category uses — data/varshare.js). */
+export const myVarsSource = {
+  foreign: false,
+  get: () => data,
+  set: (p) => setMyVars(p),
+  on: (fn) => onMyVars(fn),
+  load: () => loadMyVars(),
+  undo: () => undoMyVars(),
+  redo: () => redoMyVars(),
+  canUndo: () => canUndoMyVars(),
+  canRedo: () => canRedoMyVars(),
+};

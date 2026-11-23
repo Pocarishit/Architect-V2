@@ -7,7 +7,7 @@ import { api, friendlyError } from '../data/api.js';
 import { loadPrefs, getPref, setPref, prefsOf } from '../data/prefs.js';
 import { printToPdf, pdfHint } from '../core/print.js';
 import { windowOf, stateOf, clock, logSetpoints, dayStart, spDayKey, keyOf } from '../data/setpoints.js';
-import { anytypeOn, loadImports, importsFor, importStatus, checkOf, setCheck, onAnytype, anytypeLink } from '../data/anytype.js';
+import { anytypeOn, loadImports, importsFor, importStatus, checkOf, setCheck, onAnytype, anytypeLink, mappingsFor, twoWayReady, renameItem, addItem, deleteItem, hideItem, dropOp, requestSync } from '../data/anytype.js';
 
 export const DEFAULT_PATHS = ['Morning', 'Afternoon', 'Atemporal', 'Futures', 'Cache'];
 const DEFAULT_TITLE = 'Paths';
@@ -395,21 +395,34 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
         : null);
   }
 
-  /* ---- Anytype imports (Nov 23b) ----
-     Read-only items from the Anytype page section / collection mapped to this Set-Point. Anytype owns the
-     wording; Architect owns the checkmark, per Architect day — so a refreshed import never resets it,
-     and checking one off never changes Anytype. */
+  /* ---- Anytype items (Nov 23b; two-way Nov 24) ----
+     Items from the Anytype page section / collection mapped to this Set-Point. Checking, unchecking,
+     renaming, adding or deleting one here is sent to Anytype by the connector on the PC, and changes made
+     in Anytype come back with the next import (the newer side wins, without duplicates). The checkmark is
+     still kept per Architect day. "Remove from Path" only hides an item here. */
+  const axDayOf = (ms) => spDayKey(new Date(ms), dayStart(columns, timesArg()));
+  const axItem = (col, key) => importsFor(col?.id, goalDay()).find((x) => x.key === key) || null;
   function axViews(col) {
     if (readOnly || !anytypeOn()) return null;
     const day = goalDay();
     return importsFor(col.id, day).map((it) => {
-      const c = checkOf(it.key, day);
-      return h('article', { class: ['ptask', 'is-imported', c.done && 'is-done', c.pending && 'is-pending'], 'data-ax': it.key, title: c.pending ? 'Saved on this device — syncing' : null },
+      if (it.placeholder) {
+        return h('article', { class: ['ptask', 'is-imported', 'is-pending', it.failed && 'is-failed'], 'data-ax': it.key, title: it.failed ? `Couldn’t add it in Anytype: ${it.message || 'error'}` : 'Adding in Anytype…' },
+          h('span', { class: 'pcheck is-ghost', 'aria-hidden': 'true' }),
+          h('div', { class: 'ptask-body' }, h('div', { class: 'ptask-title' }, it.fields.title, h('span', { class: 'pax-tag' }, it.failed ? 'NOT ADDED' : 'ADDING…'))),
+          h('button', { class: 'icon-btn xs ptask-more', 'data-act': 'ax-menu', 'aria-label': 'Item options' }, icon('more', 16)));
+      }
+      const c = checkOf(it.key, day, { item: it, dayOf: axDayOf });
+      const two = twoWayReady() && !!it.mapping_id;
+      const isEditing = editing && editing.id === `ax:${it.key}`;
+      return h('article', { class: ['ptask', 'is-imported', c.done && 'is-done', (c.pending || it.pendingEdit) && 'is-pending'], 'data-ax': it.key, title: c.pending || it.pendingEdit ? 'Saved on this device — syncing with Anytype' : null },
         h('button', { class: 'pcheck', 'data-act': 'ax-toggle', role: 'checkbox', 'aria-checked': String(c.done), 'aria-label': `${c.done ? 'Mark not done' : 'Mark done'}: ${it.fields?.title || ''}` }, icon('check', 12, { weight: 2.4 })),
         h('div', { class: 'ptask-body' },
-          h('div', { class: 'ptask-title' }, it.fields?.title || 'Untitled', h('span', { class: 'pax-tag', title: 'Imported from Anytype — edit it in Anytype' }, 'ANYTYPE')),
+          isEditing
+            ? h('textarea', { class: 'ptask-input', rows: 1, 'data-ax-rename': it.key, 'aria-label': 'Rename in Architect and Anytype', value: it.fields?.title || '' })
+            : h('div', { class: 'ptask-title', 'data-act': two ? 'ax-rename' : null }, it.fields?.title || 'Untitled', h('span', { class: 'pax-tag', title: two ? 'Linked to Anytype — changes sync both ways' : 'Imported from Anytype — edit it in Anytype' }, 'ANYTYPE')),
           it.fields?.body ? h('div', { class: 'ptask-note' }, it.fields.body) : null),
-        h('button', { class: 'icon-btn xs ptask-more', 'data-act': 'ax-menu', 'aria-label': 'Imported item options' }, icon('more', 16)));
+        h('button', { class: 'icon-btn xs ptask-more', 'data-act': 'ax-menu', 'aria-label': 'Linked item options' }, icon('more', 16)));
     });
   }
   function axStatus() {
@@ -484,12 +497,12 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   }
 
   function focusActive() {
-    const ta = el.querySelector('[data-editor], [data-composer], [data-rename], [data-rename-title]');
+    const ta = el.querySelector('[data-editor], [data-composer], [data-rename], [data-rename-title], [data-ax-rename]');
     if (!ta) return;
     if (ta.tagName === 'TEXTAREA') autosize(ta);
     ta.focus();
     const len = ta.value.length;
-    if (ta.dataset.rename || ta.dataset.renameTitle) ta.select();
+    if (ta.dataset.rename || ta.dataset.renameTitle || ta.dataset.axRename) ta.select();
     else ta.setSelectionRange(len, len);
   }
 
@@ -606,6 +619,9 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   /* ---------------- Mutations ---------------- */
 
   async function addTask(colId, text) {
+    // A Set-Point fed by Anytype (two-way): a new task is created in Anytype and comes back linked.
+    const ax = !readOnly && anytypeOn() && twoWayReady() && getPref('anytypeAddTo', true) !== false ? mappingsFor(colId)[0] : null;
+    if (ax && !viewDay) { addItem(ax.id, text); render(); return; }
     const list = tasksOf(colId);
     const t = { id: uid(), column_id: colId, title: text, note: '', done: false, position: posBetween(list.at(-1)?.position ?? null, null) };
     if (viewDay) t.day = viewDay;
@@ -805,17 +821,32 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       return;
     }
     if (readOnly) return;
-    if (act === 'ax-toggle' || act === 'ax-menu') {
+    if (act === 'ax-toggle' || act === 'ax-menu' || act === 'ax-rename') {
       const key = t.closest('[data-ax]')?.dataset.ax;
       if (!key) return;
       const day = goalDay();
-      if (act === 'ax-toggle') { setCheck(key, day, !checkOf(key, day).done); render(); return; }
-      const it = importsFor(col?.id, day).find((x) => x.key === key);
+      const it = axItem(col, key);
+      if (act === 'ax-toggle') { if (it) setCheck(key, day, !checkOf(key, day, { item: it, dayOf: axDayOf }).done, it); render(); return; }
+      if (act === 'ax-rename') { if (e.metaKey || e.ctrlKey || e.shiftKey) return; editing = { id: `ax:${key}`, field: 'ax' }; composerFor = null; render(); return; }
+      if (it?.placeholder) {
+        menu(t, [{ label: it.failed ? 'Dismiss' : 'Cancel adding', icon: 'close', onSelect: () => dropOp(key) }], { align: 'end' });
+        return;
+      }
+      const two = twoWayReady() && !!it?.mapping_id;
+      const sync = () => { requestSync(); loadImports({ force: true }).then(render); toast('Syncing with Anytype…', { ms: 1600 }); };
       menu(t, [
-        { header: 'From Anytype' },
+        { header: 'Linked to Anytype' },
+        two ? { label: 'Rename', icon: 'edit', onSelect: () => { editing = { id: `ax:${key}`, field: 'ax' }; composerFor = null; render(); } } : null,
+        it ? { label: 'Remove from Path', icon: 'eyeOff', onSelect: () => { hideItem(it).then(render); toast('Removed from Path — it stays in Anytype. Restore it in Settings → Integrations.', { ms: 3600 }); } } : null,
+        '-',
         it ? { label: 'Open in Anytype', icon: 'external', onSelect: () => { location.href = anytypeLink(it); } } : null,
-        { label: 'Sync now', icon: 'history', onSelect: () => loadImports({ force: true }).then(render) },
+        { label: 'Sync now', icon: 'history', onSelect: sync },
         { label: 'Anytype settings…', icon: 'settings', onSelect: () => import('./settings.js').then((m) => m.openSettings({ tab: 'integrations' })) },
+        two ? '-' : null,
+        two ? { label: 'Delete from both', icon: 'trash', danger: true, onSelect: async () => {
+          if (!(await confirmDialog(`Delete “${it.fields?.title || 'this item'}” from both?`, 'It’s deleted in Anytype (moved to its bin) and removed from your Path.', { ok: 'Delete from both' }))) return;
+          deleteItem(it); render();
+        } } : null,
       ].filter(Boolean), { align: 'end' });
       return;
     }
@@ -953,6 +984,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       { label: 'Move left', icon: 'chevronLeft', disabled: i === 0, onSelect: () => shiftColumn(col, -1) },
       { label: 'Move right', icon: 'chevronRight', disabled: i === columns.length - 1, onSelect: () => shiftColumn(col, 1) },
       { label: doneCount ? `Clear ${doneCount} done` : 'Clear done', icon: 'check', disabled: !doneCount, onSelect: () => clearDone(col) },
+      anytypeOn() && twoWayReady() && mappingsFor(col.id).length ? { label: 'New tasks go to Anytype', icon: 'anytype', checked: getPref('anytypeAddTo', true) !== false, onSelect: () => setPref('anytypeAddTo', getPref('anytypeAddTo', true) === false).then(render).catch(() => {}) } : null,
       '-',
       embedded && opts.onDetach && !opts.only ? '-' : null,
       embedded && opts.onDetach && !opts.only ? { label: 'Detach to canvas', icon: 'external', onSelect: () => opts.onDetach(col.id, null) } : null,
@@ -981,6 +1013,9 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       const note = t.dataset.editor === 'note';
       if (e.key === 'Escape') { editing = null; render(); }
       else if (e.key === 'Enter' && (!note || e.metaKey || e.ctrlKey) && !e.shiftKey) { e.preventDefault(); t.blur(); }
+    } else if (t.dataset.axRename) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); t.blur(); }
+      else if (e.key === 'Escape') { editing = null; render(); }
     } else if (t.dataset.rename || t.dataset.renameTitle) {
       if (e.key === 'Enter') { e.preventDefault(); t.blur(); }
       else if (e.key === 'Escape') { renamingCol = null; renamingTitle = false; render(); }
@@ -992,6 +1027,15 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   el.addEventListener('focusout', (e) => {
     if (rendering) return;
     const t = e.target;
+    if (t.dataset.axRename) {
+      const key = t.dataset.axRename;
+      const it = axItem(columns.find((c) => c.id === t.closest('[data-col]')?.dataset.col) || null, key) || columns.map((c) => axItem(c, key)).find(Boolean);
+      editing = null;
+      const v = t.value.replace(/\s+/g, ' ').trim();
+      if (it && v && v !== it.fields?.title) renameItem(it, v);
+      render();
+      return;
+    }
     if (t.dataset.composer) {
       const v = t.value.trim();
       const colId = t.dataset.composer;

@@ -7,7 +7,7 @@ import { icon } from '../core/icons.js';
 import { toast, confirmDialog } from '../core/ui.js';
 import { api, configured, friendlyError } from '../data/api.js';
 import { getPref, setPref } from '../data/prefs.js';
-import { loadImports, STATUS } from '../data/anytype.js';
+import { loadImports, STATUS, hiddenItems, restoreHidden } from '../data/anytype.js';
 
 const LOCAL_UI = 'http://127.0.0.1:31019';
 const REPO_CONNECTOR = 'https://github.com/Pocarishit/Architect-V2/tree/main/connector';
@@ -154,15 +154,30 @@ export function integrations() {
     } catch (e) { toast(/anytype_pair_start|Could not find the function/i.test(String(e?.message)) ? 'Run supabase/anytype.sql in the Supabase SQL editor first.' : friendlyError(e), { tone: 'error', ms: 5000 }); }
   }
 
+  // Items removed from Path (hidden in Architect only — still in Anytype, still mapped).
+  const hiddenBox = h('div', { class: 'stack' });
+  function paintHidden() {
+    const list = hiddenItems();
+    if (!list.length) { hiddenBox.replaceChildren(); return; }
+    hiddenBox.replaceChildren(
+      h('div', { class: 'pop-label' }, `Removed from Path (${list.length})`),
+      ...list.slice(0, 50).map((x) => h('div', { class: 'ax-row ax-hidden' },
+        h('span', { class: 'ax-grow' }, x.title || 'Untitled'),
+        h('button', { class: 'btn sm', type: 'button', onclick: async () => { await restoreHidden(x.key); paintHidden(); window.dispatchEvent(new CustomEvent('architect:paths-changed', { detail: { owner: api.auth.current()?.user?.id, from: 'settings' } })); } }, 'Restore'))),
+      ...(list.length > 1 ? [h('button', { class: 'btn sm', type: 'button', onclick: async () => { await restoreHidden(); paintHidden(); window.dispatchEvent(new CustomEvent('architect:paths-changed', { detail: { owner: api.auth.current()?.user?.id, from: 'settings' } })); } }, 'Restore all')] : []));
+  }
+
   load();
   wrap.append(
     h('div', { class: 'set-section' },
       h('h3', {}, 'Anytype'),
-      h('p', { class: 'dlg-text' }, 'Bring selected Anytype page sections or collections into your Path Set-Points — on desktop and on your phone. Checkmarks and goals stay in Architect; nothing is ever written back to Anytype. Private to your account.'),
+      h('p', { class: 'dlg-text' }, 'Keep selected Anytype page sections or collections in sync with your Path Set-Points — on desktop and on your phone. Checking, unchecking, renaming, adding or deleting a linked item on either side updates the other (the connector on your PC applies Architect’s changes in Anytype). Goals and unlinked Path tasks are never touched. Private to your account.'),
       h('div', { class: 'set-row' }, sw, h('span', { class: 'set-space' }),
         desktop() ? h('button', { class: 'btn btn-primary sm', type: 'button', onclick: pair }, icon('plus', 14), 'Connect a PC') : null),
       pairBox),
     h('div', { class: 'pop-label' }, 'Connected PCs'), conns,
-    maps);
+    maps,
+    hiddenBox);
+  paintHidden();
   return wrap;
 }

@@ -2,7 +2,7 @@
 // Network first (you always get the newest deploy when online), the cached copy when offline or when the
 // network hangs for more than 6 seconds. Supabase, R2 and other APIs are never touched here — your data's
 // offline copy lives in js/data/offline.js.
-const VERSION = 'architect-shell-2026-11-23b';
+const VERSION = 'architect-shell-2026-11-24';
 const SHELL = [
   "./",
   "assets/favicon.svg",
@@ -11,6 +11,7 @@ const SHELL = [
   "css/base.css",
   "css/board.css",
   "css/nov23b.css",
+  "css/nov24.css",
   "css/fleeting.css",
   "css/sections.css",
   "css/sidebar.css",
@@ -56,7 +57,9 @@ const SHELL = [
   "js/data/shared.js",
   "js/data/supabase.js",
   "js/data/tasks.js",
+  "js/data/varshare.js",
   "js/main.js",
+  "js/space/backgrounds.js",
   "js/space/chat.js",
   "js/space/er.js",
   "js/space/fleeting.js",
@@ -65,8 +68,10 @@ const SHELL = [
   "js/space/mobile.js",
   "js/space/radio.js",
   "js/space/radiolinks.js",
+  "js/space/saycomposer.js",
   "js/space/sidebar.js",
   "js/space/sidechat.js",
+  "js/space/spotify.js",
   "js/space/timer.js",
   "js/space/tracker.js",
   "js/space/variables.js",
@@ -82,7 +87,8 @@ const SHELL = [
   "js/views/settings.js",
   "js/views/shell.js",
   "js/views/space.js",
-  "js/views/tracker.js"
+  "js/views/tracker.js",
+  "js/views/updates.js"
 ];
 
 self.addEventListener('install', (e) => {

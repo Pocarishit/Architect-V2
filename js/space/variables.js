@@ -8,12 +8,13 @@
 // data. Toggle it off and the standard grid is back.
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { menu, toast, dialog, confirmDialog, promptDialog } from '../core/ui.js';
+import { menu, toast, dialog, confirmDialog, promptDialog, popover, closeFloating } from '../core/ui.js';
 import { uid, store } from '../core/util.js';
 import { api, friendlyError } from '../data/api.js';
 import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia } from './media.js';
 import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
-import { loadMyVars, myVars, setMyVars, onMyVars } from '../data/myvars.js';
+import { myVarsSource } from '../data/myvars.js';
+import { registerVarChat } from './saycomposer.js';
 import { mountFreeView } from './freeview.js';
 import { shareCategory, unshareCategory } from '../data/varshare.js';
 
@@ -86,6 +87,53 @@ export async function mergeVariables(base, plan, { chats = {}, onStep } = {}) {
 const hue = (t) => { let x = 0; for (const c of String(t).trim()) x = (x * 31 + c.charCodeAt(0)) % 360; return x; };
 const initials = (n) => String(n).trim().split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase() || '?';
 
+/* ---------------- colors (Nov 24) ---------------- */
+// A variable or subsection can carry a color: its tile, card and sidebar row pick it up.
+export const VAR_COLORS = ['#f4f4f4', '#9b9b9b', '#e5484d', '#f2994a', '#f2c94c', '#3fae6a', '#2fb5a8', '#4c8df6', '#8b5cf6', '#e45fa8'];
+/** Resolves to a color, null (back to default) or undefined (closed). */
+export function pickColor(anchor, current = null) {
+  return new Promise((resolve) => {
+    let done = false;
+    const pick = (c) => { if (done) return; done = true; closeFloating(); resolve(c); };
+    const box = h('div', { class: 'vr-colors', role: 'listbox', 'aria-label': 'Color' },
+      ...VAR_COLORS.map((c) => h('button', { type: 'button', class: ['vr-swatch', current === c && 'is-on'], style: { background: c }, 'aria-label': c, role: 'option', 'aria-selected': String(current === c), onclick: () => pick(c) })),
+      h('button', { type: 'button', class: ['vr-swatch is-none', !current && 'is-on'], 'aria-label': 'Default', title: 'Default', onclick: () => pick(null) }));
+    const p = popover(anchor && anchor.nodeType ? anchor : { x: anchor?.x ?? innerWidth / 2, y: anchor?.y ?? innerHeight / 2 }, box, { onClose: () => { if (!done) { done = true; resolve(undefined); } } });
+    if (!p) resolve(undefined);
+  });
+}
+
+/* ---------------- undo inside Variables (Nov 24) ----------------
+   Ctrl/⌘+Z (and ⇧ / Ctrl+Y to redo) step back changes in whichever Variables you were last working in —
+   the board's own undo never sees them, and nothing on the Blueprint is undone. */
+const undoRoots = new Map(); // root element → source
+let lastRoot = null;
+let undoKeys = false;
+export function trackUndo(root, src) {
+  undoRoots.set(root, src);
+  const touch = () => { lastRoot = root; };
+  root.addEventListener('pointerdown', touch, true);
+  root.addEventListener('focusin', touch);
+  if (!undoKeys) {
+    undoKeys = true;
+    window.addEventListener('keydown', (e) => {
+      const mod = e.metaKey || e.ctrlKey;
+      const k = e.key.toLowerCase();
+      if (!mod || e.altKey || !(k === 'z' || k === 'y')) return;
+      const t = e.target;
+      if (t instanceof Element && t.closest('input, textarea, [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
+      const r = lastRoot;
+      const s2 = r && r.isConnected && r.getClientRects().length ? undoRoots.get(r) : null;
+      if (!s2) return;
+      if (document.activeElement && document.activeElement !== document.body && !r.contains(document.activeElement) && !document.activeElement.closest?.('.sb-stage, .vr')) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      const redo = k === 'y' || e.shiftKey;
+      if (!(redo ? s2.redo() : s2.undo())) toast(redo ? 'Nothing to redo in Variables.' : 'Nothing to undo in Variables.', { ms: 1200 });
+    }, true);
+  }
+  return () => { undoRoots.delete(root); if (lastRoot === root) lastRoot = null; root.removeEventListener('pointerdown', touch, true); root.removeEventListener('focusin', touch); };
+}
+
 export function mountVariables(root, el0, w) {
   let el = el0;
   const me = api.auth.current()?.user;
@@ -113,10 +161,16 @@ export function mountVariables(root, el0, w) {
   // and in the shared Space everyone sees only their own. What's still saved on the object from before
   // is "legacy" — offered once, never shown as yours until you bring it in.
   let ready = false;
-  const acct = () => myVars() || { sections: null, entries: [] };
+  // Nov 24: a Variables object runs on a data source — your own Variables (default), or a category someone
+  // shared with you (data/varshare.js → sharedSource), with the same editing, menus and Free View.
+  const src = w?.source || myVarsSource;
+  const foreign = !!src.foreign;
+  const setMyVars = (p) => src.set(p);
+  const undoItem = () => ({ label: 'Undo', icon: 'undo', kbd: '⌘Z', disabled: !src.canUndo?.(), onSelect: () => src.undo() });
+  const acct = () => src.get() || { sections: null, entries: [] };
   let defaults = null;
   const sections = () => acct().sections || (defaults ||= defaultVariables().sections);
-  const tops = () => sections().filter((s) => !s.parent);
+  const tops = () => sections().filter((s) => !s.parent && !s.organs); // the Organs space lives in the sidebar only
   const kids = (id) => sections().filter((s) => s.parent === id);
   const secById = (id) => sections().find((s) => s.id === id);
   const entries = () => acct().entries || [];
@@ -171,6 +225,7 @@ export function mountVariables(root, el0, w) {
     const keep = box.querySelector('.vr-grid')?.scrollTop;
     free?.destroy(); free = null;
     gfree?.destroy(); gfree = null;
+    if (!entry && w?.chatTools) w.chatTools.replaceChildren();
     box.replaceChildren(entry ? chat(entry) : grid(t));
     if (keep && !entry) box.querySelector('.vr-grid').scrollTop = keep;
     if (entry && !free && !query) requestAnimationFrame(() => { const l = box.querySelector('.vr-msgs'); if (l) l.scrollTop = l.scrollHeight; });
@@ -277,7 +332,7 @@ export function mountVariables(root, el0, w) {
         if (i) bar.push(h('span', { class: 'vr-crumb-sep', 'aria-hidden': 'true' }, '›'));
         bar.push(h(last ? 'span' : 'button', {
           ...(last ? {} : { type: 'button', onclick: () => { goTo(c.id); render(); } }),
-          class: ['vr-crumb-name', !last && 'is-link'], style: { '--h': hue(c.name) },
+          class: ['vr-crumb-name', !last && 'is-link', c.color && 'has-color'], style: { '--h': hue(c.name), ...(c.color ? { '--vc': c.color } : {}) },
           oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, c); },
           ondblclick: () => renameSection(c),
         }, secImg(c, 'vr-crumb-img'), c.name.toUpperCase()));
@@ -299,8 +354,9 @@ export function mountVariables(root, el0, w) {
         { label: `Add sub-section in ${secById(cur)?.name || 'here'}`, icon: 'folder', onSelect: () => addSection(cur) },
         { label: 'Add section', icon: 'folder', onSelect: () => addSection(null) },
         '-',
-        { label: 'Import from Variables file…', icon: 'upload', onSelect: importFile },
-      ]);
+        foreign ? null : { label: 'Import from Variables file…', icon: 'upload', onSelect: importFile },
+        undoItem(),
+      ].filter(Boolean));
     };
 
     let main;
@@ -324,6 +380,11 @@ export function mountVariables(root, el0, w) {
       });
       gfree.scroller.addEventListener('contextmenu', (e) => { if (e.target.classList?.contains('vr-fv-board') || e.target === gfree.scroller) gridMenu(e); });
       main = gfree.el;
+    } else if (w?.field) {
+      // The sidebar's map (Nov 24): each subsection opens out in place — its variables and its own
+      // subsections are on the map without opening it first.
+      main = h('div', { class: 'vr-grid is-groups' }, ...cards(), addCard, ...cats.map((c) => group(c)));
+      main.addEventListener('contextmenu', (e) => { if (e.target === main) gridMenu(e); });
     } else {
       main = h('div', { class: 'vr-grid' }, ...tiles(), ...cards(), addCard);
       main.addEventListener('contextmenu', (e) => { if (e.target === main) gridMenu(e); });
@@ -347,7 +408,7 @@ export function mountVariables(root, el0, w) {
   // A subsection tile: its image (if any), its name, how many variables live inside (all depths).
   function tile(c) {
     const node = h('div', {
-      class: ['vr-cat vr-it', c.img && 'has-img'], role: 'button', tabindex: 0, 'data-sec': c.id, 'data-id': c.id, style: { '--h': hue(c.name) },
+      class: ['vr-cat vr-it', c.img && 'has-img', c.color && 'has-color'], role: 'button', tabindex: 0, 'data-sec': c.id, 'data-id': c.id, style: { '--h': hue(c.name), ...(c.color ? { '--vc': c.color } : {}) },
       'aria-label': `Open ${c.name}`,
       onclick: (e) => { if (e.target.closest('.vr-fv-h')) return; goTo(c.id); render(); },
       onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); goTo(c.id); render(); } if (e.key === 'F2') renameSection(c); },
@@ -357,13 +418,28 @@ export function mountVariables(root, el0, w) {
     return node;
   }
 
+  // A subsection opened out on the map: its name (Doto), its variables, its own subsections as tiles.
+  function group(c) {
+    const inner = [...inSec(c.id).map((x) => card(x)), ...kids(c.id).map((k) => tile(k))];
+    const node = h('section', {
+      class: ['vr-group', c.color && 'has-color'], 'data-sec': c.id, style: c.color ? { '--vc': c.color } : null,
+      oncontextmenu: (e) => { if (e.target.closest('.vr-card, .vr-cat')) return; e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, c); },
+    },
+      h('header', { class: 'vr-group-head' },
+        secImg(c, 'vr-group-img'),
+        h('button', { type: 'button', class: 'vr-group-name', title: `Open ${c.name}`, onclick: () => { goTo(c.id); render(); }, ondblclick: (e) => { e.preventDefault(); renameSection(c); } }, c.name.toUpperCase()),
+        h('button', { type: 'button', class: 'vr-group-add', title: `Add a variable to ${c.name}`, 'aria-label': `Add a variable to ${c.name}`, onclick: () => addEntry(c.id) }, icon('plus', 13))),
+      h('div', { class: 'vr-group-body' }, ...(inner.length ? inner : [h('span', { class: 'vr-group-empty' }, 'Nothing here yet')])));
+    return node;
+  }
+
   function card(x) {
     const url = x.photo ? urlOf(x.photo, render) : null;
     const more = h('button', { type: 'button', class: 'vr-card-more', 'aria-label': `Options for ${x.name}`, onclick: (e) => { e.stopPropagation(); entryMenu(e.currentTarget, x); } }, icon('more', 14));
     const name = h('span', { class: 'vr-name', title: 'Double-click to rename' }, x.name);
     const hh = hue(x.name);
     const node = h('div', {
-      class: 'vr-card vr-it', role: 'button', tabindex: 0, 'aria-label': `Open ${x.name}`, 'data-id': x.id,
+      class: ['vr-card vr-it', x.color && 'has-color'], role: 'button', tabindex: 0, 'aria-label': `Open ${x.name}`, 'data-id': x.id, style: x.color ? { '--vc': x.color } : null,
       onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) openEntry(x.id); if (e.key === 'F2') renameInline(name, x); },
       oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); entryMenu({ x: e.clientX, y: e.clientY }, x); },
     },
@@ -405,7 +481,7 @@ export function mountVariables(root, el0, w) {
       span.contentEditable = 'false';
       busy = false;
       const t = span.textContent.replace(/\s+/g, ' ').trim();
-      if (ok && t && t !== x.name) patchEntry(x.id, () => ({ name: t.slice(0, 48) }));
+      if (ok && t && t !== x.name) patchEntry(x.id, () => ({ name: t.slice(0, 120) }));
       else { span.textContent = x.name; if (pending) render(); }
     };
     const onBlur = () => done(true);
@@ -488,7 +564,7 @@ export function mountVariables(root, el0, w) {
   }
 
   async function addSection(parent) {
-    const name = await promptDialog(parent ? `New sub-section in ${secById(parent)?.name}` : 'New section', { placeholder: parent ? 'e.g. Student, Cadet Officer' : 'e.g. Gym, Church, Clients', ok: 'Add', maxLength: 32 });
+    const name = await promptDialog(parent ? `New sub-section in ${secById(parent)?.name}` : 'New section', { placeholder: parent ? 'e.g. Student, Cadet Officer' : 'e.g. Gym, Church, Clients', ok: 'Add', maxLength: 120 });
     if (!name?.trim()) return;
     const dup = sections().some((x) => (x.parent || null) === (parent || null) && x.name.toLowerCase() === name.trim().toLowerCase());
     if (dup) { toast('There’s already a section with that name.', { tone: 'error' }); return; }
@@ -498,7 +574,7 @@ export function mountVariables(root, el0, w) {
   }
 
   async function renameSection(s) {
-    const name = await promptDialog('Rename section', { value: s.name, maxLength: 32 });
+    const name = await promptDialog('Rename section', { value: s.name, maxLength: 120 });
     if (!name?.trim() || name.trim() === s.name) return;
     save({ sections: sections().map((x) => (x.id === s.id ? { ...x, name: name.trim() } : x)) });
   }
@@ -518,7 +594,9 @@ export function mountVariables(root, el0, w) {
       { label: 'Rename', icon: 'edit', onSelect: () => renameSection(s) },
       { label: s.img ? 'Replace image' : 'Add an image', icon: 'image', onSelect: async () => { const [f] = await pickMedia({ multiple: false, accept: 'image/*' }); if (f) setSecImg(s.id, f); } },
       s.img ? { label: 'Remove image', icon: 'eyeOff', onSelect: () => save({ sections: sections().map((x) => (x.id === s.id ? { ...x, img: null } : x)) }) } : null,
-      !s.parent ? { label: s.share?.item ? 'Make private' : 'Share with your Space', icon: s.share?.item ? 'lock' : 'users', onSelect: () => toggleShare(s) } : null,
+      !s.parent && !foreign ? { label: s.share?.item ? 'Make private' : 'Share with your Space', icon: s.share?.item ? 'lock' : 'users', onSelect: () => toggleShare(s) } : null,
+      { label: 'Color…', icon: 'textColor', onSelect: () => pickColor(anchor, s.color).then((c) => { if (c !== undefined) save({ sections: sections().map((x) => (x.id === s.id ? { ...x, color: c } : x)) }); }) },
+      undoItem(),
       { label: prev, icon: 'chevronLeft', disabled: i === 0, onSelect: () => swap(i - 1) },
       { label: next, icon: 'chevronRight', disabled: i === siblings.length - 1, onSelect: () => swap(i + 1) },
       '-',
@@ -545,8 +623,8 @@ export function mountVariables(root, el0, w) {
   // Every section as "School › Student" for pickers.
   const allSecs = () => { const out = [], seen = new Set(); const walk = (x) => { if (seen.has(x.id)) return; seen.add(x.id); out.push(x); kids(x.id).forEach(walk); }; tops().forEach(walk); return out; };
 
-  async function addEntry() {
-    const name = h('input', { class: 'input', placeholder: 'A person, a group, a commitment', maxlength: 48, 'aria-label': 'Name' });
+  async function addEntry(into = null) {
+    const name = h('input', { class: 'input', placeholder: 'A person, a group, a commitment', maxlength: 120, 'aria-label': 'Name' });
     let file = null;
     const face = h('span', { class: 'vr-pick-face' }, icon('user', 22));
     const pick = h('button', {
@@ -559,7 +637,7 @@ export function mountVariables(root, el0, w) {
       },
     }, face);
     const pickLabel = h('span', { class: 'vr-pick-label' }, 'Add a photo (optional)');
-    const secSel = h('select', { class: 'input', 'aria-label': 'Section' }, allSecs().map((s) => h('option', { value: s.id, selected: s.id === here() }, s.parent ? `   ${pathOf(s.id)}` : s.name)));
+    const secSel = h('select', { class: 'input', 'aria-label': 'Section' }, allSecs().map((s) => h('option', { value: s.id, selected: s.id === (into || here()) }, s.parent ? `   ${pathOf(s.id)}` : s.name)));
     setTimeout(() => name.focus(), 50);
     name.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.closest('.dlg')?.querySelector('.btn-primary')?.click(); });
     const ok = await dialog({
@@ -591,14 +669,16 @@ export function mountVariables(root, el0, w) {
     const nameEl = () => box.querySelector(`.vr-card[data-id="${x.id}"] .vr-name`);
     menu(anchor, [
       { label: 'Open notes', icon: 'chat', onSelect: () => openEntry(x.id) },
-      { label: 'Rename', icon: 'edit', kbd: 'F2', onSelect: () => { const n = nameEl(); if (n) renameInline(n, x); else promptDialog('Rename', { value: x.name, maxLength: 48 }).then((v) => { if (v?.trim()) patchEntry(x.id, () => ({ name: v.trim() })); }); } },
+      { label: 'Rename', icon: 'edit', kbd: 'F2', onSelect: () => { const n = nameEl(); if (n) renameInline(n, x); else promptDialog('Rename', { value: x.name, maxLength: 120 }).then((v) => { if (v?.trim()) patchEntry(x.id, () => ({ name: v.trim().slice(0, 120) })); }); } },
       { label: x.photo ? 'Replace profile picture' : 'Add a profile picture', icon: 'image', onSelect: async () => { const [f] = await pickMedia({ multiple: false, accept: 'image/*' }); if (f) setPhoto(x.id, f); } },
       x.photo ? { label: 'Remove picture', icon: 'eyeOff', onSelect: () => patchEntry(x.id, () => ({ photo: null })) } : null,
+      { label: 'Color…', icon: 'textColor', onSelect: () => pickColor(anchor, x.color).then((c) => { if (c !== undefined) patchEntry(x.id, () => ({ color: c })); }) },
       { label: 'Duplicate', icon: 'copy', onSelect: () => { const list = entries(); const i = list.findIndex((y) => y.id === x.id); const copy = { ...x, id: uid(), name: `${x.name} copy`, notes: [], at: Date.now() }; setEntries([...list.slice(0, i + 1), copy, ...list.slice(i + 1)]); } },
       others.length ? { header: 'Move to' } : null,
       ...others.map((s) => ({ label: pathOf(s.id), icon: 'folderMove', onSelect: () => patchEntry(x.id, () => ({ section: s.id })) })),
       '-',
-      { label: 'Delete', icon: 'trash', danger: true, onSelect: async () => { if (await confirmDialog(`Delete ${x.name}?`, x.notes?.length ? 'Its notes go with it.' : 'This can’t be undone from here.')) setEntries(entries().filter((y) => y.id !== x.id)); } },
+      { label: 'Delete', icon: 'trash', danger: true, onSelect: async () => { if (await confirmDialog(`Delete ${x.name}?`, x.notes?.length ? 'Its notes go with it. Ctrl+Z brings it back.' : 'Ctrl+Z brings it back.')) setEntries(entries().filter((y) => y.id !== x.id)); } },
+      undoItem(),
     ].filter(Boolean));
   }
 
@@ -746,14 +826,19 @@ export function mountVariables(root, el0, w) {
       title: fvOn ? 'Back to the normal column' : 'Free view: drag messages anywhere, link them, draw',
       onclick: () => patchEntry(x.id, (e) => ({ free: { pos: {}, links: [], ink: [], ...(e.free || {}), on: !fvOn } })),
     }, h('i'), 'FREE VIEW');
-    const head = h('div', { class: 'vr-chat-head' },
+    const tools = [
+      h('button', { class: ['vr-find-toggle', finding && 'is-on'], type: 'button', 'aria-label': 'Search this chat', 'aria-pressed': String(finding), title: 'Search this chat', onclick: () => (finding ? closeFind() : openFind()) }, icon('search', 15)),
+      toggle,
+      h('button', { class: 'vr-card-more', type: 'button', 'aria-label': 'Options', onclick: (e) => entryMenu(e.currentTarget, x) }, icon('more', 14))];
+    // In the sidebar (Nov 24) the chat has no title row of its own — the sidebar already shows which chat
+    // is open; Search, Free View and ··· ride in the top bar instead.
+    if (w?.chatTools) w.chatTools.replaceChildren(...tools);
+    const head = w?.chatTools ? null : h('div', { class: 'vr-chat-head' },
       h('button', { class: 'vr-back', type: 'button', 'aria-label': 'Back to variables', onclick: () => { open = null; editing = null; draft = ''; finding = false; query = ''; remember(); render(); } }, icon('chevronLeft', 16)),
       x.photo ? h('span', { class: 'vr-mini-face' }, urlOf(x.photo, render) ? h('img', { src: urlOf(x.photo), alt: '' }) : null) : null,
       h('span', { class: 'vr-chat-name' }, x.name),
       h('span', { class: 'vr-chat-sec' }, pathOf(x.section)),
-      h('button', { class: ['vr-find-toggle', finding && 'is-on'], type: 'button', 'aria-label': 'Search this chat', 'aria-pressed': String(finding), title: 'Search this chat', onclick: () => (finding ? closeFind() : openFind()) }, icon('search', 15)),
-      toggle,
-      h('button', { class: 'vr-card-more', type: 'button', 'aria-label': 'Options', onclick: (e) => entryMenu(e.currentTarget, x) }, icon('more', 14)));
+      ...tools);
     const wrap = h('div', { class: ['vr-chat is-sc', fvOn && 'is-free'] }, head,
       finding ? findBar() : null,
       free ? free.el : h('div', { class: 'vr-msgs sc-list', role: 'log' }, orderRows(x)),
@@ -850,12 +935,21 @@ export function mountVariables(root, el0, w) {
   function grow(ta) { ta.style.height = 'auto'; ta.style.height = `${Math.min(160, ta.scrollHeight)}px`; }
 
   render();
-  const off = onMyVars((d, keys) => { if (keys && keys.every((k) => k === 'ideas')) return; render(); }); // ideas share the row: don't repaint for them
-  loadMyVars().then(() => {
+  const off = src.on((d, keys) => { if (keys && keys.every((k) => k === 'ideas')) return; render(); }); // ideas share the row: don't repaint for them
+  // Enter to talk (Nov 24): an open chat here is where the composer sends.
+  const offSay = w?.field ? () => {} : registerVarChat({
+    root: box,
+    isOpen: () => !!open && entries().some((e) => e.id === open),
+    name: () => entries().find((e) => e.id === open)?.name || 'this chat',
+    send: (t) => { if (open) pushNote(open, note({ text: String(t).slice(0, 4000) })); },
+    sendFiles: (files) => { if (open && files?.length) pushNote(open, note({ files })); },
+  });
+  const offUndo = trackUndo(box, src);
+  src.load().then(() => {
     // Your account has no Variables yet: your personal Space's list becomes yours automatically.
     // (The shared object's old list could be anyone's, so that one waits for "Bring in".)
     const empty = !acct().entries.length && !acct().sections;
-    if (empty && w.host?.personal && !store.get(`${memKey}.legacy`, null) && ((el.entries || []).length || (el.sections || []).length)) {
+    if (!foreign && empty && w.host?.personal && !store.get(`${memKey}.legacy`, null) && ((el.entries || []).length || (el.sections || []).length)) {
       setMyVars({ sections: el.sections?.length ? el.sections : null, entries: el.entries || [] });
       store.set(`${memKey}.legacy`, 'done');
     }
@@ -878,6 +972,6 @@ export function mountVariables(root, el0, w) {
       el = next;
       if (legacyChanged && ready && !open) render();
     },
-    destroy() { off(); free?.destroy(); box.remove(); },
+    destroy() { off(); offSay(); offUndo(); free?.destroy(); box.remove(); },
   };
 }

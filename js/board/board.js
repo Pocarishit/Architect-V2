@@ -190,7 +190,11 @@ export function mountBoard(root, boardId, opts = {}) {
         topBtn('layers', 'Frames', () => toggleFrames(), { class: 'bp-icon hide-sm' }),
         topBtn('present', 'Present frames', () => startPresent(), { class: 'bp-icon hide-sm' }),
         topBtn('share', 'Share board', () => openShare()),
-        topBtn('more', 'Board options', (a) => boardMenu(a))));
+        topBtn('more', 'Board options', (a) => boardMenu(a)),
+        // Nov 24: a windowed Blueprint has no bar of its own — full screen and close live here.
+        win ? h('span', { class: 'bp-psep', 'aria-hidden': 'true' }) : null,
+        win ? topBtn('expand', 'Full screen', () => win.onExpand(), { class: 'bp-icon bp-win-btn' }) : null,
+        win ? topBtn('close', 'Close window (Ctrl+Esc)', () => win.onClose(), { class: 'bp-icon bp-win-btn' }) : null));
     page.append(top);
 
     /* ---------- live collaboration ---------- */
@@ -776,8 +780,9 @@ export function mountBoard(root, boardId, opts = {}) {
         win
           ? { label: 'Full screen', icon: 'expand', onSelect: () => win.onExpand() }
           : { label: 'Open as a window', icon: 'collapse', onSelect: () => { setPref('bpCompact', true).catch(() => {}); try { sessionStorage.setItem('architect.openWin', boardId); } catch {} go(''); } },
+        win ? { label: 'Close window', icon: 'close', kbd: 'Ctrl+Esc', onSelect: () => win.onClose() } : null,
         { label: 'Blueprints open as a window', icon: 'layers', checked: getPref('bpCompact', true) !== false, onSelect: () => setPref('bpCompact', getPref('bpCompact', true) === false).catch(() => {}) },
-      ], { align: 'end' });
+      ].filter(Boolean), { align: 'end' });
     }
 
     // Play in sequence + voice notes on notes (Nov 22).

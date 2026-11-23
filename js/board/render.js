@@ -6,6 +6,7 @@ import { css, onColor } from './palette.js';
 import { lineGeom, capPath, shapePath, penPath } from './geometry.js';
 import { sanitize } from './richtext.js';
 import { updatePdfNode } from './pdf.js';
+import { updateTaskNode, disposeTaskNode } from './taskcard.js';
 
 export const FONTS = [
   { id: 'sans', name: 'Space Grotesk' },
@@ -331,6 +332,13 @@ export function updateNode(node, el, ctx) {
         node.replaceChildren();
         node._ctl = ctx.mountWidget(el, node) || { update() {}, destroy() {} };
       } else node._ctl?.update?.(el);
+      break;
+    }
+    case 'task': {
+      // A Path task on the board (Nov 23): the card is a live view of the task, not a copy.
+      place(node, el);
+      updateTaskNode(node, el, ctx);
+      if (!ctx.still) node._ctl ||= { destroy: () => disposeTaskNode(node) };
       break;
     }
     default:

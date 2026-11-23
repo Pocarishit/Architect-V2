@@ -11,7 +11,7 @@ import { sanitize, hasRichMarkup } from './richtext.js';
 import { looksLikeUrl, extractUrl } from './embed.js';
 
 // Objects that can tilt (Nov 22). Lines, pen strokes and borders are drawn by their own points.
-const ROTATABLE = new Set(['sticky', 'text', 'shape', 'frame', 'image', 'video', 'pdf', 'embed', 'link', 'widget']);
+const ROTATABLE = new Set(['sticky', 'text', 'shape', 'frame', 'image', 'video', 'pdf', 'embed', 'link', 'widget', 'task']);
 
 export const CLIP_MARK = 'ARCHITECT/BLUEPRINT/1\n';
 const MIN_Z = 0.05;
@@ -195,7 +195,11 @@ export class Editor {
     this._movingT = setTimeout(() => { this._moving = false; this.vp.classList.remove('is-moving'); this.settleCamera(); }, 160);
     this._zz = null;
     this.world.style.transform = `translate(${x}px, ${y}px) scale(${z})`;
-    this.vp.style.setProperty('--iz', String(1 / z));
+    // Nov 23 (crowded-board benchmark): --iz on the viewport is inherited by every object on the board, so
+    // changing it each frame restyled all of them on every zoom step. While the view moves only the overlay
+    // (selection handles) gets it live; the board's own badges and frame titles catch up when the view rests.
+    this.overlay.style.setProperty('--iz', String(1 / z));
+    if (!this._izInit) { this._izInit = true; this.vp.style.setProperty('--iz', String(1 / z)); }
     let step = 24 * z;
     while (step < 14) step *= 4;
     while (step > 96) step /= 4;
@@ -221,6 +225,7 @@ export class Editor {
     const rx = Math.round(x * dpr) / dpr, ry = Math.round(y * dpr) / dpr;
     this.world.style.zoom = '';
     this.world.style.transform = `translate(${rx}px, ${ry}px) scale(${z})`;
+    if (this.vp.style.getPropertyValue('--iz') !== String(1 / z)) this.vp.style.setProperty('--iz', String(1 / z));
     this._zz = null;
   }
 
@@ -500,7 +505,7 @@ export class Editor {
     const frames = h('div', { class: 'bp-layer' });
     const els = h('div', { class: 'bp-layer' });
     world.append(frames, els);
-    const ctx = { ...this.ctx(), mountWidget: null, editingId: null, activeId: null };
+    const ctx = { ...this.ctx(), mountWidget: null, editingId: null, activeId: null, still: true };
     for (const el of this.els) {
       if (this.isHidden(el)) continue;
       let n = null;

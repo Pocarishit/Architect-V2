@@ -1,9 +1,10 @@
 import { createSupabaseBackend } from './supabase.js';
 import { createLocalBackend } from './local.js';
+import { withOffline } from './offline.js';
 
 const cfg = window.ARCHITECT_CONFIG || {};
 export const configured = Boolean(cfg.supabaseUrl && cfg.supabaseKey);
-export const api = configured ? createSupabaseBackend(cfg) : createLocalBackend();
+export const api = withOffline(configured ? createSupabaseBackend(cfg) : createLocalBackend());
 
 // Turns backend errors into sentences a person can act on.
 export function friendlyError(e) {

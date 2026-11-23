@@ -23,6 +23,10 @@ import { askSource } from '../space/radio.js';
 import { labelOf } from '../space/chat.js';
 import { openEmergencyRoom, comboWatcher } from '../space/er.js';
 import { mountMobile } from '../space/mobile.js';
+import { mountSidebar } from '../space/sidebar.js';
+import { startBench } from '../board/bench.js';
+import { pickTask, taskEl } from '../board/taskcard.js';
+import { myTasks } from '../data/tasks.js';
 
 export function mountSpace(root) {
   const me = api.auth.current()?.user;
@@ -462,7 +466,8 @@ export function mountSpace(root) {
     page.querySelector('.space-dock')?.remove();
     const ed = editor();
     ed?.setViewOnly?.(viewMode);
-    if (phone()) { mountPhone(ed); return; }
+    if (phone()) { unmountSidebar(); mountPhone(ed); return; }
+    mountSide(ed);
     const cat = dockCatalog(ed);
     let suppress = false; // a long-press opened the customizer: the release isn't a tap
     const item = (ic, label, fn, extra = {}) => h('button', { class: 'sd-btn', type: 'button', 'aria-label': label, onclick: (e) => { if (suppress) { suppress = false; return; } fn(e.currentTarget); }, ...extra }, icon(ic, 20), h('span', {}, label));
@@ -483,6 +488,28 @@ export function mountSpace(root) {
     dock.addEventListener('contextmenu', (e) => { e.preventDefault(); clearTimeout(hold); hold = null; customizeDock(); });
     page.append(dock);
   }
+
+  /* ================= Desktop sidebar (Nov 23) =================
+     A rail on the left: ARCHITECT (this canvas), VARIABLES, PATH, MORE and your own views (space/sidebar.js).
+     The canvas stays mounted underneath; a view covers it and borrows the board objects it shows. */
+  let side = null;
+  function mountSide(ed) {
+    if (!ed) return;
+    if (getPref('sidebar', true) === false) { unmountSidebar(); return; }
+    if (side) { side.rebind(ed); return; }
+    side = mountSidebar({
+      page, me,
+      editor: () => editor(),
+      host: () => slots[mode]?.host || null,
+      mode: () => mode,
+      toggleSpace: () => toggleSpace(),
+      addWidget: (kind) => addWidget(kind, editor()?.viewCenter()),
+      openSettings: async (tab) => openSettings({ tab, spaceId: await idFor('shared') }),
+      sharedSpaceId: () => ids.shared,
+    });
+  }
+  function unmountSidebar() { side?.destroy(); side = null; }
+  offs.push(() => unmountSidebar());
 
   /* ================= Mobile (Nov 22) =================
      On a phone Architect is its own interface (space/mobile.js): full-screen views — Path, Fleeting
@@ -820,6 +847,7 @@ export function mountSpace(root) {
       { label: 'Chat', icon: 'chat', onSelect: () => addWidget('chat', at) },
       { label: 'Radio', icon: 'radio', onSelect: () => addWidget('radio', at) },
       { label: 'Timer', icon: 'hourglass', onSelect: () => addWidget('timer', at) },
+      { label: 'Path task…', icon: 'toPaths', onSelect: () => pickTask(ed, at, { dialog, toast, myTasks }) },
       { label: 'Say something out loud', icon: 'speaker', kbd: 'Enter', onSelect: () => sayBar() },
       { label: 'Emergency Room', icon: 'flame', kbd: 'E+R', onSelect: () => openER() },
       { label: 'Widget…', icon: 'widget', onSelect: () => widgetPicker(at) },
@@ -835,7 +863,9 @@ export function mountSpace(root) {
       { label: 'Invite…', icon: 'share', onSelect: async () => openSettings({ tab: 'members', spaceId: await idFor('shared') }) },
       { label: 'Settings & API…', icon: 'settings', onSelect: async () => openSettings({ spaceId: await idFor('shared') }) },
       { label: 'Show toolbar', icon: 'layers', checked: chrome, onSelect: () => { t.page.classList.toggle('show-chrome', !chrome); setPref('spaceChrome', !chrome).catch(() => {}); } },
+      innerWidth >= 720 ? { label: 'Show sidebar', icon: 'list', checked: getPref('sidebar', true) !== false, onSelect: async () => { await setPref('sidebar', getPref('sidebar', true) === false).catch(() => {}); mountDock(); } } : null,
       { label: 'Keyboard shortcuts', icon: 'keyboard', kbd: '?', onSelect: () => t.showShortcuts() },
+      { label: 'Performance test (500 objects)', icon: 'fit', onSelect: () => startBench({ api, uid, go }).catch((e) => toast(friendlyError(e), { tone: 'error' })) },
       '-',
       { header: 'Theme' },
       ...themeItems(),
@@ -1104,6 +1134,35 @@ export function mountSpace(root) {
     er = openEmergencyRoom(page, { me, spaceId: () => ids.shared || (mode === 'shared' ? spaceId : null), onClose: () => { er = null; } });
   }
   offs.push(() => { er?.close(); erCombo.off(); });
+
+  // One task, two views (Nov 23): "Put on the board" from a Path task adds its live card beside your Path;
+  // the card's ↗ flies back to the task in your Path.
+  const onTaskToBoard = (e) => {
+    const ed = editor();
+    const id = e.detail?.id;
+    if (!ed || !id) return;
+    const have = ed.els.find((x) => x.type === 'task' && String(x.taskId) === String(id));
+    if (have) { ed.select([have.id]); ed.fitRect(rectOf(have, ed.byId), { maxZ: 1, pad: 160 }); toast('That task is already on the board.', { ms: 1800 }); return; }
+    const path = ed.els.find((x) => x.type === 'widget' && x.kind === 'path' && x.owner === me.id);
+    const n = ed.els.filter((x) => x.type === 'task').length;
+    const at = path ? { x: path.x + path.w + 200, y: path.y + 80 + (n % 6) * 130 } : ed.viewCenter();
+    const el = taskEl(id, at);
+    ed.addEls([el]);
+    ed.fitRect(rectOf(el, ed.byId), { maxZ: 1, pad: 200 });
+  };
+  const onShowTask = (e) => {
+    focusKind('path');
+    const id = e.detail?.id;
+    setTimeout(() => {
+      const n = page.querySelector(`[data-task="${CSS.escape(String(id))}"]`);
+      if (!n) { toast('That task isn’t on today’s Path — it may be planned for another day.', { ms: 2600 }); return; }
+      n.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      n.classList.add('is-flash'); setTimeout(() => n.classList.remove('is-flash'), 1600);
+    }, 500);
+  };
+  window.addEventListener('architect:task-to-board', onTaskToBoard);
+  window.addEventListener('architect:show-task', onShowTask);
+  offs.push(() => { window.removeEventListener('architect:task-to-board', onTaskToBoard); window.removeEventListener('architect:show-task', onShowTask); });
 
   const onPointer = (e) => { lastPointer = { x: e.clientX, y: e.clientY }; };
   window.addEventListener('pointermove', onPointer, { passive: true });

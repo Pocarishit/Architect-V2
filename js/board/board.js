@@ -18,6 +18,9 @@ import { pdfInfo, openPdfViewer, PDF_HEAD } from './pdf.js';
 import { startCollab, colorFor, initials } from './collab.js';
 import { myAvatar } from '../data/profile.js';
 import { getPref, setPref, loadPrefs } from '../data/prefs.js';
+import { benchOnReady } from './bench.js';
+import { pickTask } from './taskcard.js';
+import { myTasks } from '../data/tasks.js';
 
 const SHAPE_NAMES = { rect: 'Rectangle', round: 'Rounded', ellipse: 'Ellipse', triangle: 'Triangle', diamond: 'Diamond', hexagon: 'Hexagon', parallelogram: 'Parallelogram', star: 'Star', arrowblock: 'Arrow', pill: 'Pill' };
 
@@ -820,6 +823,7 @@ export function mountBoard(root, boardId, opts = {}) {
         { label: 'Paste here', icon: 'copy', kbd: '⌘V', onSelect: () => pasteAt(world) },
         { label: 'Add sticky note', icon: 'sticky', onSelect: () => { editor.addEls([editor.makeEl('sticky', null, world)], { edit: true }); } },
         { label: 'Add text', icon: 'text', onSelect: () => { editor.addEls([editor.makeEl('text', null, world)], { edit: true }); } },
+        { label: 'Add a Path task…', icon: 'toPaths', onSelect: () => pickTask(editor, world, { dialog, toast, myTasks }) },
         '-',
         { label: 'Select all', kbd: '⌘A', onSelect: () => editor.selectAll() },
         { label: 'Zoom to fit', icon: 'fit', kbd: '⇧1', onSelect: () => editor.zoomToFit() },
@@ -876,6 +880,7 @@ export function mountBoard(root, boardId, opts = {}) {
       exportPdf, exportJson, importJson: () => jsonInput.click(), showShortcuts, pasteAt, clearBoard,
       saveNow: async () => { dirty = true; await save(); },
     });
+    if (!space && !win) benchOnReady({ editor, boardId, api, go, dialog, h });
 
     function showShortcuts() {
       const groups = [

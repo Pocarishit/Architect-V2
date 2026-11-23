@@ -854,6 +854,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       { label: 'Duplicate', icon: 'copy', onSelect: () => duplicateTask(task) },
       readOnly ? null : { label: 'Plan for another day…', icon: 'calendar', onSelect: () => dayMenu(anchor, [task]) },
       readOnly ? null : { label: 'Back to ideas', icon: 'spark', onSelect: () => toIdeas([task]) },
+      readOnly || !embedded ? null : { label: 'Put on the board', icon: 'board', onSelect: () => window.dispatchEvent(new CustomEvent('architect:task-to-board', { detail: { id: task.id } })) },
       '-',
       { header: 'Move to' },
       ...others.map((c) => ({

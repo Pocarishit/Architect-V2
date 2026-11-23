@@ -86,6 +86,22 @@ export function mountShell(root, { session }) {
   root.append(el);
 
   const tick = setInterval(() => { clock.textContent = fmtClock(); }, 10_000);
+
+  // Offline (Nov 23): say so plainly while there's no connection or edits are still waiting to sync.
+  const syncChip = h('div', { class: 'sync-chip', role: 'status', 'aria-live': 'polite', hidden: true }, h('i'), h('span'));
+  document.body.append(syncChip);
+  const paintSync = (st) => {
+    const n = st.pending || 0;
+    const off = !st.online;
+    syncChip.hidden = !off && !n && !st.syncing;
+    syncChip.classList.toggle('is-offline', off);
+    syncChip.classList.toggle('is-syncing', !off && (st.syncing || n > 0));
+    syncChip.querySelector('span').textContent = off
+      ? (n ? `Offline · ${n} change${n === 1 ? '' : 's'} saved on this device` : 'Offline · showing your last copy')
+      : `Syncing ${n || ''} change${n === 1 ? '' : 's'}…`.replace('  ', ' ');
+  };
+  const offSync = api.offline?.on(paintSync);
+  if (api.offline) paintSync(api.offline.state());
   const side = mountSideChat({ me: session.user });
 
   return {
@@ -99,7 +115,7 @@ export function mountShell(root, { session }) {
         if (on) navCur.textContent = sec.label;
       });
     },
-    destroy() { clearInterval(tick); side.destroy(); el.remove(); },
+    destroy() { clearInterval(tick); side.destroy(); offSync?.(); syncChip.remove(); el.remove(); },
   };
 }
 

@@ -15,6 +15,7 @@ import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia } from './media.js'
 import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
 import { loadMyVars, myVars, setMyVars, onMyVars } from '../data/myvars.js';
 import { mountFreeView } from './freeview.js';
+import { shareCategory, unshareCategory } from '../data/varshare.js';
 
 export const DEFAULT_SECTIONS = ['School', 'Family', 'Business', 'Friends'];
 export const defaultVariables = () => ({ sections: DEFAULT_SECTIONS.map((name) => ({ id: uid(), name })), entries: [] });
@@ -252,7 +253,7 @@ export function mountVariables(root, el0, w) {
   function grid(t) {
     const tabs = h('div', { class: 'vr-tabs', role: 'tablist' },
       t.map((s) => h('button', {
-        type: 'button', role: 'tab', class: ['vr-tab', s.id === section && 'is-on', s.img && 'has-img'], 'aria-selected': String(s.id === section), 'data-sec': s.id,
+        type: 'button', role: 'tab', class: ['vr-tab', s.id === section && 'is-on', s.img && 'has-img', s.share?.item && 'is-shared'], 'aria-selected': String(s.id === section), 'data-sec': s.id,
         onclick: () => { section = s.id; sub = null; if (w?.slot) open = null; remember(); render(); },
         ondblclick: () => renameSection(s),
         oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, s); },
@@ -377,6 +378,17 @@ export function mountVariables(root, el0, w) {
       if (e.target.closest('.vr-name')) node._open = setTimeout(() => openEntry(x.id), 230); else openEntry(x.id);
     });
     return node;
+  }
+
+  // Nov 23: a top-level category can be shared with your shared Space (data/varshare.js).
+  async function toggleShare(s) {
+    try {
+      if (s.share?.item) { await unshareCategory(s.id); toast(`${s.name} is private again.`, { ms: 2200 }); }
+      else {
+        const { failed } = await shareCategory(s.id);
+        toast(failed.length ? `${s.name} is shared — couldn’t add ${failed.join(', ')}.` : `${s.name} is shared with your Space.`, { ms: 2600 });
+      }
+    } catch (e) { toast(friendlyError(e), { tone: 'error', ms: 5000 }); }
   }
 
   function openEntry(id) { open = id; draft = ''; editing = null; finding = false; query = ''; hit = 0; remember(); render(); }
@@ -505,6 +517,7 @@ export function mountVariables(root, el0, w) {
       { label: 'Rename', icon: 'edit', onSelect: () => renameSection(s) },
       { label: s.img ? 'Replace image' : 'Add an image', icon: 'image', onSelect: async () => { const [f] = await pickMedia({ multiple: false, accept: 'image/*' }); if (f) setSecImg(s.id, f); } },
       s.img ? { label: 'Remove image', icon: 'eyeOff', onSelect: () => save({ sections: sections().map((x) => (x.id === s.id ? { ...x, img: null } : x)) }) } : null,
+      !s.parent ? { label: s.share?.item ? 'Make private' : 'Share with your Space', icon: s.share?.item ? 'lock' : 'users', onSelect: () => toggleShare(s) } : null,
       { label: prev, icon: 'chevronLeft', disabled: i === 0, onSelect: () => swap(i - 1) },
       { label: next, icon: 'chevronRight', disabled: i === siblings.length - 1, onSelect: () => swap(i + 1) },
       '-',
@@ -810,7 +823,7 @@ export function mountVariables(root, el0, w) {
       const eid = editing.id;
       const old = entries().find((e) => e.id === id)?.notes?.find((m) => m.id === eid)?.text;
       draft = editing.keep || ''; editing = null; busy = false;
-      if (text && text !== old) patchEntry(id, (e) => ({ notes: (e.notes || []).map((y) => (y.id === eid ? { ...y, text: text.slice(0, 4000), edited: true } : y)) }));
+      if (text && text !== old) patchEntry(id, (e) => ({ notes: (e.notes || []).map((y) => (y.id === eid ? { ...y, text: text.slice(0, 4000), edited: true, et: Date.now() } : y)) }));
       else render();
       requestAnimationFrame(() => box.querySelector('.vr-input')?.focus({ preventScroll: true }));
       return;
@@ -850,6 +863,15 @@ export function mountVariables(root, el0, w) {
   }).catch(() => { ready = true; render(); });
 
   return {
+    // Driven from outside (the desktop sidebar, Nov 23): open a category, a sub-section, or one chat.
+    show(p = {}) {
+      if ('section' in p) section = p.section;
+      if ('sub' in p) sub = p.sub;
+      if ('open' in p && p.open !== open) { open = p.open; draft = ''; editing = null; finding = false; query = ''; hit = 0; }
+      remember();
+      render();
+    },
+    state: () => ({ section, sub, open }),
     update(next) {
       const legacyChanged = next.entries !== el.entries;
       el = next;

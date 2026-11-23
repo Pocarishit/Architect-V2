@@ -4,8 +4,8 @@
 // Leave both empty to run in Local mode: everything is stored in this browser only.
 
 window.ARCHITECT_CONFIG = {
-  supabaseUrl: 'https://rqgnoxnbegavuepahiii.supabase.co',            // e.g. 'https://abcdefghijklmnop.supabase.co'
-  supabaseKey: 'sb_publishable_teK7C1EEzvIoHQEXcmLl8g_Xbyhfqir',            // 'sb_publishable_…' or the legacy anon key 'eyJ…'
+  supabaseUrl: 'https://zponpcmqwabtfhgcqjpw.supabase.co',            // e.g. 'https://abcdefghijklmnop.supabase.co'
+  supabaseKey: 'sb_publishable_-i8zqVpYeHwlYgvo3Vx0Vg_dQ1NVwRn',            // 'sb_publishable_…' or the legacy anon key 'eyJ…'
 
   // Usernames are stored in Supabase Auth as  <username>@<authDomain>.
   // No email is ever sent, as long as "Confirm email" is turned off (see README).

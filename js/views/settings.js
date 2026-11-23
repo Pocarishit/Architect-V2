@@ -1,4 +1,5 @@
-// Settings: your face, who's in the Space, personal API tokens, and custom CSS / JS.
+// Settings: your face, the look of your Space, who's in it, integrations, personal API tokens, and the
+// Updates Catalogue (with custom CSS / JS tucked under it).
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { dialog, toast, confirmDialog } from '../core/ui.js';
@@ -9,18 +10,22 @@ import { myAvatar, setMyAvatar, clearMyAvatar, avatarsFor } from '../data/profil
 import { colorFor, initials } from '../board/collab.js';
 import { applyCustom } from '../core/custom.js';
 import { releases, pushRelease, rollback } from '../data/releases.js';
+import { THEMES, setTheme, currentTheme } from './shell.js';
+import { CATALOGUE } from '../data/catalogue.js';
+import { integrations } from './integrations.js';
 
-const TABS = [['profile', 'Profile'], ['members', 'Members'], ['api', 'API'], ['custom', 'Updates']];
+const TABS = [['profile', 'Profile'], ['general', 'General'], ['members', 'Members'], ['integrations', 'Integrations'], ['api', 'API'], ['custom', 'Updates']];
 
-export async function openSettings({ tab = 'profile', spaceId = null } = {}) {
+/** actions: hooks into the Space (shortcuts, bench, camera points, toolbar, snap, personal background). */
+export async function openSettings({ tab = 'profile', spaceId = null, actions = {} } = {}) {
   await loadPrefs().catch(() => {});
   const me = api.auth.current()?.user;
-  let cur = tab;
+  let cur = TABS.some(([id]) => id === tab) ? tab : 'profile';
   const nav = h('div', { class: 'seg seg-sm set-tabs', role: 'tablist' });
   const pane = h('div', { class: 'set-pane' });
   const paint = () => {
     nav.replaceChildren(...TABS.map(([id, label]) => h('button', { type: 'button', role: 'tab', class: cur === id ? 'is-on' : null, 'aria-selected': String(cur === id), onclick: () => { cur = id; paint(); } }, label)));
-    pane.replaceChildren(({ profile, members, api: apiTab, custom })[cur]({ me, spaceId }));
+    pane.replaceChildren(({ profile, general, members, integrations, api: apiTab, custom: updates })[cur]({ me, spaceId, actions }));
   };
   paint();
   dialog({ title: 'Settings', width: 640, className: 'set-dlg', body: h('div', { class: 'set' }, nav, pane), actions: [{ label: 'Done', primary: true, value: true }] });
@@ -49,6 +54,73 @@ function profile({ me }) {
           h('button', { class: 'btn sm', type: 'button', onclick: async () => { try { await clearMyAvatar(); show(null); } catch (e) { toast(friendlyError(e), { tone: 'error' }); } } }, 'Remove')))),
     file,
     h('p', { class: 'dlg-text' }, 'Your face rides on your cursor in the Space and on blueprints, as a bubble head with a pointer.'));
+}
+
+/* ---------------- General: look, canvas, tools (Nov 23b) ---------------- */
+function general({ actions = {} }) {
+  const sec = (title, ...kids) => h('section', { class: 'set-section' }, h('h3', {}, title), ...kids);
+  const sw = (label, get, set) => {
+    if (!get || !set) return null;
+    let on = !!get();
+    const b = h('button', { type: 'button', class: ['px-check', on && 'is-on'], role: 'switch', 'aria-checked': String(on) });
+    const paint = () => { b.classList.toggle('is-on', on); b.setAttribute('aria-checked', String(on)); b.replaceChildren(h('i', {}, on ? icon('check', 11, { weight: 2.8 }) : null), label); };
+    b.addEventListener('click', () => { on = !on; set(on); paint(); });
+    paint();
+    return b;
+  };
+
+  // Theme
+  const themes = h('div', { class: 'set-themes' });
+  const paintThemes = () => themes.replaceChildren(...THEMES.map((t) => h('button', {
+    type: 'button', class: ['btn sm', currentTheme() === t.id && 'is-on'], 'aria-pressed': String(currentTheme() === t.id),
+    onclick: () => { setTheme(t.id); paintThemes(); },
+  }, h('span', { class: 'theme-dots', 'aria-hidden': 'true' }, t.dots.map((c) => h('i', { style: { background: c } }))), t.name)));
+  paintThemes();
+
+  // Personal Space background: a PNG behind your personal Space only.
+  const prev = h('div', { class: 'set-bg-prev' }, 'NONE');
+  const showBg = async () => {
+    const path = getPref('personalBg', null);
+    if (!path) { prev.style.backgroundImage = ''; prev.textContent = 'NONE'; return; }
+    prev.textContent = '';
+    try { const u = (await api.media.sign([path]))[path]; prev.style.backgroundImage = u ? `url("${u.replace(/"/g, '%22')}")` : ''; } catch {}
+  };
+  showBg();
+  const file = h('input', { type: 'file', accept: 'image/png', hidden: true });
+  file.addEventListener('change', async () => {
+    const f = file.files[0];
+    file.value = '';
+    if (!f) return;
+    if (f.type !== 'image/png') { toast('Pick a PNG image.', { tone: 'error' }); return; }
+    if (f.size > 15 * 1024 * 1024) { toast('That PNG is over 15 MB.', { tone: 'error' }); return; }
+    try {
+      const { path } = await api.media.upload(f);
+      await setPref('personalBg', path);
+      await showBg();
+      actions.personalBg?.();
+      toast('Your personal Space has its new background.', { ms: 2400 });
+    } catch (e) { toast(friendlyError(e), { tone: 'error', ms: 5000 }); }
+  });
+  const bg = h('div', { class: 'set-bg' }, prev,
+    h('div', { class: 'stack' },
+      h('p', { class: 'dlg-text' }, 'A PNG of your own behind your personal Space. The shared Space keeps its canvas.'),
+      h('div', { class: 'set-row' },
+        h('button', { class: 'btn sm', type: 'button', onclick: () => file.click() }, icon('upload', 14), 'Upload PNG'),
+        h('button', { class: 'btn sm', type: 'button', onclick: async () => { await setPref('personalBg', null).catch(() => {}); showBg(); actions.personalBg?.(); } }, 'Remove'))),
+    file);
+
+  return h('div', { class: 'stack' },
+    sec('Theme', themes),
+    sec('Personal Space background', bg),
+    actions.toolbar || actions.snap || actions.cameraPoints ? sec('Canvas',
+      h('div', { class: 'set-row' }, sw('Show toolbar', actions.toolbar, actions.setToolbar), sw('Snap objects together', actions.snap, actions.setSnap)),
+      actions.cameraPoints ? h('div', { class: 'set-row' },
+        h('button', { class: 'btn sm', type: 'button', onclick: () => actions.saveView?.() }, icon('target', 14), 'Save this view…'),
+        h('button', { class: 'btn sm', type: 'button', onclick: () => actions.cameraPoints() }, icon('target', 14), 'Camera points…')) : null) : null,
+    actions.shortcuts || actions.bench ? sec('Tools',
+      h('div', { class: 'set-row' },
+        actions.shortcuts ? h('button', { class: 'btn sm', type: 'button', onclick: () => actions.shortcuts() }, icon('keyboard', 14), 'Keyboard shortcuts', h('kbd', {}, '?')) : null,
+        actions.bench ? h('button', { class: 'btn sm', type: 'button', onclick: () => actions.bench() }, icon('fit', 14), 'Performance test (500 objects)') : null)) : null);
 }
 
 /* ---------------- Members ---------------- */
@@ -181,7 +253,38 @@ function apiTab({ me }) {
   return wrap;
 }
 
-/* ---------------- Updates: custom CSS / JS, versioned, with rollback ---------------- */
+/* ---------------- Updates: the Catalogue (Nov 23b) ---------------- */
+// What changed in Architect, newest first, searchable. Your own custom CSS / JS releases are still here,
+// under "Custom CSS & JS".
+function updates() {
+  const q = h('input', { class: 'input cat-search', type: 'search', placeholder: 'Search updates', 'aria-label': 'Search updates' });
+  const list = h('div', { class: 'cat-list' });
+  const newest = CATALOGUE[0]?.day;
+  const paint = () => {
+    const t = q.value.trim().toLowerCase();
+    const hits = CATALOGUE.filter((x) => !t || `${x.title} ${x.area} ${x.text}`.toLowerCase().includes(t));
+    const out = [];
+    let last = '';
+    for (const x of hits) {
+      if (x.day !== last) {
+        last = x.day;
+        const [y, m, d] = x.day.split('-').map(Number);
+        out.push(h('h4', { class: 'cat-day' }, new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' }).toUpperCase()));
+      }
+      out.push(h('article', { class: ['cat-item', x.day === newest && 'is-new'] },
+        h('header', {}, h('b', {}, x.title), h('span', { class: 'cat-area' }, x.area)),
+        h('p', {}, x.text)));
+    }
+    list.replaceChildren(...(out.length ? out : [h('p', { class: 'cat-empty' }, 'No update matches.')]));
+  };
+  q.addEventListener('input', paint);
+  paint();
+  return h('div', { class: 'stack' },
+    q, list,
+    h('details', { class: 'set-adv' }, h('summary', {}, 'Custom CSS & JS'), custom()));
+}
+
+/* ---------------- Custom CSS / JS, versioned, with rollback ---------------- */
 function custom() {
   const css = h('textarea', { class: 'input code-input', rows: 8, spellcheck: false, value: getPref('customCss', '') || '', placeholder: '/* e.g. */\n:root { --red: #ff3b30; }', 'aria-label': 'Custom CSS' });
   const js = h('textarea', { class: 'input code-input', rows: 8, spellcheck: false, value: getPref('customJs', '') || '', placeholder: '// runs once on load, with `architect` = { api, toast, update, rollback }', 'aria-label': 'Custom JS' });

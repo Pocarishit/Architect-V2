@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="architect-session" content="__SESSION__">
+<title>Architect × Anytype</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:wght@600..900&family=Space+Grotesk:wght@400..600&family=Space+Mono:wght@400;700&display=swap">
+<style>
+  :root { --bg:#000; --s1:#0d0d0d; --s2:#151515; --s3:#1f1f1f; --line:#242424; --line2:#333; --fg:#f2f2f2; --fg2:#bdbdbd; --fg3:#7c7c7c; --fg4:#4d4d4d; --red:#ff3b30; --gold:#f2b733; --ok:#3ecf8e;
+    --dot:'Doto', monospace; --mono:'Space Mono', ui-monospace, monospace; --sans:'Space Grotesk', system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans); }
+  body::before { content: ''; position: fixed; inset: 0; pointer-events: none; background-image: radial-gradient(#ffffff14 1px, transparent 1.2px); background-size: 18px 18px; }
+  main { position: relative; max-width: 980px; margin: 0 auto; padding: 40px 24px 80px; display: grid; gap: 22px; }
+  h1 { margin: 0; font: 800 34px/1 var(--dot); letter-spacing: .06em; }
+  h1 span { color: var(--fg4); }
+  h2 { margin: 0; font: 700 11px/1 var(--mono); letter-spacing: .16em; color: var(--fg3); text-transform: uppercase; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .grow { flex: 1; min-width: 0; }
+  .card { background: var(--s1); border: 1px solid var(--line); border-radius: 18px; padding: 18px; display: grid; gap: 14px; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--line2); font: 700 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--fg2); }
+  .chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--fg4); }
+  .chip.ok i { background: var(--ok); } .chip.wait i { background: var(--gold); } .chip.err { color: var(--red); } .chip.err i { background: var(--red); }
+  button, select, input { font: inherit; color: inherit; }
+  .btn { height: 34px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line2); background: transparent; color: var(--fg); cursor: pointer; font: 700 10.5px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+  .btn:hover:not(:disabled) { border-color: var(--fg3); }
+  .btn:disabled { opacity: .35; cursor: default; }
+  .btn.primary { background: var(--fg); color: #000; border-color: var(--fg); }
+  .btn.primary:hover:not(:disabled) { background: #fff; }
+  label.f { display: grid; gap: 6px; }
+  label.f > span { font: 700 9.5px/1 var(--mono); letter-spacing: .14em; color: var(--fg3); text-transform: uppercase; }
+  select, input[type=text], input[type=search] { height: 38px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line2); background: var(--s2); outline: none; width: 100%; }
+  select:focus, input:focus { border-color: var(--fg3); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .seg { display: inline-flex; padding: 3px; border-radius: 12px; background: var(--s2); border: 1px solid var(--line); }
+  .seg button { height: 30px; padding: 0 14px; border: 0; border-radius: 9px; background: transparent; color: var(--fg3); cursor: pointer; font: 400 11px/1 var(--mono); letter-spacing: .04em; text-transform: uppercase; }
+  .seg button.on { background: var(--s3); color: var(--fg); }
+  .list { display: grid; gap: 2px; max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; padding: 4px; background: var(--s2); }
+  .opt { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid transparent; background: transparent; cursor: pointer; text-align: left; }
+  .opt:hover { background: var(--s3); }
+  .opt.on { border-color: var(--gold); background: color-mix(in srgb, var(--gold) 10%, var(--s2)); }
+  .opt small { margin-left: auto; color: var(--fg3); font: 10px/1 var(--mono); letter-spacing: .08em; }
+  .muted { color: var(--fg3); font-size: 12.5px; }
+  .hint { color: var(--fg3); font: 12px/1.5 var(--mono); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font: 700 9.5px/1 var(--mono); letter-spacing: .14em; color: var(--fg3); padding: 8px; border-bottom: 1px solid var(--line); text-transform: uppercase; }
+  td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.id { font: 11px/1.3 var(--mono); color: var(--fg4); }
+  .err { color: var(--red); }
+  .map { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--s2); }
+  .map b { font-weight: 600; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--fg); color: #000; padding: 10px 16px; border-radius: 999px; font: 700 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  .toast.err { background: var(--red); color: #fff; }
+  [hidden] { display: none !important; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="row"><h1>ARCHITECT <span>×</span> ANYTYPE</h1><span class="grow"></span><span id="chips" class="row"></span></header>
+  <section class="card" id="maps"><div class="row"><h2 class="grow">Mappings</h2><button class="btn" id="syncAll">Sync now</button><button class="btn primary" id="newMap">New mapping</button></div><div id="mapList" class="muted">Loading…</div></section>
+  <section class="card" id="editor" hidden>
+    <div class="row"><h2 class="grow" id="edTitle">New mapping</h2><button class="btn" id="cancel">Cancel</button></div>
+    <div class="grid2">
+      <label class="f"><span>Feeds this Set-Point</span><select id="dest"></select></label>
+      <label class="f"><span>Name (for you)</span><input type="text" id="name" maxlength="80" placeholder="GM → Morning"></label>
+    </div>
+    <div class="row"><span class="hint">Source</span><div class="seg" id="kind"><button data-k="section" class="on">Page section</button><button data-k="collection">Collection</button></div></div>
+    <div class="grid2">
+      <label class="f"><span>Anytype space</span><select id="space"></select></label>
+      <label class="f"><span id="objLabel">Page</span><input type="search" id="q" placeholder="Search by name"></label>
+    </div>
+    <div class="list" id="objects"></div>
+    <div id="sectionBox" class="grid2">
+      <div class="f" style="display:grid;gap:6px"><span class="hint">Heading — only the bullets under it are imported</span><div class="list" id="headings"><div class="muted" style="padding:10px">Pick a page first.</div></div></div>
+      <p class="hint">Tip: add a heading called “Path items” to each Set-Point page and put the bullets you want in Architect under it. Bullets stop at the next heading of the same or higher level. Paragraphs, chats and other pages are never imported.</p>
+    </div>
+    <div id="collBox" class="grid2" hidden>
+      <label class="f"><span>Only these types (optional, comma separated keys)</span><input type="text" id="types" placeholder="task"></label>
+      <label class="f"><span>Typed date property (optional)</span><input type="text" id="dateProp" placeholder="due_date"></label>
+    </div>
+    <div class="row"><button class="btn" id="preview" disabled>Preview</button><span class="hint grow" id="pvNote">Preview shows exactly what will leave this PC before anything is imported.</span></div>
+    <div id="pv"></div>
+    <div class="row"><span class="grow"></span><button class="btn primary" id="save" disabled>Turn on sync</button></div>
+  </section>
+  <p class="hint">This page only works on this PC (127.0.0.1). The Anytype key never leaves it; Architect receives only the fields shown in the preview. Your phone just signs in to Architect.</p>
+</main>
+<script>
+const SESSION = document.querySelector('meta[name="architect-session"]').content;
+const $ = (s) => document.querySelector(s);
+const el = (t, p = {}, ...k) => { const e = document.createElement(t); for (const [a, v] of Object.entries(p)) { if (v == null || v === false) continue; if (a.startsWith('on')) e.addEventListener(a.slice(2), v); else if (a === 'class') e.className = v; else e.setAttribute(a, v === true ? '' : v); } for (const c of k.flat()) if (c != null && c !== false) e.append(c.nodeType ? c : String(c)); return e; };
+const api = async (p, body) => { const r = await fetch(`/api/${p}`, { method: body ? 'POST' : 'GET', headers: { 'X-Architect-UI': SESSION, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined }); const j = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: j.status }); return j; };
+const SAY = { adapter_disabled: 'Only Path Set-Points can be fed in this release.', destination_not_yours: 'That Path column isn’t yours.', missing_section: 'Pick a heading in the page.', stale_mapping: 'The mapping changed meanwhile — try again.', mapping_disabled: 'This mapping is paused in Architect.', connector_revoked: 'This PC was disconnected in Architect — pair it again.' };
+const toast = (t, err) => { t = SAY[t] || t; const n = el('div', { class: `toast${err ? ' err' : ''}` }, t); document.body.append(n); setTimeout(() => n.remove(), 3200); };
+const chip = (tone, t) => el('span', { class: `chip ${tone}` }, el('i'), t);
+let S = null;               // server state
+let M = null;               // the mapping being edited
+let previewed = null;       // signature of the last preview
+
+const sig = () => JSON.stringify([M.dest_id, M.source_kind, M.source_space_id, M.source_id, M.section_block_id, M.allow_types, M.date_property, M.allow_fields]);
+const ago = (t) => { if (!t) return 'never'; const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
+
+async function load() {
+  S = await api('state');
+  const chips = $('#chips'); chips.replaceChildren();
+  if (!S.paired) { chips.append(chip('err', 'Not paired')); $('#mapList').replaceChildren(el('p', { class: 'err' }, S.error || 'Pair this PC from Architect → Settings → Integrations.')); return; }
+  chips.append(chip('ok', `Architect · ${S.username || 'you'}`), S.anytypeOk ? chip('ok', 'Anytype connected') : chip('err', 'Anytype unavailable'));
+  const list = (S.mappings || []);
+  $('#mapList').replaceChildren(...(list.length ? list.map((m) => el('div', { class: 'map' },
+    el('div', { class: 'grow' }, el('b', {}, m.name || `${m.section_name || m.source_name} → ${m.dest_name}`),
+      el('div', { class: 'muted' }, `${m.source_name}${m.section_name ? ` › ${m.section_name}` : ''} → Path · ${m.dest_name} · v${m.version} · ${m.run?.item_count ?? 0} items · last good ${ago(m.run?.last_success_at)}${m.connector_id !== S.connectorId ? ' · another PC' : ''}`)),
+    m.paused ? chip('wait', 'Paused') : !m.run ? chip('wait', 'Pending') : m.run.status === 'ok' ? chip('ok', 'Synced') : chip('err', m.run.status.replace('_', ' ')),
+    el('button', { class: 'btn', onclick: () => edit(m) }, 'Edit'))) : [el('p', { class: 'muted' }, 'No mappings yet. Start with GM → Morning.')]));
+  if (!S.anytypeOk && S.anytypeError) $('#mapList').append(el('p', { class: 'err' }, S.anytypeError));
+  const want = location.hash.match(/edit=([\w-]+)/)?.[1];
+  if (want && (!M || M.id !== want)) { const m = list.find((x) => x.id === want); if (m) edit(m); }
+}
+
+async function edit(m) {
+  M = m ? { ...m } : { source_kind: 'section', allow_fields: ['title'], allow_types: [], object_ids: [] };
+  previewed = null;
+  $('#editor').hidden = false;
+  $('#edTitle').textContent = m ? `Edit · ${m.name || 'mapping'}` : 'New mapping';
+  $('#name').value = M.name || '';
+  const dest = $('#dest'); dest.replaceChildren(el('option', { value: '' }, 'Choose a Path column…'), ...(S.destinations?.path || []).map((c) => el('option', { value: c.id, selected: c.id === M.dest_id }, `${c.title}${c.window?.start ? `  ·  ${c.window.start}–${c.window.end}` : ''}`)));
+  setKind(M.source_kind);
+  const spaces = await api('spaces').catch((e) => { toast(e.message, true); return []; });
+  $('#space').replaceChildren(...spaces.map((s) => el('option', { value: s.id, selected: s.id === M.source_space_id }, s.name)));
+  if (!M.source_space_id && spaces[0]) M.source_space_id = spaces[0].id;
+  $('#types').value = (M.allow_types || []).join(', ');
+  $('#dateProp').value = M.date_property || '';
+  await searchObjects();
+  if (M.source_kind === 'section' && M.source_id) await loadHeadings();
+  $('#editor').scrollIntoView({ behavior: 'smooth' });
+  paintButtons();
+}
+function setKind(k) {
+  M.source_kind = k;
+  for (const b of document.querySelectorAll('#kind button')) b.classList.toggle('on', b.dataset.k === k);
+  $('#sectionBox').hidden = k !== 'section'; $('#collBox').hidden = k !== 'collection';
+  $('#objLabel').textContent = k === 'section' ? 'Page' : 'Collection';
+}
+async function searchObjects() {
+  const box = $('#objects');
+  box.replaceChildren(el('div', { class: 'muted', style: 'padding:10px' }, 'Loading…'));
+  try {
+    const rows = await api(`objects?space=${encodeURIComponent(M.source_space_id || '')}&q=${encodeURIComponent($('#q').value.trim())}`);
+    const shown = M.source_kind === 'collection' ? rows.filter((r) => /collection|set|query/.test(r.type) || r.id === M.source_id) : rows;
+    box.replaceChildren(...(shown.length ? shown.slice(0, 120).map((o) => el('button', { class: `opt${o.id === M.source_id ? ' on' : ''}`, onclick: async () => {
+      M.source_id = o.id; M.source_name = o.name; M.section_block_id = null; M.section_name = ''; previewed = null;
+      if (!$('#name').value) $('#name').value = o.name;
+      await searchObjects(); if (M.source_kind === 'section') await loadHeadings(); paintButtons();
+    } }, o.name, el('small', {}, o.type))) : [el('div', { class: 'muted', style: 'padding:10px' }, 'Nothing found.')]));
+  } catch (e) { box.replaceChildren(el('div', { class: 'err', style: 'padding:10px' }, e.message)); }
+}
+async function loadHeadings() {
+  const box = $('#headings');
+  box.replaceChildren(el('div', { class: 'muted', style: 'padding:10px' }, 'Reading the page…'));
+  try {
+    const r = await api(`headings?space=${encodeURIComponent(M.source_space_id)}&object=${encodeURIComponent(M.source_id)}`);
+    if (r.chat) { box.replaceChildren(el('div', { class: 'err', style: 'padding:10px' }, 'That’s a chat — chats are never imported.')); return; }
+    if (!M.section_block_id) { const def = r.headings.find((x) => /path items/i.test(x.text)); if (def) { M.section_block_id = def.id; M.section_name = def.text; } }
+    box.replaceChildren(...(r.headings.length ? r.headings.map((x) => el('button', { class: `opt${x.id === M.section_block_id ? ' on' : ''}`, style: `padding-left:${8 + (x.rank - 1) * 14}px`, onclick: () => { M.section_block_id = x.id; M.section_name = x.text; previewed = null; loadHeadings(); paintButtons(); } },
+      x.text || '(empty heading)', el('small', {}, `H${x.rank} · ${x.items} bullet${x.items === 1 ? '' : 's'}`))) : [el('div', { class: 'muted', style: 'padding:10px' }, 'This page has no headings. Add one (e.g. “Path items”) above the bullets to import.')]));
+  } catch (e) { box.replaceChildren(el('div', { class: 'err', style: 'padding:10px' }, e.message)); }
+}
+function collect() {
+  M.name = $('#name').value.trim();
+  M.dest_kind = 'path';
+  M.dest_id = $('#dest').value;
+  M.dest_name = $('#dest').selectedOptions[0]?.textContent.split('  ·')[0] || '';
+  M.source_space_id = $('#space').value;
+  M.allow_types = M.source_kind === 'collection' ? $('#types').value.split(',').map((t) => t.trim()).filter(Boolean) : [];
+  M.date_property = M.source_kind === 'collection' ? $('#dateProp').value.trim() || null : null;
+  M.allow_fields = M.date_property ? ['title', 'date'] : ['title'];
+}
+function ready() { collect(); return !!(M.dest_id && M.source_space_id && M.source_id && (M.source_kind !== 'section' || M.section_block_id)); }
+function paintButtons() {
+  const ok = ready();
+  $('#preview').disabled = !ok;
+  $('#save').disabled = !ok || previewed !== sig();
+  $('#pvNote').textContent = !ok ? 'Choose a Set-Point, a page and its heading.' : previewed === sig() ? 'Preview matches — this is exactly what will be imported.' : 'Preview first: it shows exactly what will leave this PC.';
+  if (previewed !== sig()) $('#pv').replaceChildren();
+}
+async function preview() {
+  if (!ready()) return;
+  $('#pv').replaceChildren(el('p', { class: 'muted' }, 'Reading Anytype…'));
+  try {
+    const r = await api('preview', { mapping: M });
+    previewed = sig();
+    $('#pv').replaceChildren(el('div', { class: 'card', style: 'background:var(--s2)' },
+      el('div', { class: 'row' }, chip('ok', `${r.count} item${r.count === 1 ? '' : 's'}`), chip('', `→ ${r.destination || '?'}`), chip('', r.visibility), chip('', `Fields: ${r.fields.join(', ')}`)),
+      r.count ? el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, '#'), el('th', {}, 'Title'), M.date_property ? el('th', {}, 'Date') : null, el('th', {}, 'Source id'))),
+        el('tbody', {}, r.items.map((it, i) => el('tr', {}, el('td', { class: 'id' }, i + 1), el('td', {}, it.fields.title), M.date_property ? el('td', {}, it.fields.date || '— every day') : null, el('td', { class: 'id' }, `${(it.source_block_id || it.source_object_id).slice(-10)}`)))))
+        : el('p', { class: 'muted' }, 'Nothing under that heading yet — saving still works; the Set-Point stays empty until you add bullets.'),
+      el('p', { class: 'hint' }, 'Undated items are reusable: they show on every day, with their own checkmark per day. Wording comes from Anytype; checkmarks and goals stay in Architect.')));
+  } catch (e) { previewed = null; $('#pv').replaceChildren(el('p', { class: 'err' }, e.message)); }
+  paintButtons();
+}
+async function save() {
+  if (previewed !== sig()) return;
+  $('#save').disabled = true;
+  try {
+    const r = await api('save', { mapping: M });
+    toast(r.run?.ok ? `On — ${r.run.kept} item(s) imported` : `Saved — ${r.run?.message || r.run?.skipped || 'import pending'}`, r.run && !r.run.ok && !r.run.skipped);
+    $('#editor').hidden = true; M = null; history.replaceState(null, '', '/');
+    await load();
+  } catch (e) { toast(e.message, true); paintButtons(); }
+}
+document.querySelectorAll('#kind button').forEach((b) => b.addEventListener('click', () => { setKind(b.dataset.k); M.source_id = null; M.section_block_id = null; previewed = null; searchObjects(); paintButtons(); }));
+let qT = 0;
+$('#q').addEventListener('input', () => { clearTimeout(qT); qT = setTimeout(searchObjects, 300); });
+$('#space').addEventListener('change', () => { M.source_space_id = $('#space').value; M.source_id = null; M.section_block_id = null; previewed = null; searchObjects(); paintButtons(); });
+for (const id of ['#dest', '#name', '#types', '#dateProp']) $(id).addEventListener('input', paintButtons);
+$('#preview').addEventListener('click', preview);
+$('#save').addEventListener('click', save);
+$('#newMap').addEventListener('click', () => edit(null));
+$('#cancel').addEventListener('click', () => { $('#editor').hidden = true; M = null; history.replaceState(null, '', '/'); });
+$('#syncAll').addEventListener('click', async () => { try { const r = await api('sync', {}); toast(`Synced ${r.results.filter((x) => x.ok).length}/${r.results.length}`); load(); } catch (e) { toast(e.message, true); } });
+load().catch((e) => { $('#mapList').replaceChildren(el('p', { class: 'err' }, e.message)); });
+</script>
+</body>
+</html>

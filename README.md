@@ -18,7 +18,7 @@ No build step and no dependencies: plain HTML, CSS and JavaScript modules.
 ## 1. Set up Supabase (about 5 minutes)
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. **SQL Editor → New query** → paste and **Run** each file in `supabase/`, in this order: `schema.sql`, `collab.sql`, `accountability.sql`, `nov7.sql`, `space.sql`, `nov12.sql`. All are safe to run again and keep your data.
+2. **SQL Editor → New query** → paste and **Run** each file in `supabase/`, in this order: `schema.sql`, `collab.sql`, `accountability.sql`, `nov7.sql`, `space.sql`, `nov12.sql`, `variables.sql`, `sidechat.sql`, `nov23.sql`, and `anytype.sql` (only for Anytype sync). All are safe to run again and keep your data.
    This creates the tables, row-level security (each user only sees their own rows) and a private `architect-media` storage bucket.
 3. **Authentication → Sign In / Providers → Email** → turn **Confirm email** **off** → Save.
    Usernames are stored as `username@architect.local`; no email is ever sent, so confirmation must be off.
@@ -121,4 +121,6 @@ js/views/             login, shell, Space, Paths, Ticket board, Archives, Settin
 js/space/             Space widgets (Path, Tracker & Weekly, Ticket board, Blueprints, portals, custom)
 js/board/             canvas engine (rendering, toolbars, live collaboration)
 API.md                the Local API (incl. updates + rollback)
+connector/            Anytype → Architect connector for the PC that runs Anytype (see connector/README.md)
+UPDATES-NOV23B.md     the latest update: what changed, what to run, rollback
 ```

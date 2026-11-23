@@ -1,0 +1,241 @@
+/* ============================================================
+   Nov 23b — Architect Systems Blueprint: "Updates / Fixes" board.
+   Slimmer rail, Variables tab font, Variables spaces + map, per-object zoom,
+   personal background, Radio links, Updates Catalogue, Anytype integration.
+   ============================================================ */
+
+/* ---------------- Slimmer desktop sidebar ---------------- */
+:root { --sb-w: 72px; }
+.sb-rail { gap: 2px; padding: 14px 0; }
+.sb-item {
+  min-height: 64px; padding: 8px 0; gap: 6px; border: 0; border-radius: 0;
+  background: transparent; color: var(--fg-3);
+  font: 400 8.5px/1 var(--f-mono); letter-spacing: .06em;
+  transition: color .15s var(--ease);
+}
+.sb-item .sb-ic { flex: none; }
+/* no hover highlight: the rail stays calm as the cursor passes */
+.sb-item:hover { background: transparent; color: var(--fg-3); }
+.sb-item.is-on, .sb-item.is-on:hover {
+  color: var(--sb-gold); background: transparent; border: 0;
+  box-shadow: inset 2px 0 0 var(--sb-gold);
+}
+.sb-item[data-v="space"] { margin-bottom: 0; }
+.sb-item:focus-visible { outline: 1px solid var(--fg-3); outline-offset: -4px; }
+
+/* "Show toolbar" works on its own, sidebar or not: the board's toolbars move clear of the rail. */
+.space-host.has-sb .bp-page.is-world.show-chrome .bp-tools { left: calc(var(--sb-w) + 12px); }
+.space-host.has-sb .bp-page.is-world.show-chrome .bp-top { left: calc(var(--sb-w) + 12px); }
+
+/* ---------------- Variables: section tabs use the Path day-tab font ---------------- */
+/* Same face, size, weight and spacing as TODAY / TUESDAY…; order and selection styling unchanged. */
+.vr-tab, .wg-head .vr-tab {
+  font-family: var(--f-mono); font-weight: 400; font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+}
+@media (max-width: 719px) { .vr-tab { font-size: 13px; } }
+
+/* ---------------- Variables view: spaces, chats and the map ---------------- */
+.sbv-vars.is-side-hidden .sbv-side { display: none; }
+.sbv-side { width: 244px; }
+.sbv-spacebar { flex: none; display: flex; align-items: center; gap: 4px; height: 58px; padding: 0 8px 0 14px; }
+.sbv-spacepick {
+  flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 4px;
+  background: transparent; border: 0; color: var(--fg); cursor: pointer; text-align: left;
+  font: 700 18px/1 var(--f-dot); letter-spacing: .05em; text-transform: uppercase;
+}
+.sbv-spacepick span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sbv-spacepick svg { flex: none; color: var(--fg-3); }
+.sbv-spacepick:hover svg { color: var(--fg); }
+.sbv-sidetoggle { color: var(--fg-2); }
+.sbv-cats .sbv-sidetoggle { margin-left: -4px; }
+.sbv-side .sbv-list { padding-top: 2px; }
+.sbv-side .sbv-new { margin-top: 0; color: var(--fg-2); font-weight: 400; }
+.sbv-side .sbv-new:hover { color: var(--fg); background: transparent; }
+.sbv-cats-row:empty { display: none; }
+.sbv-cats { gap: 12px; }
+
+/* the map preview: a plain square, no title, no toolbar */
+.sbv-mapsq {
+  position: relative; flex: none; margin: 10px 12px 14px; aspect-ratio: 1; border-radius: 12px; overflow: hidden;
+  border: 1px solid var(--line-2); background-color: var(--s1);
+  background-image: radial-gradient(color-mix(in srgb, var(--fg) 22%, transparent) 1px, transparent 1.2px);
+  background-size: 12px 12px; background-position: 6px 6px;
+  cursor: zoom-in; padding: 0;
+}
+.sbv-mapsq:hover { border-color: var(--fg-3); }
+.sbv-mapsq .sbv-mapsq-full {
+  position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; display: grid; place-items: center;
+  border-radius: 7px; color: var(--fg-2); background: transparent; border: 0; cursor: pointer;
+}
+.sbv-mapsq .sbv-mapsq-full:hover { color: var(--fg); background: var(--s3); }
+.sbv-mapsq-tiles { position: absolute; inset: 22% 14%; display: flex; flex-wrap: wrap; gap: 8px; align-content: center; justify-content: center; pointer-events: none; }
+.sbv-mapsq-tiles .sbv-mini { width: 34px; height: 26px; }
+
+/* the open map: the space's field, its name faint in Doto at the centre, subsections as tiles */
+.sbv-field { position: absolute; inset: 0; overflow: hidden; }
+.sbv-field > .sbv-map-body { position: absolute; inset: 0; z-index: 1; }
+.sbv-field-name {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; white-space: nowrap;
+  font: 700 clamp(18px, 3.2vw, 34px)/1 var(--f-dot); letter-spacing: .06em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--fg) 16%, transparent);
+}
+.sbv-map-card.is-field { position: relative; }
+.sbv-map-card.is-field .sbv-map-head { display: none; }
+.sbv-map-ctl { position: absolute; z-index: 6; top: 12px; right: 12px; display: flex; gap: 2px; }
+.sbv-map-ctl .sbv-icon { width: 32px; height: 32px; color: var(--fg-2); }
+.sbv-map-ctl .sbv-icon:hover { color: var(--fg); background: var(--s3); }
+/* the Variables object inside the field: no tabs or other spaces; the controls stay clear of the X */
+.sbv-field .vr, .sbv-field .vr-home { background: transparent; }
+.sbv-field .vr-home.is-field .vr-bar { padding-right: 96px; min-height: 52px; }
+.sbv-field .vr-home.is-field .vr-grid { position: relative; z-index: 1; flex: 1; }
+/* the grid opens around the faint name, like tiles on a field */
+.sbv-field .vr-home.is-field:not(.is-free) .vr-grid {
+  display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 28px clamp(80px, 12vw, 200px); padding: 24px;
+}
+.sbv-field .vr-home.is-field:not(.is-free) .vr-grid > * { flex: none; width: 170px; }
+.sbv-field .vr-home.is-field { height: 100%; display: flex; flex-direction: column; }
+.sbv-field .vr-home.is-field .vr-hint { display: none; }
+
+/* ---------------- Per-object zoom (split views) ---------------- */
+/* floats in the object's bottom-right corner (shown on hover) so it never crowds the header tabs */
+.sb-obj { position: relative; }
+.sbz {
+  position: absolute; z-index: 6; right: 12px; bottom: 12px;
+  display: inline-flex; align-items: center; gap: 0; height: 28px; padding: 0 3px;
+  border-radius: 10px; border: 1px solid var(--line-2); background: color-mix(in srgb, var(--s2) 92%, transparent);
+  color: var(--fg-3); box-shadow: var(--shadow);
+  font: 400 10px/1 var(--f-mono); letter-spacing: .04em;
+  opacity: 0; transition: opacity .15s var(--ease);
+}
+.sb-obj:hover .sbz, .sbz:focus-within { opacity: 1; }
+.sbz button { height: 22px; min-width: 22px; padding: 0 4px; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; font: inherit; }
+.sbz button:hover:not(:disabled) { color: var(--fg); background: var(--s3); }
+.sbz button:disabled { opacity: .35; cursor: default; }
+.sbz .sbz-val { min-width: 40px; font-variant-numeric: tabular-nums; }
+.sbz.is-locked .sbz-lock { color: var(--sb-gold); }
+.sbz.is-auto .sbz-val { color: var(--fg-2); }
+.sb-obj > .wg-body { transform-origin: 0 0; }
+
+/* Path in a pane: adapts to the pane so every setpoint is visible (4 across, 2 × 2, then 1 column) */
+.sb-obj .paths.is-embedded .pboard:not(.is-tabbed):not(.is-empty) {
+  display: grid; grid-template-columns: repeat(var(--pcols, 4), minmax(0, 1fr)); align-items: start;
+  overflow-x: hidden; overflow-y: auto; scroll-snap-type: none; padding: 2px 2px 12px; gap: 12px;
+}
+.sb-obj .paths.is-embedded .pboard:not(.is-tabbed) > .pcol { min-width: 0; width: auto; flex: none; }
+.sb-obj .paths.is-embedded { container-type: inline-size; }
+@container (max-width: 1180px) { .sb-obj .paths.is-embedded .pboard:not(.is-tabbed):not(.is-empty) { --pcols: 2; } }
+@container (max-width: 520px) { .sb-obj .paths.is-embedded .pboard:not(.is-tabbed):not(.is-empty) { --pcols: 1; } }
+
+/* the gutter between Path and Fleeting Moments: drag to resize the split */
+.sbv-gutter {
+  flex: none; width: 12px; position: relative; z-index: 2; cursor: col-resize;
+  display: grid; place-items: center; background: transparent; border: 0; padding: 0; border-radius: 6px;
+}
+.sbv-gutter i { width: 3px; height: 28px; border-radius: 99px; background: var(--line-2); transition: background .15s; }
+.sbv-gutter:hover i, .sbv-gutter.is-drag i, .sbv-gutter:focus-visible i { background: var(--fg-3); }
+.sbv-gutter:focus-visible { outline: none; }
+.sbv-split .sbv-cols { gap: 2px; }
+
+/* ---------------- Personal Space background ---------------- */
+/* only the personal Space's own page gets the class: the shared Space never changes */
+.bp-page.is-world.has-personal-bg {
+  background-color: var(--canvas); background-image: var(--personal-bg);
+  background-size: cover; background-position: center; background-repeat: no-repeat;
+}
+.set-bg { display: grid; grid-template-columns: 148px 1fr; gap: 16px; align-items: center; }
+.set-bg-prev {
+  width: 148px; aspect-ratio: 16 / 10; border-radius: 10px; border: 1px solid var(--line-2); overflow: hidden;
+  background: var(--canvas); background-size: cover; background-position: center;
+  display: grid; place-items: center; color: var(--fg-4); font: 10px/1 var(--f-mono); letter-spacing: .1em;
+}
+.set-section { display: grid; gap: 10px; padding: 4px 0 14px; border-bottom: 1px solid var(--line); }
+.set-section:last-child { border-bottom: 0; }
+.set-section > h3 { margin: 0; font: 700 10.5px/1 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--fg-3); }
+.set-themes { display: flex; flex-wrap: wrap; gap: 6px; }
+.set-themes .btn.is-on { border-color: var(--fg); color: var(--fg); }
+.set-tabs { flex-wrap: wrap; }
+
+/* ---------------- Updates Catalogue ---------------- */
+.cat-search { width: 100%; }
+.cat-list { display: grid; gap: 10px; max-height: 52vh; overflow-y: auto; padding-right: 4px; scrollbar-width: thin; }
+.cat-day { margin: 8px 0 0; font: 700 10px/1 var(--f-mono); letter-spacing: .14em; color: var(--fg-3); }
+.cat-item { display: grid; gap: 6px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--s1); }
+.cat-item > header { display: flex; align-items: baseline; gap: 10px; }
+.cat-item b { font: 600 13px/1.3 var(--f-sans); }
+.cat-item .cat-area { flex: none; font: 600 9px/1 var(--f-mono); letter-spacing: .12em; color: var(--fg-3); text-transform: uppercase; }
+.cat-item p { margin: 0; color: var(--fg-2); font: 12.5px/1.5 var(--f-sans); }
+.cat-item.is-new .cat-area { color: var(--sb-gold); }
+.cat-empty { color: var(--fg-3); font: 12px/1.5 var(--f-mono); }
+.set-adv { border-top: 1px solid var(--line); padding-top: 12px; }
+.set-adv > summary { cursor: pointer; color: var(--fg-3); font: 600 10.5px/1 var(--f-mono); letter-spacing: .12em; text-transform: uppercase; }
+.set-adv[open] > summary { margin-bottom: 12px; }
+
+/* ---------------- Radio: links beyond YouTube ---------------- */
+.rd-extbox { position: absolute; inset: 0; z-index: 2; }
+.rd-extbox[hidden] { display: none; }
+.wpick-sep { height: 1px; margin: 6px 4px; background: var(--line); }
+.wpick-kbd { margin-left: auto; flex: none; font: 600 10px/1 var(--f-mono); color: var(--fg-3); padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line-2); }
+.rd-ext { position: absolute; inset: 0; display: grid; place-items: center; background: #000; overflow: hidden; }
+.rd-ext[hidden] { display: none; }
+.rd-ext-frame { border: 0; display: block; background: #000; max-width: 100%; max-height: 100%; }
+.rd-ext.is-vertical .rd-ext-frame { height: 100%; aspect-ratio: 9 / 16; width: auto; }
+.rd-ext.is-wide .rd-ext-frame { width: 100%; aspect-ratio: 16 / 9; height: auto; }
+.rd-ext.is-post .rd-ext-frame { width: min(100%, 520px); height: 100%; background: transparent; }
+.rd-ext.is-audio .rd-ext-frame { width: 100%; height: 100%; }
+.rd-ext-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.rd-fail {
+  position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 10px; padding: 24px; text-align: center;
+  background: color-mix(in srgb, #000 88%, transparent); color: #f2f2f2;
+}
+.rd-fail[hidden] { display: none; }
+.rd-fail.is-soft { inset: auto 0 0 0; display: flex; align-items: center; gap: 12px; padding: 10px 12px; text-align: left; background: color-mix(in srgb, #000 82%, transparent); }
+.rd-fail.is-soft > svg, .rd-fail.is-soft b { display: none; }
+.rd-fail.is-soft p { flex: 1; font-size: 11.5px; }
+.rd-fail b { font: 700 12px/1.2 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; }
+.rd-fail p { margin: 0; max-width: 340px; font: 12.5px/1.5 var(--f-sans); color: #bdbdbd; }
+.rd-open {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 999px;
+  background: #f2f2f2; color: #111; border: 0; cursor: pointer; font: 700 10.5px/1 var(--f-mono); letter-spacing: .1em; text-transform: uppercase;
+}
+.rd-open:hover { background: #fff; }
+.rd-orig {
+  position: absolute; z-index: 3; right: 10px; top: 10px; display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px;
+  border-radius: 999px; border: 0; background: color-mix(in srgb, #000 62%, transparent); color: #eee; cursor: pointer;
+  font: 600 9.5px/1 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; opacity: 0; transition: opacity .15s;
+}
+.rd-stage:hover .rd-orig, .rd-orig:focus-visible { opacity: 1; }
+.rq-thumb.is-ext { display: grid; place-items: center; background: var(--s3); color: var(--fg-2); font: 700 9px/1 var(--f-mono); letter-spacing: .08em; }
+
+/* ---------------- Anytype: imported Path items + Integrations ---------------- */
+.ptask.is-imported .ptask-title { cursor: default; }
+.ptask.is-imported .pax-tag {
+  display: inline-block; margin-left: 6px; padding: 2px 5px; border-radius: 5px; vertical-align: 2px;
+  border: 1px solid var(--line-2); color: var(--fg-3); font: 600 8px/1 var(--f-mono); letter-spacing: .12em;
+}
+.ptask.is-imported.is-pending .pcheck { box-shadow: 0 0 0 2px color-mix(in srgb, var(--sb-gold) 55%, transparent); }
+.pax-status {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding: 0 4px;
+  color: var(--fg-3); font: 400 9.5px/1.3 var(--f-mono); letter-spacing: .08em; text-transform: uppercase;
+}
+.pax-status i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--fg-4); }
+.pax-status.is-ok i { background: #3ecf8e; }
+.pax-status.is-wait i { background: var(--sb-gold); }
+.pax-status.is-err { color: var(--red); }
+.pax-status.is-err i { background: var(--red); }
+
+.ax-card { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--s1); }
+.ax-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ax-row .ax-grow { flex: 1; min-width: 0; }
+.ax-name { font: 600 13px/1.3 var(--f-sans); }
+.ax-meta { color: var(--fg-3); font: 11px/1.4 var(--f-mono); }
+.ax-pill { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--line-2); font: 600 9.5px/1 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--fg-2); }
+.ax-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-4); }
+.ax-pill.is-ok i { background: #3ecf8e; }
+.ax-pill.is-wait i { background: var(--sb-gold); }
+.ax-pill.is-err { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
+.ax-pill.is-err i { background: var(--red); }
+.ax-card a.btn { text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+.ax-code { font: 700 22px/1 var(--f-mono); letter-spacing: .18em; }
+.ax-steps { margin: 0; padding-left: 18px; color: var(--fg-2); font: 12.5px/1.6 var(--f-sans); }
+.ax-steps code, .ax-cmd { font: 11.5px/1.5 var(--f-mono); }
+.ax-cmd { display: block; padding: 10px 12px; border-radius: 10px; background: var(--s2); border: 1px solid var(--line); white-space: pre-wrap; word-break: break-all; user-select: all; }

@@ -273,6 +273,7 @@ export function mountSpace(root) {
     if (mode === m) t = tools;
     else ed.surface = 'parked'; // you tabbed away while it was loading
     tools.page.classList.toggle('show-chrome', !!getPref('spaceChrome', false));
+    if (m === 'personal') applyPersonalBg();
     migrate(ed);
     importCustomVariables(ed);
     // Everyone gets their own Path on the shared canvas.
@@ -504,7 +505,7 @@ export function mountSpace(root) {
       mode: () => mode,
       toggleSpace: () => toggleSpace(),
       addWidget: (kind) => addWidget(kind, editor()?.viewCenter()),
-      openSettings: async (tab) => openSettings({ tab, spaceId: await idFor('shared') }),
+      openSettings: (tab) => settings(tab),
       sharedSpaceId: () => ids.shared,
     });
   }
@@ -549,7 +550,7 @@ export function mountSpace(root) {
     return [
       { header: mode === 'personal' ? 'Personal space' : 'Shared space' },
       { label: 'Invite…', icon: 'share', onSelect: async () => openSettings({ tab: 'members', spaceId: await idFor('shared') }) },
-      { label: 'Settings & API…', icon: 'settings', onSelect: async () => openSettings({ spaceId: await idFor('shared') }) },
+      { label: 'Settings…', icon: 'settings', onSelect: () => settings() },
       '-',
       { header: 'Theme' },
       ...themeItems(),
@@ -831,44 +832,29 @@ export function mountSpace(root) {
     const at = world || ed?.viewCenter();
     const tool = (name, opt) => () => { if (opt) ed.setOpt(...opt); ed.setTool(name); toast('Drag on the canvas', { ms: 1200 }); };
     const chrome = t?.page.classList.contains('show-chrome');
+    // Nov 23b: a shorter menu that fits on a desktop screen — no "Add" heading (and no fold), one Border
+    // tool, the standalone objects under Widget…, no "Move around" section; Theme, Performance test and
+    // Keyboard shortcuts live in Settings.
     return [
       ...shortcutItems(),
-      { header: 'Add' },
       { label: 'Sticky note', icon: 'sticky', kbd: 'N', onSelect: () => ed.addEls([ed.makeEl('sticky', null, at)], { edit: true }) },
       { label: 'Text', icon: 'text', kbd: 'T', onSelect: () => ed.addEls([ed.makeEl('text', null, at)], { edit: true }) },
       { label: 'Shape', icon: 'rect', kbd: 'S', onSelect: tool('shape') },
       { label: 'Connector', icon: 'arrow', kbd: 'L', onSelect: tool('line') },
       { label: 'Draw', icon: 'pen', kbd: 'P', onSelect: tool('pen') },
-      { label: 'Border — box', icon: 'borderBox', kbd: 'B', onSelect: tool('border', ['border', 'box']) },
-      { label: 'Border — smooth curve', icon: 'borderCurve', kbd: '⇧B', onSelect: tool('border', ['border', 'curve']) },
+      { label: 'Border', icon: 'borderBox', kbd: 'B', onSelect: tool('border', ['border', 'box']) },
       { label: 'Frame', icon: 'frame', kbd: 'F', onSelect: tool('frame') },
       { label: 'Image or video', icon: 'image', kbd: 'U', onSelect: () => t.pickFiles() },
       { label: 'Video or link', icon: 'video', kbd: 'K', onSelect: () => t.openEmbed() },
-      { label: 'Chat', icon: 'chat', onSelect: () => addWidget('chat', at) },
-      { label: 'Radio', icon: 'radio', onSelect: () => addWidget('radio', at) },
-      { label: 'Timer', icon: 'hourglass', onSelect: () => addWidget('timer', at) },
-      { label: 'Path task…', icon: 'toPaths', onSelect: () => pickTask(ed, at, { dialog, toast, myTasks }) },
-      { label: 'Say something out loud', icon: 'speaker', kbd: 'Enter', onSelect: () => sayBar() },
-      { label: 'Emergency Room', icon: 'flame', kbd: 'E+R', onSelect: () => openER() },
       { label: 'Widget…', icon: 'widget', onSelect: () => widgetPicker(at) },
-      '-',
-      { header: 'Move around' },
-      { label: 'Save this view…', icon: 'target', onSelect: () => saveCameraPoint() },
-      { label: 'Camera points…', icon: 'target', onSelect: () => cameraDialog() },
-      { label: 'Zoom to fit', icon: 'fit', kbd: '⇧1', onSelect: () => ed.zoomToFit() },
-      { label: 'Snap objects together', icon: 'magnet', checked: ed.prefs.guides !== false, onSelect: () => ed.setPref('guides', ed.prefs.guides === false) },
       '-',
       { header: mode === 'personal' ? 'Personal space' : 'Shared space' },
       { label: mode === 'personal' ? 'Switch to shared space' : 'Switch to personal space', icon: 'home', kbd: 'Tab', onSelect: toggleSpace },
-      { label: 'Invite…', icon: 'share', onSelect: async () => openSettings({ tab: 'members', spaceId: await idFor('shared') }) },
-      { label: 'Settings & API…', icon: 'settings', onSelect: async () => openSettings({ spaceId: await idFor('shared') }) },
-      { label: 'Show toolbar', icon: 'layers', checked: chrome, onSelect: () => { t.page.classList.toggle('show-chrome', !chrome); setPref('spaceChrome', !chrome).catch(() => {}); } },
+      { label: 'Invite…', icon: 'share', onSelect: () => settings('members') },
+      { label: 'Settings…', icon: 'settings', onSelect: () => settings() },
+      // Independent of the sidebar: it always reflects (and flips) the toolbar alone.
+      { label: 'Show toolbar', icon: 'layers', checked: chrome, onSelect: () => setChrome(!chrome) },
       innerWidth >= 720 ? { label: 'Show sidebar', icon: 'list', checked: getPref('sidebar', true) !== false, onSelect: async () => { await setPref('sidebar', getPref('sidebar', true) === false).catch(() => {}); mountDock(); } } : null,
-      { label: 'Keyboard shortcuts', icon: 'keyboard', kbd: '?', onSelect: () => t.showShortcuts() },
-      { label: 'Performance test (500 objects)', icon: 'fit', onSelect: () => startBench({ api, uid, go }).catch((e) => toast(friendlyError(e), { tone: 'error' })) },
-      '-',
-      { header: 'Theme' },
-      ...themeItems(),
       '-',
       { label: 'Change password', icon: 'key', onSelect: changePassword },
       { label: 'Sign out', icon: 'logout', onSelect: () => api.auth.signOut() },
@@ -876,16 +862,66 @@ export function mountSpace(root) {
   }
 
   async function widgetPicker(at) {
-    const choose = (kind) => { closeFloating(); addWidget(kind, at); };
+    const ed = editor();
+    const choose = (kind) => addWidget(kind, at);
     const opts = ['path', 'fleeting', 'variables', 'timer', 'blueprints', 'chat', 'tts', 'radio', 'custom'];
+    // A pick closes the dialog (through its Cancel button, so focus and the promise settle as usual).
+    const row = (ic, label, hint, fn, kbd) => h('button', { type: 'button', class: 'wpick-row', onclick: (e) => { e.currentTarget.closest('.dlg')?.querySelector('.dlg-actions button')?.click(); fn(); } },
+      h('span', { class: 'wpick-ic' }, icon(ic, 18)),
+      h('span', { class: 'wpick-text' }, h('b', {}, label), hint ? h('small', {}, hint) : null),
+      kbd ? h('kbd', { class: 'wpick-kbd' }, kbd) : null);
+    // Nov 23b: the standalone objects that used to crowd the right-click menu live here.
+    const extra = [
+      row('toPaths', 'Path task…', 'One of your tasks, live on the board', () => setTimeout(() => pickTask(ed, at, { dialog, toast, myTasks }), 180)),
+      row('speaker', 'Say something out loud', 'Everyone in the Space hears it', () => setTimeout(sayBar, 180), 'Enter'),
+      row('flame', 'Emergency Room', 'One problem, one room', () => setTimeout(openER, 180), 'E+R'),
+    ];
     dialog({
       title: 'Add a widget',
       width: 460,
-      body: h('div', { class: 'wpick' }, opts.map((k) => h('button', { type: 'button', class: 'wpick-row', onclick: () => choose(k) },
-        h('span', { class: 'wpick-ic' }, icon(WIDGETS[k].icon, 18)),
-        h('span', { class: 'wpick-text' }, h('b', {}, WIDGETS[k].label), WIDGETS[k].hint ? h('small', {}, WIDGETS[k].hint) : null)))),
+      body: h('div', { class: 'wpick' }, opts.map((k) => row(WIDGETS[k].icon, WIDGETS[k].label, WIDGETS[k].hint, () => choose(k))), h('div', { class: 'wpick-sep', role: 'separator' }), ...extra),
       actions: [{ label: 'Cancel', value: null }],
     });
+  }
+
+  /* ---------------- Settings (Nov 23b) ----------------
+     One place for what left the right-click menu: Theme, Performance test, Keyboard shortcuts, camera
+     points — plus the personal Space background and the Anytype integration. */
+  function setChrome(on) {
+    for (const sl of Object.values(slots)) sl?.t?.page.classList.toggle('show-chrome', !!on);
+    setPref('spaceChrome', !!on).catch(() => {});
+  }
+  async function settings(tab) {
+    openSettings({
+      tab, spaceId: await idFor('shared'),
+      actions: {
+        shortcuts: () => t?.showShortcuts(),
+        bench: () => startBench({ api, uid, go }).catch((e) => toast(friendlyError(e), { tone: 'error' })),
+        saveView: () => saveCameraPoint(),
+        cameraPoints: () => cameraDialog(),
+        snap: () => editor()?.prefs.guides !== false,
+        setSnap: (on) => editor()?.setPref('guides', !!on),
+        toolbar: () => !!getPref('spaceChrome', false),
+        setToolbar: (on) => setChrome(on),
+        personalBg: () => applyPersonalBg(),
+      },
+    });
+  }
+
+  /* ---------------- Personal Space background ----------------
+     A PNG of your own behind your personal Space. The shared Space keeps its plain canvas. */
+  async function applyPersonalBg() {
+    const page2 = slots.personal?.t?.page;
+    if (!page2) return;
+    const path = getPref('personalBg', null);
+    if (!path) { page2.classList.remove('has-personal-bg'); page2.style.removeProperty('--personal-bg'); return; }
+    try {
+      const urls = await api.media.sign([path]);
+      const url = urls?.[path];
+      if (!url) throw new Error('no url');
+      page2.style.setProperty('--personal-bg', `url("${url.replace(/"/g, '%22')}")`);
+      page2.classList.add('has-personal-bg');
+    } catch { page2.classList.remove('has-personal-bg'); }
   }
 
   /* ---------------- privacy ---------------- */

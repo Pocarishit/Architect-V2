@@ -6,6 +6,8 @@ import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { toast, promptDialog, menu, popover, closeFloating } from '../core/ui.js';
 import { store, uid } from '../core/util.js';
+import { parseMediaLink, mountLinkPlayer } from './radiolinks.js';
+import { unfurl } from '../board/embed.js';
 
 let ytLoading = null;
 function loadYT() {
@@ -83,11 +85,24 @@ export async function videoTitle(vid) {
   return t;
 }
 
+// Nov 23b: a link from another platform (X, Threads, TikTok, Instagram, Facebook…) → a Radio queue item.
+export function linkItem(raw) {
+  const p = parseMediaLink(raw);
+  if (!p) return null;
+  if (p.error) return { error: p.error, provider: p.provider };
+  return { id: uid(), ext: true, url: p.url, embed: p.embed, provider: p.provider, short: p.short, shape: p.shape, label: p.label, title: null };
+}
+
 export async function askSource(current = '') {
-  const v = await promptDialog('YouTube playlist', { value: current, placeholder: 'https://www.youtube.com/playlist?list=…', ok: 'Play', label: 'Playlist or video link' });
+  const v = await promptDialog('Radio', { value: current, placeholder: 'YouTube playlist, or a link from X, TikTok, Instagram…', ok: 'Play', label: 'Playlist or video link' });
   if (v == null) return null;
   const src = parseSource(v);
-  if (!src) { toast('That isn’t a YouTube playlist or video link.', { tone: 'error', ms: 3500 }); return null; }
+  if (!src) {
+    const it = linkItem(v);
+    if (it && !it.error) return { url: it.url, ext: it };
+    toast(it?.error || 'That isn’t a link the Radio can play.', { tone: 'error', ms: 5000 });
+    return null;
+  }
   if (src.error) { toast(src.error, { tone: 'error', ms: 7000 }); return null; }
   if (src.note) toast(src.note, { ms: 6000 });
   return src;
@@ -110,12 +125,13 @@ export function mountRadio(body, el, w) {
   const stage = h('div', { class: 'rd-stage' });
   const holder = h('div', { class: 'rd-yt' });
   const tune = h('button', { class: 'rd-tune', type: 'button', onclick: () => tuneIn() }, icon('broadcast', 16), h('span', {}, 'Tune in'));
-  stage.append(holder, tune);
+  const extBox = h('div', { class: 'rd-extbox', hidden: true }); // a link from another platform plays here
+  stage.append(holder, extBox, tune);
   const title = h('span', { class: 'rd-title' }, 'Radio');
   const artist = h('span', { class: 'rd-artist' }, '');
   const live = h('span', { class: 'rd-live' });
   const caption = h('div', { class: 'rd-cap' }, h('span', { class: 'rd-cap-text' }, title, artist), live);
-  const empty = h('button', { class: 'rd-empty', type: 'button', onclick: () => setSource() }, icon('music', 22), h('b', {}, 'Add your YouTube playlist'), h('span', {}, 'Paste a playlist (or video) link'));
+  const empty = h('button', { class: 'rd-empty', type: 'button', onclick: () => setSource() }, icon('music', 22), h('b', {}, 'Add a playlist or video'), h('span', {}, 'YouTube, X, Threads, TikTok, Instagram, Facebook…'));
   const card = h('div', { class: 'rd is-stream' }, stage, caption);
   body.append(h('div', { class: 'rd-wrap' }, card, empty));
 
@@ -128,14 +144,16 @@ export function mountRadio(body, el, w) {
   const streaming = () => mode() === 'stream';
   const iControl = () => st().by === me.id;
   const queue = () => (Array.isArray(w.current().queue) ? w.current().queue : []);
-  const qVids = () => queue().map((q) => q.vid);
+  // The YouTube player only ever holds the YouTube items; links from other platforms play in extBox.
+  const qVids = () => queue().filter((q) => !q.ext && q.vid).map((q) => q.vid);
+  const linkNow = (s = st()) => (s.link ? queue().find((q) => q.id === s.link && q.ext) || null : null);
   const qSig = () => qVids().join(',');
   const expected = (s = st()) => (s.playing ? (s.t || 0) + Math.max(0, Date.now() - (s.at || Date.now())) / 1000 : (s.t || 0));
 
   /* ---- state changes ---- */
   // Every control press: in Stream mode it becomes the shared state (you take the aux); in Playlist mode it's just you.
   function act(patch) {
-    const base = { ...st(), ...currentPos() };
+    const base = { ...st(), ...(st().link && !('link' in patch) ? {} : currentPos()) };
     const next = { ...base, ...patch, by: me.id, name: me.username || 'Someone', at: Date.now() };
     if (streaming()) w.live({ st: next });
     else { local = next; w.live({ st: { ...st(), shuffle: next.shuffle, loop: next.loop } }); }
@@ -165,6 +183,8 @@ export function mountRadio(body, el, w) {
 
   // Move the player to match a state (the shared one in Stream mode, yours in Playlist mode).
   function apply(s, fromMe = false) {
+    if (s && linkNow(s)) { syncExt(s); try { if (ready && player.getPlayerState?.() === 1) { applying = true; player.pauseVideo(); setTimeout(() => { applying = false; }, 600); } } catch {} paint(); return; }
+    syncExt(s);
     if (!ready || !s) return;
     applying = true;
     try {
@@ -200,12 +220,17 @@ export function mountRadio(body, el, w) {
     const src = await askSource(w.current().src || '');
     if (!src) return;
     tunedIn = true;
+    if (src.ext) { // a link from another platform starts a fresh queue
+      w.live({ src: src.url, list: null, vid0: null, queue: [src.ext], st: { by: me.id, name: me.username, index: 0, vid: null, link: src.ext.id, t: 0, playing: true, at: Date.now() } });
+      fillTitles(); apply(st(), true);
+      return;
+    }
     wantPlay = true; // you just picked it: start playing as soon as it's loaded
     const items = await itemsFor(src);
     if (!items.length) { toast('That playlist came back empty. Is it public or unlisted?', { tone: 'error', ms: 5000 }); return; }
     const wasQueue = builtFor === 'queue' && ready;
     if (wasQueue) loadedSig = items.map((q) => q.vid).join(','); // loaded right below, not by update()
-    w.live({ src: src.url, list: src.list, vid0: items[0].vid, queue: items, st: { by: me.id, name: me.username, index: 0, vid: items[0].vid, t: 0, playing: false, at: Date.now() } });
+    w.live({ src: src.url, list: src.list, vid0: items[0].vid, queue: items, st: { by: me.id, name: me.username, index: 0, vid: items[0].vid, link: null, t: 0, playing: false, at: Date.now() } });
     if (wasQueue) {
       wantPlay = false;
       try { applying = true; player.loadPlaylist(qVids(), 0, 0); } catch {}
@@ -235,12 +260,18 @@ export function mountRadio(body, el, w) {
       for (let round = 0; round < 50; round++) {
         const missing = queue().filter((q) => !q.title && !q.noTitle).slice(0, 6);
         if (!missing.length || destroyed) break;
-        const got = await Promise.all(missing.map(async (q) => [q.id, await videoTitle(q.vid)]));
+        const got = await Promise.all(missing.map(async (q) => [q.id, q.ext ? await linkTitle(q) : await videoTitle(q.vid)]));
         const by = new Map(got);
         w.live({ queue: queue().map((q) => (by.has(q.id) ? (by.get(q.id) ? { ...q, title: by.get(q.id).title, author: by.get(q.id).author } : { ...q, noTitle: true }) : q)) });
         paintQueue();
       }
     } finally { filling = false; }
+  }
+
+  async function linkTitle(q) {
+    const u = await unfurl(q.url).catch(() => null);
+    const t = (u?.title || '').trim();
+    return t ? { title: t.slice(0, 120), author: q.provider } : null;
   }
 
   // The queue as it is now. A Radio from before the queue existed takes its list from the player once.
@@ -268,10 +299,23 @@ export function mountRadio(body, el, w) {
   }
   async function addLink(raw) {
     const src = parseSource(raw);
-    if (!src) { toast('That isn’t a YouTube video or playlist link.', { tone: 'error', ms: 3500 }); return false; }
+    let items;
+    if (!src) {
+      const it = linkItem(raw);
+      if (!it) { toast('That isn’t a link the Radio can play.', { tone: 'error', ms: 3500 }); return false; }
+      if (it.error) { toast(it.error, { tone: 'error', ms: 6000 }); return false; }
+      if (!w.current().src) {
+        tunedIn = true;
+        w.live({ src: it.url, list: null, vid0: null, queue: [it], st: { by: me.id, name: me.username, index: 0, vid: null, link: it.id, t: 0, playing: true, at: Date.now() } });
+        apply(st(), true);
+      } else setQueue([...(queue().length ? queue() : ensureQueue()), it]);
+      toast(`Added ${it.label || 'the link'}.`, { ms: 1800 });
+      fillTitles();
+      return true;
+    }
     if (src.error) { toast(src.error, { tone: 'error', ms: 6000 }); return false; }
     const base = ensureQueue();
-    const items = await itemsFor(src);
+    items = await itemsFor(src);
     if (!items.length) { toast('Nothing to add from that link.', { tone: 'error' }); return false; }
     const fresh = !w.current().src;
     if (fresh) {
@@ -283,17 +327,36 @@ export function mountRadio(body, el, w) {
     return true;
   }
   function playItem(i) {
-    if (!ready) return;
     const q = queue()[i];
     if (!q) return;
     tunedIn = true;
-    act({ index: i, vid: q.vid, t: 0, playing: true });
+    if (q.ext) { act({ link: q.id, playing: true, t: 0 }); return; }
+    if (!ready) return;
+    const yi = Math.max(0, qVids().indexOf(q.vid));
+    act({ link: null, index: yi, vid: q.vid, t: 0, playing: true });
+  }
+
+  // The link from another platform that's on (if any): one embed player, rebuilt only when it changes.
+  let ext = null, extId = null;
+  function syncExt(s = st()) {
+    const q = linkNow(s);
+    if (!q) {
+      if (ext) { ext.destroy(); ext = null; extId = null; }
+      holder.style.visibility = '';
+      return;
+    }
+    holder.style.visibility = 'hidden';
+    if (extId === q.id && ext) return;
+    ext?.destroy();
+    extId = q.id;
+    ext = mountLinkPlayer(extBox, q, { autoplay: !!(s.playing && tunedIn) });
   }
 
   // Load the queue into the player in place (no rebuild), keeping the song that's on.
   let loadedSig = null;
   function syncQueue() {
-    if (!ready || !queue().length) return;
+    if (!queue().some((q) => !q.ext) && builtFor === 'queue' && !ready) { builtFor = null; build(true); return; } // first YouTube item joined a links-only queue
+    if (!ready || !qVids().length) return;
     const sig = qSig();
     if (sig === loadedSig) return;
     loadedSig = sig;
@@ -314,7 +377,7 @@ export function mountRadio(body, el, w) {
   function openQueue(anchor) {
     if (qPanel?.isConnected) { closeFloating(); return; }
     ensureQueue();
-    const input = h('input', { class: 'input rq-input', placeholder: 'Paste a video or playlist link', spellcheck: false, 'aria-label': 'Video or playlist link' });
+    const input = h('input', { class: 'input rq-input', placeholder: 'YouTube, X, Threads, TikTok, Instagram, Facebook…', spellcheck: false, 'aria-label': 'Video or playlist link' });
     const addRow = h('div', { class: 'rq-row-add', hidden: true }, input);
     const add = async () => {
       const v = input.value.trim();
@@ -325,7 +388,7 @@ export function mountRadio(body, el, w) {
       if (ok) { input.value = ''; addRow.hidden = true; } else input.focus();
     };
     input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); add(); } if (e.key === 'Escape') { e.preventDefault(); addRow.hidden = true; } });
-    input.addEventListener('paste', () => setTimeout(() => { if (parseSource(input.value)) add(); }, 0));
+    input.addEventListener('paste', () => setTimeout(() => { if (parseSource(input.value) || parseMediaLink(input.value)) add(); }, 0));
     const addBtn = h('button', { class: 'rq-addbtn', type: 'button', onclick: () => { addRow.hidden = !addRow.hidden; if (!addRow.hidden) input.focus(); } }, icon('plus', 13), h('span', {}, 'Add video'));
     const shuf = h('button', {
       class: ['rq-switch', st().shuffle && 'is-on'], type: 'button', role: 'switch', 'aria-checked': String(!!st().shuffle), 'aria-label': 'Shuffle',
@@ -337,7 +400,8 @@ export function mountRadio(body, el, w) {
       qList,
       addBtn, addRow,
       h('div', { class: 'rq-foot' }, h('span', {}, 'SHUFFLE'), shuf),
-      w.current().src ? h('button', { class: 'rq-yt', type: 'button', onclick: () => window.open(w.current().src, '_blank', 'noopener') }, icon('external', 12), h('span', {}, 'Open on YouTube')) : null);
+      linkNow() ? h('button', { class: 'rq-yt', type: 'button', onclick: () => window.open(linkNow().url, '_blank', 'noopener') }, icon('external', 12), h('span', {}, `Open on ${linkNow().provider}`))
+        : w.current().src && /youtu/.test(w.current().src) ? h('button', { class: 'rq-yt', type: 'button', onclick: () => window.open(w.current().src, '_blank', 'noopener') }, icon('external', 12), h('span', {}, 'Open on YouTube')) : null);
     content.addEventListener('pointerdown', (e) => e.stopPropagation());
     content.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
     qPanel = content;
@@ -354,18 +418,19 @@ export function mountRadio(body, el, w) {
   function paintQueue() {
     if (!qPanel?.isConnected || !qList) return;
     const items = queue();
-    const on = currentPos().vid || st().vid;
+    const on = linkNow()?.id || currentPos().vid || st().vid;
     qPanel.querySelector('.rq-count').textContent = items.length ? `${items.length}` : '';
     if (qList.dataset.dragging) return;
     qList.replaceChildren(...(items.length ? items.map((q, i) => {
-      const isOn = q.vid === on;
+      const isOn = q.ext ? q.id === on : q.vid === on;
       const li = h('li', { class: ['rq-item', isOn && 'is-on'], 'data-id': q.id, title: 'Click to play · drag to reorder' },
         h('i', { class: 'rq-now-dot', 'aria-hidden': 'true' }),
         h('button', { class: 'rq-play', type: 'button', onclick: () => { if (!li.dataset.moved) playItem(i); } },
-          h('span', { class: 'rq-thumb' }, h('img', { src: thumb(q.vid), alt: '', loading: 'lazy', draggable: false, onerror: (e) => e.currentTarget.remove() })),
+          q.ext ? h('span', { class: 'rq-thumb is-ext', title: q.provider }, q.short || '↗')
+            : h('span', { class: 'rq-thumb' }, h('img', { src: thumb(q.vid), alt: '', loading: 'lazy', draggable: false, onerror: (e) => e.currentTarget.remove() })),
           h('span', { class: 'rq-text' },
-            h('span', { class: 'rq-title' }, q.title || (q.noTitle ? q.vid : 'Loading…')),
-            h('small', { class: 'rq-dur' }, q.author || ''))),
+            h('span', { class: 'rq-title' }, q.title || (q.ext ? q.label : q.noTitle ? q.vid : 'Loading…')),
+            h('small', { class: 'rq-dur' }, q.author || (q.ext ? q.provider : '')))),
         isOn ? h('span', { class: 'rq-now' }, 'NOW') : null,
         h('button', { class: 'rq-x', type: 'button', 'aria-label': 'Remove from queue', title: 'Remove', onclick: () => setQueue(queue().filter((x) => x.id !== q.id)) }, icon('close', 13)));
       li.addEventListener('pointerdown', (e) => { if (!e.target.closest('.rq-x')) dragItem(e, li); });
@@ -417,6 +482,11 @@ export function mountRadio(body, el, w) {
     const key = keyOf(cur);
     if (!cur.src || (!force && builtFor === key)) { paint(); return; }
     builtFor = key;
+    const ytOnly = (Array.isArray(cur.queue) ? cur.queue : []).filter((x) => !x.ext);
+    if (Array.isArray(cur.queue) && cur.queue.length && !ytOnly.length) { // only links from other platforms
+      try { player?.destroy?.(); } catch {}
+      player = null; ready = false; holder.replaceChildren(h('div')); syncExt(); paint(); return;
+    }
     const my = ++gen;
     ready = false;
     errors = 0;
@@ -428,7 +498,7 @@ export function mountRadio(body, el, w) {
     try { YT = await loadYT(); } catch (e) { if (my === gen) { title.textContent = 'Couldn’t reach YouTube'; artist.textContent = e.message; } return; }
     if (destroyed || my !== gen) return; // a newer link was set meanwhile
     const vars = { playsinline: 1, rel: 0, modestbranding: 1, controls: 1, fs: 1, iv_load_policy: 3, origin: location.origin };
-    const q = Array.isArray(cur.queue) ? cur.queue : [];
+    const q = ytOnly;
     const startAt = q.length ? Math.max(0, Math.min(q.length - 1, q.findIndex((x) => x.vid === cur.st?.vid))) : 0;
     if (q.length) vars.playlist = q.map((x) => x.vid).filter((_, i) => i !== startAt).join(',');
     else if (cur.list) { vars.listType = 'playlist'; vars.list = cur.list; }
@@ -509,12 +579,14 @@ export function mountRadio(body, el, w) {
     const s = st();
     const data = ready ? (player.getVideoData?.() || {}) : {};
     const n = queue().length;
-    title.textContent = data.title || (has ? 'Loading…' : 'Radio');
-    artist.textContent = n > 1 ? ` · Playlist · ${n} songs` : data.author ? ` · ${data.author}` : '';
+    const lk = linkNow(s);
+    syncExt(s);
+    title.textContent = lk ? (lk.title || lk.label || lk.provider) : data.title || (has ? 'Loading…' : 'Radio');
+    artist.textContent = lk ? ` · ${lk.provider}${n > 1 ? ` · ${n} in queue` : ''}` : n > 1 ? ` · Playlist · ${n} songs` : data.author ? ` · ${data.author}` : '';
     paintQueue();
     live.replaceChildren(...(s.by ? [h('i', { class: ['rd-dot', s.playing && 'is-on'] }), h('span', {}, s.by === me.id ? 'You' : (s.name || 'Live'))] : []));
     live.title = s.by ? (s.by === me.id ? 'You control the stream' : `${s.name || 'Someone'} controls the stream`) : '';
-    tune.hidden = tunedIn || !has || !s.playing;
+    tune.hidden = tunedIn || !has || !s.playing || !!lk;
   }
 
   // Drift correction: listeners follow whoever has the aux. Your volume is remembered.
@@ -549,6 +621,6 @@ export function mountRadio(body, el, w) {
       if (streaming() && tunedIn && !iControl() && next.st?.at) apply(next.st);
       else paint();
     },
-    destroy() { destroyed = true; clearInterval(tick); try { player?.destroy?.(); } catch {} },
+    destroy() { destroyed = true; clearInterval(tick); ext?.destroy(); try { player?.destroy?.(); } catch {} },
   };
 }

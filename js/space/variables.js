@@ -337,7 +337,8 @@ export function mountVariables(root, el0, w) {
     // Title beside the tabs (Nov 19): on the Space the section tabs ride in the widget header, right after
     // VARIABLES, like Path's day tabs — the header loses a whole row.
     if (w?.slot) w.slot.replaceChildren(tabs);
-    return h('div', { class: ['vr-home', fvOn && 'is-free'] }, w?.slot ? null : tabs, banner,
+    // In the sidebar's map (w.field, Nov 23b) the space is the whole field: no tabs, no other spaces.
+    return h('div', { class: ['vr-home', fvOn && 'is-free', w?.field && 'is-field'] }, w?.slot || w?.field ? null : tabs, w?.field ? null : banner,
       h('div', { class: 'vr-bar' }, h('div', { class: 'vr-crumb' }, ...bar), fvToggle),
       main,
       !list.length && !cats.length && !fvOn ? h('p', { class: 'vr-hint' }, 'A teacher, a committee, your family, the office — every influence gets its own space. Right-click here to add one.') : null);

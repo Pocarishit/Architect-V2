@@ -26,6 +26,24 @@ import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
 import { loadMyVars, myVars, setMyVars, onMyVars } from '../data/myvars.js';
 import { startVarShare, foreignCats, onShared, shareCategory, unshareCategory, addSharedNote, removeSharedNote, setSharedSpace, syncShared } from '../data/varshare.js';
 
+// The rail's own icons: thin strokes, round caps, drawn on a 24 grid.
+const RAIL_ICONS = {
+  frame: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
+  stack: '<rect x="4" y="4.5" width="11" height="4" rx="2"/><rect x="8" y="10" width="12" height="4" rx="2"/><rect x="4" y="15.5" width="11" height="4" rx="2"/>',
+  route: '<circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="5.5" r="2"/><path d="M7.2 17.2C9 14 11 14.5 13 13s3.2-3.8 4-5.8"/>',
+  dots: '<circle cx="12" cy="5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/>',
+  square: '<rect x="5" y="5" width="14" height="14" rx="3"/>',
+};
+function railIcon(name) {
+  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('width', '22'); s.setAttribute('height', '22');
+  s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '1.6');
+  s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); s.setAttribute('aria-hidden', 'true');
+  s.classList.add('sb-ic');
+  s.innerHTML = RAIL_ICONS[name];
+  return s;
+}
+
 // Objects a custom view can hold.
 const KINDS = ['path', 'fleeting', 'variables', 'timer', 'blueprints', 'chat', 'tts', 'radio'];
 const label = (k) => (k === 'path' ? 'Path' : WIDGETS[k]?.label || k);
@@ -54,19 +72,21 @@ export function mountSidebar(ctx) {
   const viewById = (id) => views().find((v) => v.id === id);
 
   /* ---------------- the rail ---------------- */
+  // Nov 23b — a slimmer rail: one simple line icon per view with its label underneath. No hover fill;
+  // only the view you're on turns amber (text, icon and a thin line at the left edge).
   function item(id, ic, text, onClick, extra = {}) {
     return h('button', {
       type: 'button', class: ['sb-item', cur === id && 'is-on'], 'data-v': id, 'aria-current': cur === id ? 'page' : 'false', title: text,
       onclick: (e) => onClick(e.currentTarget), ...extra,
-    }, icon(ic, 20), h('span', {}, text.toUpperCase()));
+    }, RAIL_ICONS[ic] ? railIcon(ic) : icon(ic, 18), h('span', {}, text.toUpperCase()));
   }
   function paintRail() {
     rail.replaceChildren(
-      item('space', 'grid', 'Architect', () => show('space')),
-      item('variables', 'widget', 'Variables', () => show('variables')),
-      item('path', 'toPaths', 'Path', () => show('path')),
-      item('more', 'burger', 'More', (b) => moreMenu(b)),
-      ...views().map((v) => item(`custom:${v.id}`, 'board', v.name || 'My view', () => show(`custom:${v.id}`), {
+      item('space', 'frame', 'Architect', () => show('space')),
+      item('variables', 'stack', 'Variables', () => show('variables')),
+      item('path', 'route', 'Path', () => show('path')),
+      item('more', 'dots', 'More', (b) => moreMenu(b)),
+      ...views().map((v) => item(`custom:${v.id}`, 'square', v.name || 'My view', () => show(`custom:${v.id}`), {
         oncontextmenu: (e) => { e.preventDefault(); viewMenu({ x: e.clientX, y: e.clientY }, v); },
       })));
   }
@@ -74,7 +94,7 @@ export function mountSidebar(ctx) {
   function moreMenu(anchor) {
     const r = anchor.getBoundingClientRect();
     menu({ x: r.right + 6, y: r.top }, [
-      { label: 'Settings', icon: 'settings', onSelect: () => ctx.openSettings('members') },
+      { label: 'Settings', icon: 'settings', onSelect: () => ctx.openSettings('general') },
       { label: 'Profile', icon: 'user', onSelect: () => ctx.openSettings('profile') },
       { label: 'Custom', icon: 'layers', onSelect: () => newView() },
       ...(views().length ? ['-', { header: 'Your views' }, ...views().map((v) => ({ label: v.name, icon: 'board', onSelect: () => show(`custom:${v.id}`) }))] : []),
@@ -134,18 +154,81 @@ export function mountSidebar(ctx) {
       h('button', { class: 'btn btn-primary sm', type: 'button', onclick: () => { ctx.addWidget(kind); requestAnimationFrame(() => requestAnimationFrame(retry)); } }, icon('plus', 14), `Add ${label(kind)}`)));
   }
 
+  /* ---------------- per-object zoom (Nov 23b) ----------------
+     Each object in a view keeps its own scale: Path and Fleeting Moments can sit at different sizes, either
+     can be locked against accidental changes, and Auto Fit hands the size back to the layout. Only that
+     object's body scales — the rest of Architect stays as it is. Saved on your account (sbZoom). */
+  const ZSTEPS = [0.5, 0.6, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.5, 1.75, 2];
+  const zoomAll = () => getPref('sbZoom', {}) || {};
+  const zoomOf = (key) => zoomAll()[key] || { z: null, locked: false };
+  const saveZoom = (key, v) => setPref('sbZoom', { ...zoomAll(), [key]: v }).catch(() => {});
+  function zoomControl(key, target) {
+    let cur = zoomOf(key);
+    const box = h('span', { class: 'sbz', role: 'group', 'aria-label': 'Zoom for this object' });
+    const apply = () => {
+      const z = cur.z || 1;
+      const b = target();
+      if (b) b.style.zoom = z === 1 ? '' : String(z);
+      box.classList.toggle('is-locked', !!cur.locked);
+      box.classList.toggle('is-auto', !cur.z);
+      paintBox();
+      requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    };
+    const set = (patch) => {
+      if (cur.locked && !('locked' in patch)) { toast('This object’s zoom is locked — unlock it first.', { ms: 1600 }); return; }
+      cur = { ...cur, ...patch };
+      if (cur.z && Math.abs(cur.z - 1) < 0.001) cur.z = 1;
+      saveZoom(key, cur); apply();
+    };
+    const step = (d) => {
+      const z = cur.z || 1;
+      const i = ZSTEPS.findIndex((x) => x >= z - 0.001);
+      const at = i < 0 ? ZSTEPS.length - 1 : i;
+      const next = d > 0 ? ZSTEPS[Math.min(ZSTEPS.length - 1, ZSTEPS[at] > z + 0.001 ? at : at + 1)] : ZSTEPS[Math.max(0, at - 1)];
+      set({ z: next });
+    };
+    function paintBox() {
+      const z = cur.z;
+      box.replaceChildren(
+        h('button', { type: 'button', 'aria-label': 'Zoom out', title: 'Zoom out', disabled: !!cur.locked, onclick: () => step(-1) }, icon('minus', 12)),
+        h('button', { type: 'button', class: 'sbz-val', title: 'Zoom options', 'aria-haspopup': 'menu', onclick: (e) => menu(e.currentTarget, [
+          { label: 'Auto Fit', icon: 'fit', checked: !z, disabled: !!cur.locked, onSelect: () => set({ z: null }) },
+          '-',
+          ...[0.5, 0.75, 0.9, 1, 1.25, 1.5].map((x) => ({ label: `${Math.round(x * 100)}%`, checked: z === x, disabled: !!cur.locked, onSelect: () => set({ z: x }) })),
+          '-',
+          { label: cur.locked ? 'Unlock zoom' : 'Lock zoom', icon: cur.locked ? 'lockOpen' : 'lock', onSelect: () => set({ locked: !cur.locked }) },
+        ], { align: 'end' }) }, z ? `${Math.round(z * 100)}%` : 'AUTO'),
+        h('button', { type: 'button', 'aria-label': 'Zoom in', title: 'Zoom in', disabled: !!cur.locked, onclick: () => step(1) }, icon('plus', 12)),
+        h('button', { type: 'button', class: 'sbz-lock', 'aria-pressed': String(!!cur.locked), 'aria-label': cur.locked ? 'Unlock zoom' : 'Lock zoom', title: cur.locked ? 'Zoom locked' : 'Lock zoom', onclick: () => set({ locked: !cur.locked }) }, icon(cur.locked ? 'lock' : 'lockOpen', 12)));
+    }
+    // Ctrl/⌘ + wheel over the object zooms just the object (never the whole page).
+    const onWheel = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      if (cur.locked) return;
+      clearTimeout(onWheel.t);
+      onWheel.acc = (onWheel.acc || 0) + e.deltaY;
+      onWheel.t = setTimeout(() => { const d = onWheel.acc; onWheel.acc = 0; if (Math.abs(d) > 2) step(d < 0 ? 1 : -1); }, 60);
+    };
+    apply();
+    return { el: box, apply, onWheel, reset() { const b = target(); if (b) b.style.zoom = ''; } };
+  }
+
   // A panel that holds one object: a borrowed board object, or your Path.
-  function objectPanel(kind, { title, hideTitle, hideHeader, menuItems } = {}) {
+  function objectPanel(kind, { title, hideTitle, hideHeader, menuItems, zoomKey } = {}) {
     const box = h('div', { class: ['el-widget sb-obj', hideHeader && 'no-head', hideTitle && 'no-title'], 'data-wkind': kind });
     let back = null, paths = null;
     const more = menuItems ? h('button', { class: 'wg-btn sb-obj-more', type: 'button', 'aria-label': `${title || label(kind)} options`, onclick: (e) => menu(e.currentTarget, menuItems(), { align: 'end' }) }, icon('more', 15)) : null;
+    const zc = zoomKey ? zoomControl(zoomKey, () => box.querySelector(':scope > .wg-body')) : null;
+    if (zc) box.addEventListener('wheel', zc.onWheel, { passive: false });
     if (kind === 'path') {
       const t = h('span', { class: 'wg-title' }, (title || `${me.username}’s Path`).toUpperCase());
       const slot = h('span', { class: 'wg-slot' });
-      const head = h('div', { class: 'wg-head' }, h('span', { class: 'wg-grip', 'aria-hidden': 'true' }), t, slot, h('span', { class: 'wg-space' }), more);
+      const head = h('div', { class: 'wg-head' }, h('span', { class: 'wg-grip', 'aria-hidden': 'true' }), t, slot, h('span', { class: 'wg-space' }), zc?.el, more);
       const body = h('div', { class: 'wg-body' });
       box.append(head, body);
       paths = mountPaths(body, null, { embedded: true, owner: me.id, daySlot: slot });
+      zc?.apply();
     } else {
       const fill = () => {
         back?.(); back = null;
@@ -156,6 +239,7 @@ export function mountSidebar(ctx) {
         if (title && head) { const t = head.querySelector('.wg-title'); if (t) { t.dataset.sbOwn = t.textContent; t.textContent = title.toUpperCase(); } }
         // The board's own ··· stays at home in spirit: the panel's menu takes its place while it's here.
         if (more && head) { head.querySelector(':scope > .wg-btn:last-child')?.classList.add('sb-hide'); head.append(more); }
+        if (zc && head) { const last = head.querySelector(':scope > .wg-btn:not(.sb-hide):last-of-type'); head.insertBefore(zc.el, more && more.parentNode === head ? more : last || null); zc.apply(); }
       };
       fill();
       // The object was deleted or replaced on the board: follow it.
@@ -166,6 +250,7 @@ export function mountSidebar(ctx) {
       el: box,
       destroy() {
         box._off?.();
+        if (zc) { zc.reset(); zc.el.remove(); box.removeEventListener('wheel', zc.onWheel); }
         if (back) {
           const head = box.querySelector(':scope > .wg-head');
           const t = head?.querySelector('.wg-title');
@@ -181,10 +266,32 @@ export function mountSidebar(ctx) {
 
   /* ================= PATH: Path left, Fleeting Moments right ================= */
   function pathView(v) {
-    const left = objectPanel('path');
-    const right = objectPanel('fleeting');
+    const left = objectPanel('path', { zoomKey: 'path:path' });
+    const right = objectPanel('fleeting', { zoomKey: 'path:fleeting' });
     v.classList.add('sbv-split');
-    v.append(h('div', { class: 'sbv-cols' }, h('div', { class: 'sbv-col is-wide' }, left.el), h('div', { class: 'sbv-col' }, right.el)));
+    // The split itself: drag the gutter to give either side more room (remembered on your account).
+    let ratio = Math.min(0.8, Math.max(0.25, Number(getPref('sbSplit', 0.59)) || 0.59));
+    const a = h('div', { class: 'sbv-col', style: { flex: `${ratio} 1 0` } }, left.el);
+    const b = h('div', { class: 'sbv-col', style: { flex: `${1 - ratio} 1 0` } }, right.el);
+    const gutter = h('button', { type: 'button', class: 'sbv-gutter', 'aria-label': 'Resize Path and Fleeting Moments', title: 'Drag to resize · double-click to reset' }, h('i'));
+    const row = h('div', { class: 'sbv-cols' }, a, gutter, b);
+    const setRatio = (r, save) => {
+      ratio = Math.min(0.8, Math.max(0.25, r));
+      a.style.flex = `${ratio} 1 0`; b.style.flex = `${1 - ratio} 1 0`;
+      if (save) setPref('sbSplit', Math.round(ratio * 1000) / 1000).catch(() => {});
+      window.dispatchEvent(new Event('resize'));
+    };
+    gutter.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      gutter.classList.add('is-drag');
+      const r = row.getBoundingClientRect();
+      const move = (ev) => setRatio((ev.clientX - r.left) / r.width, false);
+      const up = () => { gutter.classList.remove('is-drag'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); setRatio(ratio, true); };
+      window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+    });
+    gutter.addEventListener('dblclick', () => setRatio(0.59, true));
+    gutter.addEventListener('keydown', (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setRatio(ratio + (e.key === 'ArrowLeft' ? -0.03 : 0.03), true); } });
+    v.append(row);
     return { destroy() { left.destroy(); right.destroy(); } };
   }
 
@@ -195,9 +302,9 @@ export function mountSidebar(ctx) {
     const st = store.get(vmem, {}) || {};
     let cat = st.cat || null;      // a top-level section id, or "s:<sharedItemId>" for someone else's category
     let open = st.open || null;    // entry id
-    let query = '';
     let mapMode = null;            // null | 'compact' | 'full'
-    const remember = () => store.set(vmem, { cat, open });
+    let sideHidden = !!st.sideHidden; // the chat sidebar, hidden with the button beside the space name
+    const remember = () => store.set(vmem, { cat, open, sideHidden });
 
     const acct = () => myVars() || { sections: null, entries: [] };
     const sections = () => acct().sections || [];
@@ -219,7 +326,7 @@ export function mountSidebar(ctx) {
     let mapCtl = null;
 
     function pickCat(id) {
-      cat = id; open = null; query = '';
+      cat = id; open = null;
       const first = firstEntry();
       if (first) open = first.id;
       remember(); paint();
@@ -251,7 +358,6 @@ export function mountSidebar(ctx) {
         type: 'button', role: 'tab', class: ['sbv-cat is-theirs', cat === `s:${it.id}` && 'is-on'], 'aria-selected': String(cat === `s:${it.id}`), title: `${it.data?.name || 'Category'} · shared by ${it.data?.owner || 'a member'}`,
         onclick: () => pickCat(`s:${it.id}`),
       }, cover({ name: it.data?.name || '?', img: it.data?.img }, { foreignOwner: it.data?.owner || '?' })));
-      const add = h('button', { type: 'button', class: 'sbv-cat-add', title: 'New category', 'aria-label': 'New category', onclick: () => newCategory() }, icon('plus', 16));
       const s = !isForeign() && sections().find((x) => x.id === cat);
       const shareBtn = s ? h('button', {
         type: 'button', class: ['sbv-share', s.share?.item && 'is-on'], 'aria-pressed': String(!!s.share?.item),
@@ -259,19 +365,31 @@ export function mountSidebar(ctx) {
         onclick: () => toggleShare(s),
       }, icon(s.share?.item ? 'users' : 'lock', 15), h('span', {}, s.share?.item ? 'SHARED' : 'PRIVATE'))
         : isForeign() ? h('span', { class: 'sbv-share is-ro' }, icon('users', 15), h('span', {}, `SHARED BY ${(foreignItem()?.data?.owner || '').toUpperCase()}`)) : null;
-      top.replaceChildren(h('div', { class: 'sbv-cats-row' }, ...mine, ...theirs, add), h('span', { class: 'sbv-flex' }), shareBtn);
+      top.replaceChildren(sideHidden ? sideToggle() : '', h('div', { class: 'sbv-cats-row' }, ...mine, ...theirs), h('span', { class: 'sbv-flex' }), shareBtn || '');
     }
+    // Spaces are added from a right-click on the row of tiles (no + button).
+    top.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.sbv-cat, .sbv-share, .sbv-icon')) return;
+      e.preventDefault();
+      menu({ x: e.clientX, y: e.clientY }, [{ label: 'New space…', icon: 'plus', onSelect: newCategory }]);
+    });
+    const sideToggle = () => h('button', {
+      type: 'button', class: 'sbv-icon sbv-sidetoggle', 'aria-pressed': String(!sideHidden),
+      'aria-label': sideHidden ? 'Show the chat sidebar' : 'Hide the chat sidebar', title: sideHidden ? 'Show sidebar' : 'Hide sidebar',
+      onclick: () => { sideHidden = !sideHidden; remember(); paint(); },
+    }, icon('sidebar', 17));
 
+    // The chat sidebar: the active space's name as a Doto header (the chevron switches spaces), the
+    // hide-sidebar button on the same row, its chats, and the map as a plain square at the bottom.
     function paintSide() {
+      v.classList.toggle('is-side-hidden', sideHidden);
       const name = isForeign() ? (foreignItem()?.data?.name || 'Shared') : (sections().find((x) => x.id === cat)?.name || 'Variables');
-      const search = h('input', { class: 'sbv-search', type: 'search', placeholder: 'Find a chat', value: query, 'aria-label': 'Find a chat',
-        oninput: (e) => { query = e.target.value; paintList(); } });
-      const catBtn = h('button', { type: 'button', class: 'sbv-catpick', onclick: (e) => catPicker(e.currentTarget) }, h('span', {}, name.toUpperCase()), icon('chevronDown', 13));
-      const catMore = !isForeign() && cat ? h('button', { type: 'button', class: 'sbv-icon', 'aria-label': 'Category options', onclick: (e) => catMenu(e.currentTarget, sections().find((x) => x.id === cat)) }, icon('more', 15)) : null;
+      const pick = h('button', { type: 'button', class: 'sbv-spacepick', title: 'Switch space', 'aria-haspopup': 'menu', onclick: (e) => catPicker(e.currentTarget),
+        oncontextmenu: (e) => { if (isForeign() || !cat) return; e.preventDefault(); catMenu({ x: e.clientX, y: e.clientY }, sections().find((x) => x.id === cat)); },
+      }, h('span', {}, name), icon('chevronDown', 14));
       list = h('div', { class: 'sbv-list', role: 'list' });
       side.replaceChildren(
-        h('header', { class: 'sbv-side-head' }, h('span', { class: 'sbv-title' }, 'VARIABLES'), search),
-        h('div', { class: 'sbv-catbar' }, catBtn, catMore),
+        h('header', { class: 'sbv-spacebar' }, pick, sideToggle()),
         list,
         mapCard());
       paintList();
@@ -279,8 +397,7 @@ export function mountSidebar(ctx) {
     let list = null;
     function paintList() {
       if (!list) return;
-      const q = query.trim().toLowerCase();
-      const hit = (x) => !q || (x.name || '').toLowerCase().includes(q);
+      const hit = () => true;
       const row = (x, depth = 0) => h('button', {
         type: 'button', role: 'listitem', class: ['sbv-row', open === x.id && 'is-on'], style: { '--d': depth },
         onclick: () => { open = x.id; remember(); paintList(); paintMain(); },
@@ -300,45 +417,42 @@ export function mountSidebar(ctx) {
           for (const x of entriesIn(id).filter(hit)) out.push(row(x, depth));
           for (const s of kids(id)) { out.push(h('div', { class: 'sbv-group', style: { '--d': depth } }, s.name.toUpperCase())); walk(s.id, depth + 1); }
         };
-        walk(cat, 0);
         out.push(h('button', { type: 'button', class: 'sbv-row sbv-new', onclick: () => newChat() }, icon('plus', 13), h('span', {}, 'NEW CHAT')));
+        walk(cat, 0);
       }
-      if (!out.length) out.push(h('p', { class: 'sbv-hint' }, q ? 'No chat matches.' : 'No chats here yet.'));
+      if (!out.length) out.push(h('p', { class: 'sbv-hint' }, 'No chats here yet.'));
       list.replaceChildren(...out);
     }
 
-    // The category map: this category's tiles and variables, as in the Variables object.
+    // The map: a plain square at the bottom of the sidebar (no title, no toolbar). Open it to see the
+    // active space's field — its name faint in Doto at the centre, its subsections as regular tiles.
     function mapCard() {
       if (isForeign() || !cat) return h('span');
-      const secs = kids(cat).slice(0, 6), ents = entriesIn(cat).slice(0, 6 - Math.min(6, secs.length));
-      const preview = h('div', { class: 'sbv-map-prev' },
-        ...secs.map((s) => h('span', { class: 'sbv-mini is-sec', style: { '--h': hue(s.name) } }, s.img && urlOf(s.img, paint) ? h('img', { src: urlOf(s.img), alt: '' }) : null)),
-        ...ents.map((x) => h('span', { class: 'sbv-mini', style: { '--h': hue(x.name) } }, x.photo && urlOf(x.photo, paint) ? h('img', { src: urlOf(x.photo), alt: '' }) : null)));
-      return h('section', { class: 'sbv-mapcard' },
-        h('header', {}, h('span', {}, 'VARIABLES MAP'),
-          h('button', { type: 'button', class: 'sbv-maplink', onclick: () => openMap('compact') }, 'Open map', icon('chevronRight', 12)),
-          h('button', { type: 'button', class: 'sbv-icon', 'aria-label': 'Open the map full screen', title: 'Full screen', onclick: () => openMap('full') }, icon('fullscreen', 13))),
-        h('button', { type: 'button', class: 'sbv-map-hit', 'aria-label': 'Open the category map', onclick: () => openMap('compact') }, preview));
+      return h('div', { class: 'sbv-mapsq', role: 'button', tabindex: 0, 'aria-label': 'Open the map', onclick: () => openMap('compact'),
+        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMap('compact'); } } },
+        h('button', { type: 'button', class: 'sbv-mapsq-full', 'aria-label': 'Open the map full screen', title: 'Full screen', onclick: (e) => { e.stopPropagation(); openMap('full'); } }, icon('fullscreen', 14)));
     }
     function openMap(mode) {
       mapMode = mode;
+      if (mapCtl?._watch) clearInterval(mapCtl._watch);
       mapCtl?.destroy(); mapCtl = null;
+      const s = sections().find((x) => x.id === cat);
       const body = h('div', { class: 'sbv-map-body' });
-      const bar = h('header', { class: 'sbv-map-head' },
-        h('span', {}, `${(sections().find((x) => x.id === cat)?.name || '').toUpperCase()} · MAP`),
-        h('span', { class: 'sbv-flex' }),
+      const field = h('div', { class: 'sbv-field' }, h('span', { class: 'sbv-field-name', 'aria-hidden': 'true' }, s?.name || ''), body);
+      // Full screen sits beside the close X, right on the canvas.
+      const ctl = h('div', { class: 'sbv-map-ctl' },
         h('button', { type: 'button', class: 'sbv-icon', 'aria-label': mode === 'full' ? 'Compact' : 'Full screen', title: mode === 'full' ? 'Compact' : 'Full screen', onclick: () => openMap(mode === 'full' ? 'compact' : 'full') }, icon(mode === 'full' ? 'exitFullscreen' : 'fullscreen', 15)),
-        h('button', { type: 'button', class: 'sbv-icon', 'aria-label': 'Close the map', onclick: closeMap }, icon('close', 15)));
-      mapLayer.replaceChildren(h('div', { class: ['sbv-map-card', `is-${mode}`], 'data-wkind': 'variables' }, bar, body));
+        h('button', { type: 'button', class: 'sbv-icon', 'aria-label': 'Close the map', title: 'Close', onclick: closeMap }, icon('close', 15)));
+      mapLayer.replaceChildren(h('div', { class: ['sbv-map-card is-field', `is-${mode}`], 'data-wkind': 'variables' }, field, ctl));
       mapLayer.hidden = false;
       mapLayer.classList.toggle('is-full', mode === 'full');
-      mapCtl = mountVariables(body, { id: `sidebar-map-${me.id}`, kind: 'variables', sections: [], entries: [] }, { host: { personal: false } });
+      mapCtl = mountVariables(body, { id: `sidebar-map-${me.id}`, kind: 'variables', sections: [], entries: [] }, { host: { personal: false }, field: true });
       mapCtl.show?.({ section: cat, sub: null, open: null });
       // Opening a variable from the map opens its chat in the main pane.
       const watch = setInterval(() => {
-        const s = mapCtl?.state?.();
-        if (!s?.open) return;
-        open = s.open; cat = topOf(s.open) || cat; remember();
+        const st2 = mapCtl?.state?.();
+        if (!st2?.open) return;
+        open = st2.open; cat = topOf(st2.open) || cat; remember();
         mapCtl.show({ open: null });
         closeMap(); paint();
       }, 200);
@@ -374,7 +488,7 @@ export function mountSidebar(ctx) {
       main.querySelector('.sbv-blank')?.remove();
       const x = open && (acct().entries || []).find((e) => e.id === open);
       chatHost.hidden = !x;
-      if (!x) { main.append(blank(cat ? 'Pick a chat on the left — or make a new one.' : 'Make a category to start.')); return; }
+      if (!x) { main.append(blank(cat ? (sideHidden ? 'Open the sidebar to pick a chat.' : 'Pick a chat on the left — or make a new one.') : 'Right-click the top bar to add a space.')); return; }
       const st2 = chatCtl.state?.() || {};
       if (st2.open !== x.id) chatCtl.show({ section: topOf(x.id), sub: null, open: x.id });
     }
@@ -390,13 +504,15 @@ export function mountSidebar(ctx) {
 
     /* ---------- actions ---------- */
     function catPicker(anchor) {
+      const curSec = !isForeign() && sections().find((x) => x.id === cat);
       menu(anchor, [
-        { header: 'Your categories' },
+        { header: 'Your spaces' },
         ...tops().map((s) => ({ label: s.name, checked: s.id === cat, icon: s.share?.item ? 'users' : 'lock', onSelect: () => pickCat(s.id) })),
         ...(foreign().length ? ['-', { header: 'Shared with you' }, ...foreign().map((it) => ({ label: `${it.data?.name || 'Category'} · ${it.data?.owner || ''}`, checked: cat === `s:${it.id}`, icon: 'users', onSelect: () => pickCat(`s:${it.id}`) }))] : []),
         '-',
-        { label: 'New category…', icon: 'plus', onSelect: newCategory },
-      ]);
+        curSec ? { label: `${curSec.name} options…`, icon: 'more', onSelect: () => catMenu(anchor, curSec) } : null,
+        { label: 'New space…', icon: 'plus', onSelect: newCategory },
+      ].filter(Boolean));
     }
     function catMenu(anchor, s) {
       if (!s) return;
@@ -409,6 +525,8 @@ export function mountSidebar(ctx) {
         s.img ? { label: 'Remove cover', icon: 'eyeOff', onSelect: () => patchSec(s.id, { img: null }) } : null,
         { label: s.share?.item ? 'Make private' : 'Share with your Space', icon: s.share?.item ? 'lock' : 'users', onSelect: () => toggleShare(s) },
         { label: 'Open map', icon: 'grid', onSelect: () => { if (cat !== s.id) pickCat(s.id); openMap('compact'); } },
+        '-',
+        { label: 'New space…', icon: 'plus', onSelect: newCategory },
       ].filter(Boolean));
     }
     function entryMenu(anchor, x) {
@@ -424,7 +542,7 @@ export function mountSidebar(ctx) {
     const patchSec = (id, p) => setMyVars({ sections: sections().map((x) => (x.id === id ? { ...x, ...p } : x)) });
     const ensureSecs = () => { if (!acct().sections) setMyVars({ sections: [] }); };
     async function newCategory() {
-      const n = await promptDialog('New category', { placeholder: 'University, Family, Business…', maxLength: 40, ok: 'Create' });
+      const n = await promptDialog('New space', { placeholder: 'Money, University, Family…', maxLength: 40, ok: 'Create' });
       if (!n?.trim()) return;
       ensureSecs();
       const s = { id: uid(), name: n.trim().slice(0, 40) };
@@ -445,7 +563,7 @@ export function mountSidebar(ctx) {
       open = x.id; remember(); paint();
     }
     async function rename(s) {
-      const n = await promptDialog('Rename category', { value: s.name, maxLength: 40 });
+      const n = await promptDialog('Rename space', { value: s.name, maxLength: 40 });
       if (n?.trim()) patchSec(s.id, { name: n.trim().slice(0, 40) });
     }
     async function setCover(s) {
@@ -524,7 +642,7 @@ export function mountSidebar(ctx) {
       return { el, destroy() { off(); el.remove(); } };
     }
 
-    const offVars = onMyVars((d, keys) => { if (keys && keys.every((k) => k === 'ideas')) return; if (!document.activeElement?.closest?.('.sbv-side input')) paint(); else paintList(); });
+    const offVars = onMyVars((d, keys) => { if (keys && keys.every((k) => k === 'ideas')) return; paint(); });
     const offShared = onShared(() => { paintTop(); if (isForeign()) paintList(); });
     loadMyVars().then(() => { paint(); syncShared(); }).catch(() => paint());
     paint();
@@ -583,7 +701,7 @@ export function mountSidebar(ctx) {
     const patchItem = async (id, p) => { await save((v.items || []).map((x) => (x.id === id ? { ...x, ...p } : x))); show2(v.id); };
     for (const it of v.items || []) {
       const p = objectPanel(it.kind, {
-        title: it.title, hideTitle: it.hideTitle, hideHeader: it.hideHeader,
+        title: it.title, hideTitle: it.hideTitle, hideHeader: it.hideHeader, zoomKey: `custom:${v.id}:${it.id}`,
         menuItems: () => [
           { label: 'Rename…', icon: 'edit', onSelect: async () => { const n = await promptDialog('Rename object', { value: it.title || label(it.kind), maxLength: 32 }); if (n != null) patchItem(it.id, { title: n.trim() || null }); } },
           { label: it.hideTitle ? 'Show title' : 'Hide title', icon: 'type', onSelect: () => patchItem(it.id, { hideTitle: !it.hideTitle }) },

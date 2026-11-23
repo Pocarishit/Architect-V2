@@ -7,6 +7,7 @@ import { api, friendlyError } from '../data/api.js';
 import { loadPrefs, getPref, setPref, prefsOf } from '../data/prefs.js';
 import { printToPdf, pdfHint } from '../core/print.js';
 import { windowOf, stateOf, clock, logSetpoints, dayStart, spDayKey, keyOf } from '../data/setpoints.js';
+import { anytypeOn, loadImports, importsFor, importStatus, checkOf, setCheck, onAnytype, anytypeLink } from '../data/anytype.js';
 
 export const DEFAULT_PATHS = ['Morning', 'Afternoon', 'Atemporal', 'Futures', 'Cache'];
 const DEFAULT_TITLE = 'Paths';
@@ -178,6 +179,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     }
     loading = false;
     render();
+    if (!readOnly && anytypeOn()) loadImports().then(() => render()).catch(() => {});
   }
 
   /* ---------------- Rendering ---------------- */
@@ -204,7 +206,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     el.classList.toggle('is-mobile-detail', !!detail);
     el.classList.toggle('is-picking', picked.size > 0);
     rendering = true;
-    try { el.replaceChildren(...(detail ? [detailHeader(detail), detailBody(detail)] : embedded ? [body()] : [header(), body()])); } finally { rendering = false; }
+    try { el.replaceChildren(...(detail ? [detailHeader(detail), detailBody(detail)] : embedded ? [axStatus(), body()] : [header(), axStatus(), body()]).filter(Boolean)); } finally { rendering = false; }
     const next = el.querySelector('.pboard');
     if (next) next.scrollLeft = scrollLeft;
     renderSelBar();
@@ -385,11 +387,35 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
         readOnly ? null : h('button', { class: 'icon-btn sm', 'data-act': 'col-menu', 'aria-label': `${col.title} options` }, icon('more', 16))),
       h('div', { class: 'pcol-list', 'data-list': col.id },
         goalView(col),
+        axViews(col),
         list.map(taskView),
         composerFor === col.id ? composerView(col) : null),
       composerFor !== col.id && !readOnly
         ? h('button', { class: 'pcol-add', 'data-act': 'add-task' }, icon('plus', 16), h('span', {}, 'Add task'))
         : null);
+  }
+
+  /* ---- Anytype imports (Nov 23b) ----
+     Read-only items from the Anytype page section / collection mapped to this Set-Point. Anytype owns the
+     wording; Architect owns the checkmark, per Architect day — so a refreshed import never resets it,
+     and checking one off never changes Anytype. */
+  function axViews(col) {
+    if (readOnly || !anytypeOn()) return null;
+    const day = goalDay();
+    return importsFor(col.id, day).map((it) => {
+      const c = checkOf(it.key, day);
+      return h('article', { class: ['ptask', 'is-imported', c.done && 'is-done', c.pending && 'is-pending'], 'data-ax': it.key, title: c.pending ? 'Saved on this device — syncing' : null },
+        h('button', { class: 'pcheck', 'data-act': 'ax-toggle', role: 'checkbox', 'aria-checked': String(c.done), 'aria-label': `${c.done ? 'Mark not done' : 'Mark done'}: ${it.fields?.title || ''}` }, icon('check', 12, { weight: 2.4 })),
+        h('div', { class: 'ptask-body' },
+          h('div', { class: 'ptask-title' }, it.fields?.title || 'Untitled', h('span', { class: 'pax-tag', title: 'Imported from Anytype — edit it in Anytype' }, 'ANYTYPE')),
+          it.fields?.body ? h('div', { class: 'ptask-note' }, it.fields.body) : null),
+        h('button', { class: 'icon-btn xs ptask-more', 'data-act': 'ax-menu', 'aria-label': 'Imported item options' }, icon('more', 16)));
+    });
+  }
+  function axStatus() {
+    if (readOnly || !anytypeOn() || loading || loadError) return null;
+    const st = importStatus();
+    return st ? h('div', { class: ['pax-status', `is-${st.tone}`], role: 'status' }, h('i'), h('span', {}, st.text)) : null;
   }
 
   // "#12" in a task title links to ticket #012 on the Ticket board.
@@ -779,6 +805,20 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       return;
     }
     if (readOnly) return;
+    if (act === 'ax-toggle' || act === 'ax-menu') {
+      const key = t.closest('[data-ax]')?.dataset.ax;
+      if (!key) return;
+      const day = goalDay();
+      if (act === 'ax-toggle') { setCheck(key, day, !checkOf(key, day).done); render(); return; }
+      const it = importsFor(col?.id, day).find((x) => x.key === key);
+      menu(t, [
+        { header: 'From Anytype' },
+        it ? { label: 'Open in Anytype', icon: 'external', onSelect: () => { location.href = anytypeLink(it); } } : null,
+        { label: 'Sync now', icon: 'history', onSelect: () => loadImports({ force: true }).then(render) },
+        { label: 'Anytype settings…', icon: 'settings', onSelect: () => import('./settings.js').then((m) => m.openSettings({ tab: 'integrations' })) },
+      ].filter(Boolean), { align: 'end' });
+      return;
+    }
     // Selecting: ⌘/Ctrl-click toggles, Shift-click selects a range; once anything is selected, a click toggles.
     if (task && (act === 'edit-title' || act === 'edit-note' || act === 'open-ticket') && (e.metaKey || e.ctrlKey || e.shiftKey || picked.size)) {
       togglePick(task, { range: e.shiftKey });
@@ -985,7 +1025,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   el.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || e.pointerType === 'touch' || readOnly) return;
     if (e.target.closest('button, textarea, input')) return;
-    const card = e.target.closest('.ptask:not(.is-composer):not(.is-editing):not(.is-goal)');
+    const card = e.target.closest('.ptask:not(.is-composer):not(.is-editing):not(.is-goal):not(.is-imported)');
     if (card) {
       drag = { card, id: card.dataset.task, x0: e.clientX, y0: e.clientY, started: false };
       listen(onDragMove, onDragEnd);
@@ -1230,7 +1270,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   el.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1) { cancelPress(); return; }
     const tch = e.touches[0];
-    const card = e.target.closest('.ptask:not(.is-composer):not(.is-editing):not(.is-goal)');
+    const card = e.target.closest('.ptask:not(.is-composer):not(.is-editing):not(.is-goal):not(.is-imported)');
     const tile = e.target.closest('.ptile:not(.is-new)');
     if (!card && !tile) return;
     if (card && e.target.closest('button')) return;
@@ -1397,6 +1437,10 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   };
   window.addEventListener('architect:drop-task', onDropTask);
 
+  // Anytype imports refresh on their own clock (cheap: three small reads), and repaint when a checkmark syncs.
+  const offAx = onAnytype(() => { if (!readOnly && idleNow()) render(); });
+  const axPoll = !readOnly ? setInterval(() => { if (!document.hidden && anytypeOn()) loadImports(); }, 60_000) : 0;
+
   render();
   load();
 
@@ -1416,6 +1460,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       window.scrollTo(0, 0);
     },
     destroy() {
+      offAx(); clearInterval(axPoll);
       onNarrow.disconnect();
       clearInterval(livePoll); clearTimeout(reloadT);
       window.removeEventListener('architect:paths-changed', onChanged);

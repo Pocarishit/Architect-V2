@@ -316,7 +316,9 @@ export function mountVariables(root, el0, w) {
       h('button', { type: 'button', class: 'vr-tab-add', title: 'Add', 'aria-label': 'Add a section or import', onclick: (e) => addMenu(e.currentTarget) }, icon('plus', 14)));
 
     const cur = here();
-    const fvOn = freeOn();
+    // Nov 25: the sidebar's map always shows everything at once (never the Free View layer, which only
+    // holds the items you've already pulled onto it — that's what left the map an empty dotted grid).
+    const fvOn = freeOn() && !w?.field;
     const cats = kids(cur);
     const list = inSec(cur);
 
@@ -400,7 +402,7 @@ export function mountVariables(root, el0, w) {
     if (w?.slot) w.slot.replaceChildren(tabs);
     // In the sidebar's map (w.field, Nov 23b) the space is the whole field: no tabs, no other spaces.
     return h('div', { class: ['vr-home', fvOn && 'is-free', w?.field && 'is-field'] }, w?.slot || w?.field ? null : tabs, w?.field ? null : banner,
-      h('div', { class: 'vr-bar' }, h('div', { class: 'vr-crumb' }, ...bar), fvToggle),
+      w?.field ? null : h('div', { class: 'vr-bar' }, h('div', { class: 'vr-crumb' }, ...bar), fvToggle),
       main,
       !list.length && !cats.length && !fvOn ? h('p', { class: 'vr-hint' }, 'A teacher, a committee, your family, the office — every influence gets its own space. Right-click here to add one.') : null);
   }
@@ -419,10 +421,12 @@ export function mountVariables(root, el0, w) {
   }
 
   // A subsection opened out on the map: its name (Doto), its variables, its own subsections as tiles.
-  function group(c) {
-    const inner = [...inSec(c.id).map((x) => card(x)), ...kids(c.id).map((k) => tile(k))];
+  function group(c, depth = 0, seen = new Set()) {
+    // Nested subsections open out too (Nov 25): nothing on the map waits for a click to appear.
+    seen.add(c.id);
+    const inner = [...inSec(c.id).map((x) => card(x)), ...kids(c.id).filter((k) => !seen.has(k.id)).map((k) => (depth < 6 ? group(k, depth + 1, seen) : tile(k)))];
     const node = h('section', {
-      class: ['vr-group', c.color && 'has-color'], 'data-sec': c.id, style: c.color ? { '--vc': c.color } : null,
+      class: ['vr-group', depth && 'is-nested', c.color && 'has-color'], 'data-sec': c.id, style: c.color ? { '--vc': c.color } : null,
       oncontextmenu: (e) => { if (e.target.closest('.vr-card, .vr-cat')) return; e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, c); },
     },
       h('header', { class: 'vr-group-head' },

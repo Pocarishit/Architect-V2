@@ -98,7 +98,8 @@ const AXES = { mine: ['EXTERNAL', 'INTERNAL'], shared: ['PRODUCE', 'CONSUME'] };
 const tf = (x, y, tilt = 0, lift = false) => `translate(${x}px, ${y}px) rotate(${lift ? 0 : tilt}deg)${lift ? ' scale(1.04)' : ''}`;
 const fold = (v) => { v = ((v % 2) + 2) % 2; return v > 1 ? 2 - v : v; };
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
-const MOMENT_TABS = [['story', 'Story'], ['weekly', 'Weekly']];
+// Nov 25 — Weekly isn't used any more: Fleeting Moments is Story, with no tab bar.
+const MOMENT_TABS = [['story', 'Story']];
 const DEFAULT_GOAL = 'Rona’s Apartment';
 // Weekly looks — yours alone (saved to your account prefs), so everyone can plan on their own backdrop.
 const WK_THEMES = [
@@ -130,7 +131,14 @@ export function mountFleeting(root, el0, w, opts = {}) {
   let ideaView = mem.iv === 'shared' ? 'shared' : 'mine';
   const personal = !!w.host?.personal;
   let mineReady = false;
-  const remember = () => store.set(memKey, { tab, cal, iv: ideaView });
+  // Story's time zoom (Nov 25): how much line a day gets. Zooming changes the visible stretch of the day and
+  // how far apart moments sit — never the size of the cards, their text or their pictures.
+  let zoomT = Math.min(6, Math.max(0.35, Number(mem.zt) || 1));
+  let full = false;                       // Story fills the screen
+  const selFr = new Set();                // Ctrl-click selection of moments
+  let frontId = null;                     // picked from a stack: drawn on top
+  const undoMoves = [];                   // { day, list } before each move — Ctrl+Z
+  const remember = () => store.set(memKey, { tab, cal, iv: ideaView, zt: zoomT });
   const view = () => (tab === 'story' && cal ? 'tracker' : tab);
 
   const tabsRow = h('div', { class: 'fi-tabs', role: 'tablist' });
@@ -226,7 +234,8 @@ export function mountFleeting(root, el0, w, opts = {}) {
   }
 
   function paint() {
-    tabsRow.replaceChildren(...TABS.map(([id, label]) => h('button', {
+    tabsRow.hidden = TABS.length < 2;
+    tabsRow.replaceChildren(...(TABS.length < 2 ? [] : TABS).map(([id, label]) => h('button', {
       type: 'button', role: 'tab', class: ['fi-tab', tab === id && 'is-on'], 'aria-selected': String(tab === id),
       onclick: () => setTab(id),
     }, label)));
@@ -234,11 +243,11 @@ export function mountFleeting(root, el0, w, opts = {}) {
     box.dataset.tab = tab;
     // Story has no narration box any more: click the line where the moment happened. The ideas canvas keeps
     // its composer (in Side Chat) and also takes a click on open space.
-    composer.hidden = v !== 'ideas';
-    attach.hidden = tab !== 'story';
+    paintComposer();
     input.placeholder = tab === 'story' ? (day === storyKey() ? 'narrate this moment…' : `add to ${shortDate(parseKey(day))}…`) : 'type an idea…';
+    if (phoneStory()) input.placeholder = '';
     input.setAttribute('aria-label', tab === 'story' ? 'Narrate a moment' : 'Type an idea');
-    aside.replaceChildren(...(tab === 'story' ? [...(cal ? [] : dayNav()), ...(cal ? [] : [mediaBtn()]), calBtn()] : tab === 'ideas' ? [viewSwitch()] : []));
+    aside.replaceChildren(...(tab === 'story' ? [...(cal ? [] : dayNav()), ...(cal ? [] : [mediaBtn(), ...zoomBtns()]), calBtn(), fullBtn()] : tab === 'ideas' ? [viewSwitch()] : []));
     if (tab === 'ideas') input.placeholder = ideaView === 'shared' ? 'add to the shared pool…' : 'type an idea…';
     stopIdeas();
     stage.replaceChildren();
@@ -253,6 +262,25 @@ export function mountFleeting(root, el0, w, opts = {}) {
     else if (v === 'tracker') renderTracker();
     else renderWeekly();
   }
+
+  // On a phone (Nov 25) Story keeps a composer floating just above the bottom edge: a bare + and a blank
+  // field — Enter posts the moment at now. On the desktop Story has no composer (click the line instead).
+  const phoneStory = () => view() === 'story' && !!box.closest('.mob-view');
+  let composerPhone = null;
+  function paintComposer() {
+    const v = view();
+    const ph = phoneStory();
+    composer.hidden = v !== 'ideas' && !ph;
+    attach.hidden = tab !== 'story';
+    box.classList.toggle('is-phone-story', ph);
+    if (ph !== composerPhone) {
+      composerPhone = ph;
+      attach.replaceChildren(icon(ph ? 'plus' : 'image', ph ? 20 : 17));
+      if (ph) input.placeholder = '';
+    }
+  }
+  const onWinResize = () => paintComposer();
+  window.addEventListener('resize', onWinResize);
 
   // Ideas' view option: your own ideas, or the shared pool.
   function viewSwitch() {
@@ -909,7 +937,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     const keep = stage.scrollTop;
     const keepLeft = tl && stage.contains(tl) ? stage.scrollLeft - (Number(tl.dataset.extl) || 0) : null;
     const list = [...story(), ...uploads.filter((u) => u.day === day)].sort((a, b) => a.m - b.m);
-    const H = Math.max(stage.clientHeight || 520, 1560);
+    const H = Math.round(Math.max(stage.clientHeight || 520, 1560) * zoomT);
     const TH = H - PT - PB;
     const yOf = (m) => PT + (m / 1440) * TH;
     const W0 = Math.max(260, (stage.clientWidth || 600) - 32);
@@ -918,8 +946,12 @@ export function mountFleeting(root, el0, w, opts = {}) {
     const extL = Math.round(-lo * W0), extR = Math.round((hi - 1) * W0);
     tl = h('div', { class: ['fi-tl', (extL || extR) && 'is-wide'], style: { height: `${H}px`, width: `${W0}px`, marginLeft: `${16 + extL}px`, marginRight: `${16 + extR}px` } },
       h('i', { class: 'fi-spine', style: { top: `${PT - 14}px`, bottom: `${PB - 18}px` } }),
-      h('span', { class: 'fi-mark is-top', style: { top: `${PT - 34}px` } }, 'GM'),
+      h('span', { class: 'fi-mark is-top fi-splabel', style: { top: `${PT - 34}px`, '--sp': SETPOINTS[0].color } }, 'GM'),
       ...SETPOINTS.slice(1).map((s) => h('i', { class: 'fi-tick', style: { top: `${yOf(s.from)}px`, '--sp': s.color }, title: `${s.label} · ${clockOf(s.from)}` })),
+      // Set-Point names beside their marks, large in Doto (Nov 25).
+      ...SETPOINTS.slice(1).map((s) => h('span', { class: 'fi-splabel', style: { top: `${yOf(s.from)}px`, '--sp': s.color } }, s.label)),
+      // Faint time marks the moments snap to (hours; half hours once zoomed in).
+      ...hourMarks(yOf),
       h('span', { class: 'fi-mark is-bottom', style: { top: `${PT + TH + 8}px` } }, 'NEW MORNING'),
       h('i', { class: 'fi-tick is-end', style: { top: `${PT + TH}px` } }));
     tl.dataset.th = TH;
@@ -927,12 +959,49 @@ export function mountFleeting(root, el0, w, opts = {}) {
     if (day === storyKey()) { const now = storyMin(); tl.append(h('span', { class: 'fi-now', style: { top: `${yOf(now)}px`, '--sp': spOf(now).color }, title: `Now · ${clockOf(now)}` }, h('i'), h('b', {}, 'NOW'))); }
     if (!list.length) tl.append(h('p', { class: 'fi-story-empty' }, day === storyKey() ? 'Nothing told yet today.' : 'An untold day.', h('br'), 'Click anywhere on the line to tell a moment, or drop photos and videos on it.'));
     for (const f of list) tl.append(fragment(f, yOf));
+    tl.append(guide, dragTime);
     lookupWho(list.map((f) => f.by), () => { if (tab === 'story') refresh(); });
     stage.replaceChildren(tl);
     stage.scrollTop = keep;
     stage.scrollLeft = extL + (keepLeft ?? 0);
     requestAnimationFrame(() => tl?.querySelectorAll('.fi-frag').forEach(connect));
   }
+
+  // A mark every hour (every half hour once there's room); a new or moved moment snaps to the nearest one.
+  const markStep = () => (zoomT >= 1.6 ? 30 : 60);
+  function hourMarks(yOf) {
+    const out = [];
+    const st = markStep();
+    for (let m = st; m < 1440; m += st) {
+      if (SETPOINTS.some((s) => s.from === m)) continue;
+      out.push(h('i', { class: ['fi-hmark', m % 60 && 'is-half'], style: { top: `${yOf(m)}px` } }, m % 60 ? null : h('em', {}, clockOf(m))));
+    }
+    return out;
+  }
+  // Snap to the nearest time mark (and Set-Point); Alt places it freely, between marks.
+  const snapM = (m, free) => {
+    if (free) return m;
+    const st = markStep() / 2; // quarter / half hours: close marks without fighting the drag
+    const marks = SETPOINTS.map((s) => s.from);
+    const near = marks.find((x) => Math.abs(x - m) <= 8);
+    return near != null ? near : Math.min(1439, Math.max(0, Math.round(m / st) * st));
+  };
+  // The placement guide: a line across the timeline where the moment will land, and a large clock.
+  const guide = h('i', { class: 'fi-guide', hidden: true });
+  const dragTime = h('span', { class: 'fi-dragtime', hidden: true });
+  function showGuide(m, x) {
+    if (!tl) return;
+    const TH = Number(tl.dataset.th);
+    const y = PT + (m / 1440) * TH;
+    const sp = spOf(m);
+    guide.hidden = false; dragTime.hidden = false;
+    guide.style.top = `${y}px`; guide.style.setProperty('--sp', sp.color);
+    dragTime.style.top = `${y}px`;
+    dragTime.style.left = `${Math.min(92, Math.max(8, x * 100))}%`;
+    dragTime.replaceChildren(h('b', {}, clockOf(m)), h('span', {}, sp.label));
+    dragTime.style.setProperty('--sp', sp.color);
+  }
+  const hideGuide = () => { guide.hidden = true; dragTime.hidden = true; };
 
   function fragment(f, yOf) {
     const sp = spOf(f.m);
@@ -951,7 +1020,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     const x = f.x ?? 0.5;
     const far = x < 0.1 || x > 0.9; // pulled out into the open space: it sits a touch askew, like a loose note
     if (far) card.style.rotate = `${(glassOf(f.id).tilt * 0.55).toFixed(2)}deg`;
-    const node = h('div', { class: ['fi-frag', far && 'is-off', f.tl && 'is-tl'], 'data-id': f.id, style: { top: `${yOf(f.m)}px`, left: `${x * 100}%` } }, card);
+    const node = h('div', { class: ['fi-frag', far && 'is-off', f.tl && 'is-tl', selFr.has(f.id) && 'is-sel', frontId === f.id && 'is-front'], 'data-id': f.id, style: { top: `${yOf(f.m)}px`, left: `${x * 100}%` } }, card);
     if (!f.uploading) bindFrag(node, card, label, f);
     return node;
   }
@@ -986,50 +1055,217 @@ export function mountFleeting(root, el0, w, opts = {}) {
     card.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || e.target.closest('button, [contenteditable="true"]')) return;
       e.preventDefault();
+      // Ctrl/⌘-click: add to (or take out of) the selection, without moving anything.
+      if (e.ctrlKey || e.metaKey) {
+        e.stopPropagation();
+        if (selFr.has(f.id)) selFr.delete(f.id); else selFr.add(f.id);
+        node.classList.toggle('is-sel', selFr.has(f.id));
+        return;
+      }
+      if (!selFr.has(f.id) && selFr.size) { selFr.clear(); tl?.querySelectorAll('.fi-frag.is-sel').forEach((n) => n.classList.remove('is-sel')); }
       const TH = Number(tl.dataset.th);
       const tr = tl.getBoundingClientRect();
       const scale = tr.width / (tl.clientWidth || 1);
       const sx = e.clientX, sy = e.clientY;
+      // Moving a selected moment moves the whole selection; the time between them stays the same.
+      const group = selFr.has(f.id) && selFr.size > 1 ? story().filter((q) => selFr.has(q.id)) : [f];
+      const starts = new Map(group.map((q) => [q.id, { m: q.m, x: q.x ?? 0.5, node: tl.querySelector(`.fi-frag[data-id="${CSS.escape(q.id)}"]`) }]));
+      const lo = Math.min(...group.map((q) => q.m)), hi = Math.max(...group.map((q) => q.m));
       const x0 = f.x ?? 0.5, m0 = f.m;
-      let moved = false, m = m0, x = x0;
+      let moved = false, dm = 0, dxf = 0, cancelled = false;
       hold++;
+      const place = () => {
+        for (const [id, st] of starts) {
+          if (!st.node) continue;
+          const m = st.m + dm, x = clampX(st.x + dxf);
+          st.node.style.left = `${x * 100}%`;
+          st.node.style.top = `${PT + (m / 1440) * TH}px`;
+          const c = st.node.querySelector('.fi-card'), lb = st.node.querySelector('.fi-frag-sp');
+          const sp = spOf(m);
+          c?.style.setProperty('--sp', sp.color);
+          if (lb) { lb.firstChild.textContent = sp.label; lb.querySelector('em').textContent = clockOf(m); }
+        }
+      };
       const move = (ev) => {
         const dx = (ev.clientX - sx) / scale, dy = (ev.clientY - sy) / scale;
         if (!moved && Math.hypot(dx, dy) < 4) return;
-        moved = true;
-        node.classList.add('is-moving');
-        node.querySelector('.fi-link')?.remove();
-        x = clampX(x0 + dx / tl.clientWidth);
-        m = Math.round(Math.min(1439, Math.max(0, m0 + (dy / TH) * 1440)));
-        node.style.left = `${x * 100}%`;
-        node.style.top = `${PT + (m / 1440) * TH}px`;
-        const sp = spOf(m);
-        card.style.setProperty('--sp', sp.color);
-        label.firstChild.textContent = sp.label;
-        label.querySelector('em').textContent = clockOf(m);
+        if (!moved) { moved = true; starts.forEach((st) => { st.node?.classList.add('is-moving'); st.node?.querySelector('.fi-link')?.remove(); }); }
+        dxf = clampX(x0 + dx / tl.clientWidth) - x0;
+        const target = snapM(Math.round(Math.min(1439, Math.max(0, m0 + (dy / TH) * 1440))), ev.altKey);
+        dm = Math.max(-lo, Math.min(1439 - hi, target - m0));
+        place();
+        showGuide(m0 + dm, x0 + dxf);
       };
-      const up = () => {
+      const end = () => {
         card.removeEventListener('pointermove', move);
         card.removeEventListener('pointerup', up);
         card.removeEventListener('pointercancel', up);
-        node.classList.remove('is-moving');
-        if (moved) {
-          setStory(day, story().map((q) => (q.id === f.id ? { ...q, m, x: Math.round(x * 1000) / 1000 } : q)));
+        window.removeEventListener('keydown', onEsc, true);
+        starts.forEach((st) => st.node?.classList.remove('is-moving'));
+        hideGuide();
+      };
+      // Esc while dragging puts everything back where it was.
+      const onEsc = (ev) => {
+        if (ev.key !== 'Escape' || !moved) return;
+        ev.preventDefault(); ev.stopImmediatePropagation();
+        cancelled = true; dm = 0; dxf = 0; place(); end();
+        try { card.releasePointerCapture(e.pointerId); } catch {}
+        release(); refresh();
+      };
+      const up = () => {
+        if (cancelled) return;
+        end();
+        if (moved && (dm || dxf)) {
+          const before = story();
+          undoMoves.push({ day, list: before }); if (undoMoves.length > 40) undoMoves.shift();
+          setStory(day, before.map((q) => (starts.has(q.id) ? { ...q, m: q.m + dm, x: Math.round(clampX((q.x ?? 0.5) + dxf) * 1000) / 1000 } : q)));
           release();
           return;
         }
         release();
+        if (moved) { refresh(); return; }
         // Single click opens the photo/video; a double click edits the caption instead.
         if (f.kind === 'photo' || f.kind === 'video') { clearTimeout(card._open); card._open = setTimeout(() => lightbox(f), 240); }
       };
+      window.addEventListener('keydown', onEsc, true);
       card.setPointerCapture(e.pointerId);
       card.addEventListener('pointermove', move);
       card.addEventListener('pointerup', up);
       card.addEventListener('pointercancel', up);
     });
     card.addEventListener('dblclick', (e) => { clearTimeout(card._open); if (!e.target.closest('button')) editFrag(card, f); });
-    card.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); fragMenu({ x: e.clientX, y: e.clientY }, f); });
+    card.addEventListener('contextmenu', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      // Cards stacked on top of each other: pick the one you mean — the others stay where they are.
+      const stack = [...new Set(document.elementsFromPoint(e.clientX, e.clientY).map((n) => n.closest?.('.fi-frag[data-id]')).filter((n) => n && tl?.contains(n)))];
+      if (stack.length > 1) {
+        const all = story();
+        menu({ x: e.clientX, y: e.clientY }, [
+          { header: `${stack.length} moments here` },
+          ...stack.map((n) => all.find((q) => q.id === n.dataset.id)).filter(Boolean).map((q) => ({
+            label: `${clockOf(q.m)} · ${(q.text || (q.kind === 'photo' ? 'Photo' : q.kind === 'video' ? 'Video' : 'Moment')).replace(/\s+/g, ' ').slice(0, 42)}`,
+            icon: q.kind === 'photo' ? 'image' : q.kind === 'video' ? 'play' : 'note', checked: q.id === frontId,
+            onSelect: () => { frontId = q.id; tl?.querySelectorAll('.fi-frag.is-front').forEach((x) => x.classList.remove('is-front')); tl?.querySelector(`.fi-frag[data-id="${CSS.escape(q.id)}"]`)?.classList.add('is-front'); },
+          })),
+          '-',
+          { label: 'Options for the top one…', icon: 'more', onSelect: () => fragMenu({ x: e.clientX, y: e.clientY }, f) },
+        ]);
+        return;
+      }
+      fragMenu({ x: e.clientX, y: e.clientY }, f);
+    });
   }
+
+  // Ctrl+Z steps back the last move in Story (while you're working in it).
+  let storyActive = false;
+  box.addEventListener('pointerdown', () => { storyActive = true; }, true);
+  const offActive = (e) => { if (!box.contains(e.target)) storyActive = false; };
+  document.addEventListener('pointerdown', offActive, true);
+  const onUndoKey = (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'z') return;
+    if (!storyActive || view() !== 'story' || !box.isConnected || e.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
+    const last = undoMoves.pop();
+    if (!last) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (last.day !== day) { day = last.day; }
+    setStory(last.day, last.list);
+    paint();
+  };
+  window.addEventListener('keydown', onUndoKey, true);
+  // A click on open line clears the selection.
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('.fi-frag') || !selFr.size) return;
+    selFr.clear(); tl?.querySelectorAll('.fi-frag.is-sel').forEach((n) => n.classList.remove('is-sel'));
+  });
+
+  /* ---------- zoom and pan through the day (desktop and phone) ---------- */
+  function zoomBtns() {
+    return [
+      h('button', { class: 'fi-nav fi-zoom', type: 'button', 'aria-label': 'Zoom out — more of the day', title: 'Zoom out (Ctrl + wheel)', onclick: () => setZoomT(zoomT / 1.35) }, icon('minus', 14)),
+      h('button', { class: 'fi-nav fi-zoom', type: 'button', 'aria-label': 'Zoom in — more room between moments', title: 'Zoom in (Ctrl + wheel)', onclick: () => setZoomT(zoomT * 1.35) }, icon('plus', 14)),
+    ];
+  }
+  // Keep the moment under the pointer (or the middle of the view) where it is while the scale changes.
+  function setZoomT(z, at = null) {
+    z = Math.min(6, Math.max(0.35, z));
+    if (!tl || Math.abs(z - zoomT) < 0.001) { zoomT = z; remember(); return; }
+    const sr = stage.getBoundingClientRect();
+    const k = (sr.width / (stage.offsetWidth || 1)) || 1;
+    const py = at ? (at.y - sr.top) / k : stage.clientHeight / 2;
+    const TH0 = Number(tl.dataset.th);
+    const mAt = ((stage.scrollTop + py) - PT) / TH0;
+    zoomT = z; remember();
+    renderStory();
+    const TH1 = Number(tl.dataset.th);
+    stage.scrollTop = Math.max(0, PT + mAt * TH1 - py);
+  }
+  stage.addEventListener('wheel', (e) => {
+    if (view() !== 'story' || !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault(); e.stopPropagation();
+    setZoomT(zoomT * Math.exp(-e.deltaY * 0.0022), { y: e.clientY });
+  }, { passive: false });
+  // Two fingers pinch to zoom; one finger scrolls (pans) as usual.
+  const touches = new Map();
+  let pinch = null;
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch' || view() !== 'story') return;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.size === 2) {
+      const [a, b] = [...touches.values()];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, z: zoomT, y: (a.y + b.y) / 2 };
+      e.stopPropagation();
+    }
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!touches.has(e.pointerId)) return;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!pinch || touches.size < 2) return;
+    const [a, b] = [...touches.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    clearTimeout(pinch.t);
+    const z = pinch.z * (d / pinch.d);
+    pinch.t = setTimeout(() => setZoomT(z, { y: pinch?.y ?? (a.y + b.y) / 2 }), 16);
+  });
+  const endTouch = (e) => { touches.delete(e.pointerId); if (touches.size < 2) pinch = null; };
+  stage.addEventListener('pointerup', endTouch);
+  stage.addEventListener('pointercancel', endTouch);
+
+  /* ---------- full screen (and back, without losing your place) ---------- */
+  let fullHome = null;
+  function fullBtn() {
+    return h('button', { class: ['fi-nav', 'fi-full-btn', full && 'is-on'], type: 'button', 'aria-pressed': String(full), 'aria-label': full ? 'Back to the split view' : 'Full screen', title: full ? 'Back (Esc)' : 'Full screen — more room to arrange moments', onclick: () => setFull(!full) }, icon(full ? 'exitFullscreen' : 'fullscreen', 15));
+  }
+  function setFull(on) {
+    if (on === full) return;
+    const sr = stage.getBoundingClientRect();
+    const k = (sr.width / (stage.offsetWidth || 1)) || 1;
+    const TH0 = tl ? Number(tl.dataset.th) : 0;
+    const mid = tl ? ((stage.scrollTop + stage.clientHeight / 2) - PT) / (TH0 || 1) : null;
+    full = on;
+    if (on) {
+      // Moved to the top of the page (the board may be zoomed or transformed): the same element, so
+      // everything you were doing — selection, a card being written — stays as it is.
+      fullHome = { parent: box.parentNode, next: box.nextSibling };
+      const layer = h('div', { class: 'fi-full-layer' });
+      document.body.append(layer);
+      layer.append(box);
+      box.classList.add('is-full');
+    } else if (fullHome) {
+      const layer = box.parentNode;
+      if (fullHome.parent?.isConnected) fullHome.parent.insertBefore(box, fullHome.next && fullHome.next.parentNode === fullHome.parent ? fullHome.next : null);
+      layer?.classList.contains('fi-full-layer') && layer.remove();
+      box.classList.remove('is-full');
+      fullHome = null;
+    }
+    void k;
+    paint();
+    if (mid != null && tl) { const TH1 = Number(tl.dataset.th); stage.scrollTop = Math.max(0, PT + mid * TH1 - stage.clientHeight / 2); }
+  }
+  const onFullEsc = (e) => {
+    if (!full || e.key !== 'Escape' || hold > 0 || document.querySelector('.menu, .dlg, .lb')) return;
+    e.preventDefault(); e.stopImmediatePropagation(); setFull(false);
+  };
+  window.addEventListener('keydown', onFullEsc, true);
 
   function fragMenu(anchor, f) {
     menu(anchor, [
@@ -1056,7 +1292,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     const k = r.width / (tl.clientWidth || 1); // the Space's zoom: screen px → timeline px
     const y = (e.clientY - r.top) / k;
     if (y < PT - 30 || y > PT + TH + 20) return;
-    const m = Math.round(Math.min(1439, Math.max(0, ((y - PT) / TH) * 1440)));
+    const m = snapM(Math.round(Math.min(1439, Math.max(0, ((y - PT) / TH) * 1440))), e.altKey); // Alt: between marks
     const x = clampX((e.clientX - r.left) / r.width);
     // Born under the cursor (Nov 22): the click is the new card's top-left corner, not its middle.
     const frag = addFragment({ kind: 'text', text: '', tl: true }, day, { m, x });
@@ -1788,6 +2024,10 @@ export function mountFleeting(root, el0, w, opts = {}) {
       if (poolChanged) poolReg?.changed();
       if (changed) refresh();
     },
-    destroy() { stopIdeas(); onResize.disconnect(); window.removeEventListener('architect:drop-idea', onDropIdea); poolReg?.off(); offPool(); offMine(); box.remove(); },
+    destroy() {
+      if (full) setFull(false);
+      window.removeEventListener('resize', onWinResize);
+      window.removeEventListener('keydown', onUndoKey, true); window.removeEventListener('keydown', onFullEsc, true); document.removeEventListener('pointerdown', offActive, true);
+      stopIdeas(); onResize.disconnect(); window.removeEventListener('architect:drop-idea', onDropIdea); poolReg?.off(); offPool(); offMine(); box.remove(); },
   };
 }

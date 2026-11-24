@@ -17,7 +17,7 @@
 // Side Chat and anything outside the shared category are never part of the payload.
 import { api } from './api.js';
 import { listShared, createShared, addMember, removeShared, meId } from './shared.js';
-import { myVars, setMyVars, loadMyVars, onMyVars } from './myvars.js';
+import { myVars, setMyVars, loadMyVars, onMyVars, nextGone } from './myvars.js';
 import { store } from '../core/util.js';
 
 const KIND = 'varcat';
@@ -137,15 +137,19 @@ function baseOf(cat) {
     secOrder: (cat.sections || []).map((x) => x.id), entOrder: (cat.entries || []).map((x) => x.id),
   };
 }
-/** Merge two lists by id against the last synced copy: one-sided changes win, the owner wins a tie. */
-function merge3(L = [], R = [], B = null, order = null, strip = null) {
+/** Merge two lists by id (Nov 25). Deletions come from tombstones (`gone`, kept in the shared row and on
+ *  each account), never from "it's missing on one side" — that guess was per device, so a delete made on one
+ *  device (or by the other person) could come back, and a new item could vanish for one of you.
+ *  Both sides have it: the side that changed it since the last sync wins; when both did (or there's no
+ *  record of the last sync), the owner's copy wins. */
+function merge3(L = [], R = [], B = null, order = null, strip = null, gone = new Set()) {
   const lm = new Map(L.map((x) => [x.id, x])), rm = new Map(R.map((x) => [x.id, x]));
   const out = new Map();
   for (const id of new Set([...lm.keys(), ...rm.keys()])) {
+    if (gone.has(id)) continue;
     const l = lm.get(id), r = rm.get(id), b = B ? B[id] ?? null : null;
-    if (l && r) { const lc = sig(l, strip) !== b, rc = sig(r, strip) !== b; out.set(id, !B || lc || !rc ? l : r); }
-    else if (l) { if (B && b != null && sig(l, strip) === b) continue; out.set(id, l); } // they deleted it, you didn't touch it
-    else if (r) { if (B && b != null) continue; out.set(id, r); }                          // you deleted it
+    if (l && r) { const lc = sig(l, strip) !== b, rc = sig(r, strip) !== b; out.set(id, !B || b == null || lc || !rc ? l : r); }
+    else out.set(id, l || r);
   }
   const lo = L.map((x) => x.id), ro = R.map((x) => x.id);
   const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
@@ -155,36 +159,59 @@ function merge3(L = [], R = [], B = null, order = null, strip = null) {
   return ids.map((id) => out.get(id));
 }
 
+/* Everyone in your shared Space can see your shared categories — including people who joined after you
+   shared them (that's what made a category show for one collaborator and not the other). Checked once per
+   session per category. */
+const membersChecked = new Set();
+async function ensureMembers(it) {
+  if (membersChecked.has(it.id) || !sharedSpaceId || api.mode === 'local') return;
+  membersChecked.add(it.id);
+  let people = [];
+  try { people = (await api.rpc('board_people', { b: sharedSpaceId })) || []; } catch { membersChecked.delete(it.id); return; }
+  const have = new Set([it.user_id, ...(it.members || [])]);
+  for (const person of people) {
+    if (!person?.user_id || have.has(person.user_id) || person.user_id === meId()) continue;
+    try { await addMember(it, person.username); } catch {}
+  }
+}
+
 async function syncMine(it) {
   const vars = myVars();
   const sec = (vars?.sections || []).find((s) => s.share?.item === it.id);
   if (!sec) return; // shared from another device and then made private here: nothing to push
+  ensureMembers(it);
   const local = payloadOf(sec.id, vars);
-  local.gone = tombstones(it.id, local);
   const remote = it.data || {};
   const base = store.get(baseKey(it.id), null);
-  const gone = new Set([...(local.gone || []), ...(remote.gone || [])]);
+  // What you deleted (on any of your devices — your account keeps the ids, Nov 25), limited to what the
+  // shared copy actually has: nothing about the rest of your Variables goes out.
+  const remoteIds = new Set([...(remote.sections || []).map((x) => x.id), ...(remote.entries || []).flatMap((e) => [e.id, ...(e.notes || []).map((n) => n.id)])]);
+  const mineGone = (vars.gone || []).filter((id) => remoteIds.has(id));
+  const gone = new Set([...mineGone, ...tombstones(it.id, local), ...(remote.gone || [])]);
+  gone.delete(sec.id); // the category itself is only removed by making it private
   const rEnt = new Map((remote.entries || []).map((e) => [e.id, e]));
-  const sections = merge3(local.sections, remote.sections || [], base?.secs, base?.secOrder);
-  const entries = merge3(local.entries, remote.entries || [], base?.ents, base?.entOrder, noNotes)
-    .filter((e) => !gone.has(e.id))
+  const sections = merge3(local.sections, remote.sections || [], base?.secs, base?.secOrder, null, gone);
+  const live = new Set(subtree(sections, sec.id));
+  const entries = merge3(local.entries, remote.entries || [], base?.ents, base?.entOrder, noNotes, gone)
+    .filter((e) => !gone.has(e.id) && live.has(e.section))
     .map((e) => ({ ...e, notes: mergeNotes((local.entries.find((x) => x.id === e.id) || e).notes, rEnt.get(e.id)?.notes, gone) }));
   const root = sections.find((x) => x.id === sec.id) || sec;
-  const merged = { ...local, name: root.name, img: root.img || null, sections, entries, gone: [...gone].slice(-2000) };
+  const merged = { ...local, name: root.name, img: root.img || null, sections: sections.filter((x) => live.has(x.id)), entries, gone: [...gone].slice(-2000) };
 
   // Bring members' edits and notes into your own copy (only what's inside this category changes).
   const v2 = myVars();
   const inside = new Set(subtree(v2.sections || [], sec.id));
   const nextSecs = [
     ...(v2.sections || []).filter((x) => !inside.has(x.id)),
-    ...sections.map((x) => { const mine = (v2.sections || []).find((y) => y.id === x.id); return mine?.share ? { ...x, share: mine.share } : x; }),
+    ...merged.sections.map((x) => { const mine = (v2.sections || []).find((y) => y.id === x.id); return mine?.share ? { ...x, share: mine.share } : x; }),
   ];
   const keepOrder = (v2.sections || []).map((x) => x.id);
   nextSecs.sort((a, b) => { const i = keepOrder.indexOf(a.id), j = keepOrder.indexOf(b.id); return (i < 0 ? 1e9 : i) - (j < 0 ? 1e9 : j); });
   const insideAfter = new Set(subtree(nextSecs, sec.id));
   const nextEnts = [...(v2.entries || []).filter((e) => !inside.has(e.section) && !insideAfter.has(e.section)), ...entries];
   if (JSON.stringify(nextSecs) !== JSON.stringify(v2.sections || []) || JSON.stringify(nextEnts) !== JSON.stringify(v2.entries || [])) {
-    setMyVars({ sections: nextSecs, entries: nextEnts });
+    // Their deletions become yours too, so no device of yours brings them back.
+    setMyVars({ sections: nextSecs, entries: nextEnts, gone: [...new Set([...(v2.gone || []), ...gone])].slice(-4000) });
   }
   // Push the merged copy.
   if (JSON.stringify(merged) !== JSON.stringify(it.data)) {
@@ -247,6 +274,8 @@ export function sharedSource(itemId) {
   const past = [], future = [];
   let lastAt = 0, stepping = false, t = 0, writing = Promise.resolve();
   let local = null; // your edit, until it's written (a poll in between mustn't undo it on screen)
+  let base = null;  // the shared copy as it was when that edit began (Nov 25: three-way merge on write)
+  let revived = new Set(); // ids you brought back (undo) — they mustn't stay tombstoned
   const cur = () => local || row()?.data || null;
   const get = () => { const d = cur(); return d ? { sections: d.sections || [], entries: d.entries || [], vfree: !!d.vfree } : null; };
   function set(patch) {
@@ -258,10 +287,14 @@ export function sharedSource(itemId) {
       lastAt = Date.now(); future.length = 0;
     }
     const prev = cur() || {};
-    // entries this edit removed become tombstones, so the owner's sync doesn't bring them back
-    const removed = patch.entries ? (prev.entries || []).filter((e) => !patch.entries.some((x) => x.id === e.id)).map((e) => e.id) : [];
-    local = { ...prev, ...(patch.sections ? { sections: patch.sections } : {}), ...(patch.entries ? { entries: patch.entries } : {}), ...('vfree' in patch ? { vfree: !!patch.vfree } : {}),
-      gone: [...(prev.gone || []), ...removed].slice(-2000) };
+    if (!local) base = structuredClone(r.data || {});
+    const next = { ...prev, ...(patch.sections ? { sections: patch.sections } : {}), ...(patch.entries ? { entries: patch.entries } : {}), ...('vfree' in patch ? { vfree: !!patch.vfree } : {}) };
+    // Whatever this edit removed — a chat, a subsection, a note, whoever made it — becomes a tombstone, so
+    // nobody's copy brings it back; whatever it restored stops being one.
+    const gone = nextGone(prev, next, prev.gone || []);
+    for (const id of prev.gone || []) if (!gone.includes(id)) revived.add(id);
+    for (const id of gone) revived.delete(id);
+    local = { ...next, gone };
     const root = (local.sections || []).find((x) => x.id === local.catId);
     if (root) { local.name = root.name; local.img = root.img || null; }
     r.data = local;
@@ -273,17 +306,39 @@ export function sharedSource(itemId) {
     const r = row();
     if (!r) return;
     if (!local) return;
-    const mine = local;
-    const latest = (await api.db.get('shared_items', itemId))?.data || mine;
+    const mine = local, was = base || {};
+    let latest;
+    try { latest = (await api.db.get('shared_items', itemId))?.data || mine; }
+    catch (e) { retry(); throw e; }
     const gone = new Set([...(latest.gone || []), ...(mine.gone || [])]);
+    for (const id of revived) gone.delete(id);
+    gone.delete(latest.catId);
+    // Three-way: your changes since the edit began go on top of the latest copy, so something the owner (or
+    // anyone) added meanwhile is kept instead of being overwritten by your older view.
+    const take = (key, strip) => {
+      const B = new Map((was[key] || []).map((x) => [x.id, sig(x, strip)]));
+      const M = new Map((mine[key] || []).map((x) => [x.id, x]));
+      const out = new Map((latest[key] || []).filter((x) => !gone.has(x.id)).map((x) => [x.id, x]));
+      for (const [id, x] of M) if (!gone.has(id) && (!B.has(id) || B.get(id) !== sig(x, strip) || !out.has(id))) out.set(id, x);
+      const mo = (mine[key] || []).map((x) => x.id), bo = (was[key] || []).map((x) => x.id);
+      const reordered = mo.filter((id) => bo.includes(id)).join() !== bo.filter((id) => mo.includes(id)).join();
+      const first = reordered ? mo : (latest[key] || []).map((x) => x.id);
+      return [...first.filter((id) => out.has(id)), ...[...out.keys()].filter((id) => !first.includes(id))].map((id) => out.get(id));
+    };
+    const sections = take('sections');
     const theirs = new Map((latest.entries || []).map((e) => [e.id, e]));
-    const entries = (mine.entries || []).filter((e) => !gone.has(e.id)).map((e) => ({ ...e, notes: mergeNotes(e.notes, theirs.get(e.id)?.notes, gone) }));
-    const data = { ...latest, name: mine.name, img: mine.img, sections: mine.sections, entries, vfree: mine.vfree, gone: [...gone].slice(-2000) };
-    await api.db.update('shared_items', itemId, { data });
-    if (local === mine) local = null; // nothing newer was typed meanwhile
+    const live = new Set(subtree(sections, latest.catId || mine.catId));
+    const entries = take('entries', noNotes).filter((e) => live.has(e.section)).map((e) => ({ ...e, notes: mergeNotes((mine.entries || []).find((x) => x.id === e.id)?.notes || e.notes, theirs.get(e.id)?.notes, gone) }));
+    const root = sections.find((x) => x.id === (latest.catId || mine.catId));
+    const data = { ...latest, name: root?.name ?? mine.name, img: root ? root.img || null : mine.img, sections, entries, vfree: mine.vfree, gone: [...gone].slice(-2000) };
+    try { await api.db.update('shared_items', itemId, { data }); }
+    catch (e) { retry(); throw e; }
+    if (local === mine) { local = null; base = null; revived = new Set(); } // nothing newer was typed meanwhile
     (row() || r).data = local || data;
     emit();
   }
+  // A write that failed (offline, a timeout) tries again, so your edit can't stay visible only to you.
+  function retry() { clearTimeout(t); t = setTimeout(() => { writing = writing.then(push).catch((e) => console.warn('Shared category edit', e)); }, 5000); }
   const stepTo = (from, to) => { if (!from.length) return false; to.push(get()); const snap = from.pop(); stepping = true; try { set(snap); } finally { stepping = false; } lastAt = 0; return true; };
   const src = {
     foreign: true, itemId,

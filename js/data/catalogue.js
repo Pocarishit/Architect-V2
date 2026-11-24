@@ -3,6 +3,58 @@
 // area: the part of Architect it touches. Add new entries at the top.
 export const CATALOGUE = [
   {
+    day: '2026-11-25', area: 'Variables', title: "The map shows everything right away",
+    text: "The Variables map now shows a space’s chats and every subsection (nested ones too) as soon as it opens — no empty dotted grid, no opening each subsection first. The square preview at the bottom of the sidebar shows the same map before you click it; clicking opens it larger, full screen is optional. It refreshes as things are added, moved or deleted, in your own and in shared spaces.",
+  },
+  {
+    day: '2026-11-25', area: 'Variables', title: "Fold subsections; pictures beside names",
+    text: "Each subsection in the Variables sidebar has a toggle to fold it away or open it again. A chat or subsection with a picture shows it as a small thumbnail beside its name; without one, just the name.",
+  },
+  {
+    day: '2026-11-25', area: 'Variables', title: "Shared spaces: delete anything, see the same thing",
+    text: "Both people in a shared space have the same controls, Delete included, whoever made the object. Deletions are remembered on the shared copy and on your account (not per device), so nothing comes back, and an edit made while the other person was editing no longer drops theirs. People who join your shared Space later are added to the spaces you already shared.",
+  },
+  {
+    day: '2026-11-25', area: 'Variables', title: "Right-drag pans over the Variables object",
+    text: "Hold the right mouse button anywhere on the Variables object (or any object) and drag to pan the board. A plain right-click still opens the menu.",
+  },
+  {
+    day: '2026-11-25', area: 'Space', title: "Live cursors are back",
+    text: "Everyone on the same shared canvas sees the others’ pointers move live, with their name or profile picture, drawn above every object. A cursor goes when that person leaves the board, switches away or disconnects, and nothing from a private space is ever sent.",
+  },
+  {
+    day: '2026-11-25', area: 'Blueprint', title: "Lock the frame, not the contents",
+    text: "Locking an object keeps it from moving or resizing, but whatever is inside still works: click, type, edit, and use its own right-click menus. A locked frame no longer blocks clicks inside it. Right-click an object’s outer border to lock or unlock it, even when its header is hidden.",
+  },
+  {
+    day: '2026-11-25', area: 'Settings', title: "Updates & Fixes is a real Blueprint",
+    text: "The Updates & Fixes tab now uses the same canvas and toolbar as any Blueprint: pan, zoom, select, move and edit update notes (sticky notes) and linked previews (pictures connected to a note) with the usual controls and shortcuts. Push Update, Schedule and the run status stay beside the canvas for the selected note. Your existing notes moved onto it.",
+  },
+  {
+    day: '2026-11-25', area: 'Sidebar', title: "New navigation icons",
+    text: "Overview is the dotted Architect mark with its red dot, Variables an atom, Path a compass. The three-dot More button sits at the bottom of the rail. Icons only, no outlines or highlights.",
+  },
+  {
+    day: '2026-11-25', area: 'Fleeting Moments', title: "Story only, full screen, easier editing",
+    text: "Weekly is gone: Fleeting Moments opens straight to Story. Story can fill the screen and come back without losing your place. Set-Point names are larger, a placement guide and a large clock show where a moment will land, and moments snap to nearby time marks (hold Alt to place between them). Right-click a stack of cards to pick one. Ctrl-click to select several and move them together; Esc cancels a drag, Ctrl+Z undoes a move. Zoom (Ctrl + wheel, pinch, or − / +) changes how much of the day you see — never the cards.",
+  },
+  {
+    day: '2026-11-25', area: 'Path', title: "One Set-Point bar",
+    text: "The Set-Point pills are one continuous bar with thin dividers: the selected segment is highlighted, the red dot stays on the live Set-Point, and only the selected task list shows below — no faded previews of the others.",
+  },
+  {
+    day: '2026-11-25', area: 'Anytype', title: "Synced items behave like Path items",
+    text: "Items synced from Anytype stay on the day they belong to (no carrying into Tomorrow), edits update the same item without duplicates or losing its checkmark, and they get the same selection, right-click menu and batch actions as Path tasks — without the visible tag. Path now checks for changes every few seconds and downloads only what changed.",
+  },
+  {
+    day: '2026-11-25', area: 'Path', title: "Customize My View for Path",
+    text: "The Path view has the full Customize My View editor from the sidebar: show or hide titles and headers, start a blank dot-grid layout, add objects, drag them inside the border, lock positions. Path’s layout is saved separately from your other views.",
+  },
+  {
+    day: '2026-11-25', area: 'Phone', title: "One focused view and an icon sidebar",
+    text: "No bottom slider: the six-dot control beside the title opens the icon sidebar over the view. Path and Fleeting Moments flip with the small looping arrow at the top right. Story keeps its spine and gets a floating + and text field at the bottom; Enter posts the moment.",
+  },
+  {
     day: '2026-11-24', area: 'Sidebar', title: 'My View: arrange and lock your layout',
     text: 'A view has no top bar any more. A new view starts as a blank dot grid with a visible border; add any Architect object (right-click, or the + in the corner) and drag it into place by its header, resize it from its corner. The workspace stays at a fixed scale — no panning, zooming or growing past the border. Lock the layout to keep everything in place; unlock it to adjust.',
   },

@@ -1,31 +1,29 @@
-// ARCHITECT on a phone (Nov 22) — its own interface, not a shrunken copy of the desktop.
-// The board you built stays untouched where it is. The phone gives every part of it a full-screen view
-// made for one hand, and a slider at the bottom of every screen moves between them:
-//   Path · Fleeting Moments · Variables · Voice Chat · Radio · Blueprint
-// Tap a label to jump straight there, or drag the gold knob to sweep through them in order; the knob's
-// tag always names where you are.
+// ARCHITECT on a phone (Nov 22; one focused view + icon sidebar, Nov 25).
+// The board you built stays untouched where it is. The phone shows one full-width view at a time:
+//   · Path — your Path, or Fleeting Moments: the small looping arrow at the top right flips between them
+//     (one title, never both; no tab bar, no split view);
+//   · Variables.
+// There's no bottom slider any more. The unboxed six-dot control beside the title opens the same icon-only
+// sidebar as the desktop (its icons, in its order): Overview opens the board, Variables, Path, and More at
+// the bottom. It's about an inch wide and lies over the view — it never squeezes it — and closes again
+// with the same control, a tap outside it, or Esc.
 //
 // How the views are built:
-//  · Path is its own live Path (all your setpoints, day tabs in full names, one setpoint at a time).
-//  · Fleeting Moments, Variables, Voice Chat and Radio borrow the object that's on the board: its header
-//    and body move into the phone view (one instance — Radio never plays twice) and go back home when
-//    the phone view closes or the screen gets wide again.
-//  · Blueprint lists every blueprint as a card with its diagram, ready to open or start a new one.
+//  · Path is its own live Path (one Set-Point bar, one task list).
+//  · Fleeting Moments and Variables borrow the object that's on the board: its header and body move into
+//    the phone view (one instance) and go back home when the phone view closes or the screen gets wide.
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { menu } from '../core/ui.js';
 import { store } from '../core/util.js';
-import { go } from '../core/router.js';
 import { mountPaths } from '../views/paths.js';
-import { mountKind, WIDGETS } from './widgets.js';
+import { WIDGETS } from './widgets.js';
+import { railIcon } from './sidebar.js';
 
 export const STOPS = [
   { id: 'path', label: 'Path', tag: 'Path' },
-  { id: 'moments', label: 'Moments', tag: 'Fleeting Moments', kind: 'fleeting' },
+  { id: 'moments', label: 'Moments', tag: 'Fleeting Moments', kind: 'fleeting', flip: 'path' },
   { id: 'variables', label: 'Variables', tag: 'Variables', kind: 'variables' },
-  { id: 'voice', label: 'Voice', tag: 'Voice Chat', kind: 'tts', pair: 'radio' },
-  { id: 'radio', label: 'Radio', tag: 'Radio', kind: 'radio', pair: 'voice' },
-  { id: 'blueprint', label: 'Blueprint', tag: 'Blueprint' },
 ];
 const BY_ID = Object.fromEntries(STOPS.map((s) => [s.id, s]));
 
@@ -41,142 +39,75 @@ export function mountMobile(ctx) {
   let offChange = null;
 
   const stage = h('div', { class: 'mob-stage' });
-  const root = h('div', { class: 'mob', role: 'application', 'aria-label': 'Architect' }, stage);
+  const root = h('div', { class: 'mob is-focused', role: 'application', 'aria-label': 'Architect' }, stage);
 
-  /* ---------------- the slider ---------------- */
-  const rail = h('div', { class: 'mob-rail' }, h('i', { class: 'mob-line' }), h('i', { class: 'mob-fill' }));
-  const knob = h('span', { class: 'mob-knob', role: 'slider', tabindex: 0, 'aria-label': 'View', 'aria-valuemin': 0, 'aria-valuemax': STOPS.length - 1 },
-    h('span', { class: 'mob-tag' }));
-  const stopBtns = STOPS.map((st, i) => h('button', {
-    type: 'button', class: 'mob-stop', 'data-stop': st.id, 'aria-label': st.tag,
-    onclick: () => show(st.id),
-  }, h('i'), h('span', {}, st.label)));
-  rail.append(...stopBtns, knob);
-  const menuBtn = h('button', { class: 'mob-menu', type: 'button', 'aria-label': 'Menu' }, icon('more', 18));
-  menuBtn.addEventListener('click', () => {
-    const r = menuBtn.getBoundingClientRect();
-    menu({ x: r.left, y: r.top - 8 }, [
-      { label: ctx.mode() === 'personal' ? 'Go to the Shared Space' : 'Go to your Personal Space', icon: 'home', onSelect: () => ctx.toggleSpace() },
-      { label: 'Open the board', icon: 'fit', onSelect: () => ctx.showBoard() },
-      { label: 'Side Chat', icon: 'chat', onSelect: () => window.dispatchEvent(new CustomEvent('architect:sidechat-open', { detail: { ideas: false } })) },
-      { label: 'Ideas', icon: 'spark', onSelect: () => window.dispatchEvent(new CustomEvent('architect:sidechat-open', { detail: { ideas: true } })) },
-      '-', ...ctx.menuItems(),
-    ], { side: 'top' });
-  });
-  const bar = h('nav', { class: 'mob-slider', 'aria-label': 'Views' }, menuBtn, h('div', { class: 'mob-track' }, rail));
-  root.append(bar);
+  /* ---------------- the icon sidebar (overlay) ---------------- */
+  const side = h('nav', { class: 'mob-side', 'aria-label': 'Architect', hidden: true });
+  const scrim = h('div', { class: 'mob-scrim', hidden: true, onclick: () => setSide(false) });
+  root.append(scrim, side);
+  let sideOpen = false;
+  const sideItem = (id, ic, label, onClick, extra = '') => h('button', {
+    type: 'button', class: ['mob-side-item', extra], 'data-v': id, title: label, 'aria-label': label,
+    onclick: (e) => onClick(e.currentTarget),
+  }, railIcon(ic));
+  function paintSide() {
+    side.replaceChildren(
+      sideItem('space', 'logo', 'Overview', () => { setSide(false); ctx.showBoard(); }),
+      sideItem('variables', 'atom', 'Variables', () => { setSide(false); show('variables'); }),
+      sideItem('path', 'compass', 'Path', () => { setSide(false); show(cur === 'moments' ? 'moments' : 'path'); }),
+      h('span', { class: 'mob-side-push', 'aria-hidden': 'true' }),
+      sideItem('more', 'dots', 'More', (b) => moreMenu(b), 'is-more'));
+  }
+  function moreMenu(anchor) {
+    const r = anchor.getBoundingClientRect();
+    menu({ x: r.right + 6, y: Math.max(12, r.top - 260) }, [
+      { label: ctx.mode() === 'personal' ? 'Go to the Shared Space' : 'Go to your Personal Space', icon: 'home', onSelect: () => { setSide(false); ctx.toggleSpace(); } },
+      { label: 'Side Chat', icon: 'chat', onSelect: () => { setSide(false); window.dispatchEvent(new CustomEvent('architect:sidechat-open', { detail: { ideas: false } })); } },
+      { label: 'Ideas', icon: 'spark', onSelect: () => { setSide(false); window.dispatchEvent(new CustomEvent('architect:sidechat-open', { detail: { ideas: true } })); } },
+      '-', ...ctx.menuItems().map((it) => (it && typeof it === 'object' && it.onSelect ? { ...it, onSelect: () => { setSide(false); it.onSelect(); } } : it)),
+    ]);
+  }
+  function setSide(on) {
+    sideOpen = !!on;
+    side.hidden = !sideOpen; scrim.hidden = !sideOpen;
+    root.classList.toggle('is-side-open', sideOpen);
+    for (const v of views.values()) v.dots?.setAttribute('aria-expanded', String(sideOpen));
+  }
+  const onKey = (e) => { if (e.key === 'Escape' && sideOpen) { e.preventDefault(); setSide(false); } };
+  window.addEventListener('keydown', onKey);
+  paintSide();
   page.append(root);
   page.classList.add('is-mob');
   document.body.classList.add('is-mob');
 
   const idx = (id) => Math.max(0, STOPS.findIndex((s) => s.id === id));
-  const xOf = (i) => {
-    const w = rail.clientWidth || 300;
-    const pad = 26;
-    return pad + (i * (w - pad * 2)) / (STOPS.length - 1);
-  };
-  function paintRail(id = cur, { live = false } = {}) {
-    const i = idx(id);
-    stopBtns.forEach((b, j) => {
-      b.style.left = `${xOf(j)}px`;
-      b.classList.toggle('is-on', j === i);
-      b.classList.toggle('is-past', j < i);
-      b.setAttribute('aria-current', j === i ? 'page' : 'false');
-    });
-    if (!live) knob.style.left = `${xOf(i)}px`;
-    rail.querySelector('.mob-fill').style.width = `${(live ? parseFloat(knob.style.left) : xOf(i)) - xOf(0)}px`;
-    knob.querySelector('.mob-tag').textContent = BY_ID[id].tag;
-    knob.setAttribute('aria-valuenow', String(i));
-    knob.setAttribute('aria-valuetext', BY_ID[id].tag);
-  }
-
-  // Drag the gold knob: it sweeps through the stops in order; the tag names the stop under it.
-  knob.addEventListener('pointerdown', (e) => {
-    e.preventDefault(); e.stopPropagation();
-    knob.setPointerCapture?.(e.pointerId);
-    knob.classList.add('is-drag');
-    const rr = rail.getBoundingClientRect();
-    const near = (x) => {
-      let best = 0, bd = Infinity;
-      STOPS.forEach((_, j) => { const d = Math.abs(x - xOf(j)); if (d < bd) { bd = d; best = j; } });
-      return STOPS[best].id;
-    };
-    let last = cur;
-    const move = (ev) => {
-      const x = Math.max(xOf(0), Math.min(xOf(STOPS.length - 1), ev.clientX - rr.left));
-      knob.style.left = `${x}px`;
-      const id = near(x);
-      paintRail(id, { live: true });
-      if (id !== last) { last = id; navigator.vibrate?.(4); }
-    };
-    const up = (ev) => {
-      knob.removeEventListener('pointermove', move); knob.removeEventListener('pointerup', up); knob.removeEventListener('pointercancel', up);
-      knob.classList.remove('is-drag');
-      show(near(Math.max(xOf(0), Math.min(xOf(STOPS.length - 1), ev.clientX - rr.left))));
-    };
-    knob.addEventListener('pointermove', move); knob.addEventListener('pointerup', up); knob.addEventListener('pointercancel', up);
-  });
-  knob.addEventListener('keydown', (e) => {
-    const i = idx(cur);
-    if (e.key === 'ArrowRight') { e.preventDefault(); show(STOPS[Math.min(STOPS.length - 1, i + 1)].id); }
-    if (e.key === 'ArrowLeft') { e.preventDefault(); show(STOPS[Math.max(0, i - 1)].id); }
-  });
-  // A sideways swipe on the bar steps one view.
-  let sw = null;
-  bar.addEventListener('touchstart', (e) => { if (e.target.closest('.mob-knob')) return; const t = e.touches[0]; sw = { x: t.clientX, y: t.clientY }; }, { passive: true });
-  bar.addEventListener('touchend', (e) => {
-    if (!sw) return;
-    const t = e.changedTouches[0], dx = t.clientX - sw.x, dy = t.clientY - sw.y;
-    sw = null;
-    if (Math.abs(dx) < 50 || Math.abs(dy) > Math.abs(dx)) return;
-    const i = idx(cur);
-    show(STOPS[Math.max(0, Math.min(STOPS.length - 1, i + (dx < 0 ? 1 : -1)))].id);
-  }, { passive: true });
+  const paintRail = () => {};
 
   /* ---------------- views ---------------- */
   function frame(st) {
-    const title = h('span', { class: 'mob-title' }, st.tag.toUpperCase());
+    // One small title in Doto, normal capitalization; the six dots beside it open the icon sidebar.
+    const title = h('span', { class: 'mob-title' }, st.tag);
+    const dots = h('button', { type: 'button', class: 'mob-dots', 'aria-label': 'Open the sidebar', 'aria-expanded': 'false', onclick: () => setSide(!sideOpen) }, icon('grip', 18));
+    const flipTo = st.id === 'path' ? 'moments' : st.flip || null;
+    const flip = flipTo ? h('button', { type: 'button', class: 'mob-flip', 'aria-label': `Switch to ${BY_ID[flipTo].tag}`, title: BY_ID[flipTo].tag, onclick: () => show(flipTo) }, icon('repeat', 15)) : null;
     const slot = h('div', { class: 'mob-slot' });
     const tools = h('div', { class: 'mob-tools' });
-    const head = h('header', { class: 'mob-head' }, h('div', { class: 'mob-head-row' }, title, tools), slot);
+    const bar = h('div', { class: 'mob-topbar' }, dots, title, h('span', { class: 'mob-flex' }), flip);
+    const head = h('header', { class: 'mob-head' }, h('div', { class: 'mob-head-row' }, tools), slot);
     const body = h('div', { class: 'mob-body' });
-    const view = h('section', { class: 'mob-view', 'data-view': st.id, hidden: true }, head, body);
+    const view = h('section', { class: 'mob-view', 'data-view': st.id, hidden: true }, bar, head, body);
     stage.append(view);
-    return { view, head, title, slot, tools, body, own: [...head.childNodes] };
+    return { view, head, title, slot, tools, body, dots, own: [...head.childNodes] };
   }
-  // Voice Chat and Radio share a screen: two tabs at the top, one tap apart.
-  function pairTabs(st) {
-    return h('div', { class: 'mob-pair', role: 'tablist' }, ['voice', 'radio'].map((id) => h('button', {
-      type: 'button', role: 'tab', class: ['mob-pair-tab', id === st.id && 'is-on'], 'aria-selected': String(id === st.id),
-      onclick: () => show(id),
-    }, BY_ID[id].tag)));
-  }
-
   function build(id) {
     const st = BY_ID[id];
     const v = frame(st);
     views.set(id, v);
-    if (st.pair) { v.title.replaceWith(pairTabs(st)); v.view.classList.add('is-pair'); }
     if (id === 'path') {
       v.ctl = mountPaths(v.body, null, { embedded: true, owner: me.id, daySlot: v.slot, phone: true });
       v.view.classList.add('is-path');
-    } else if (id === 'blueprint') {
-      // The board list as cards with their diagrams.
-      if (store.get('architect.bs.view.mobile', null) == null) store.set('architect.bs.view.mobile', 'grid');
-      const w = pseudoW(v, { id: 'mobile', kind: 'blueprints' });
-      v.ctl = mountKind('blueprints', v.body, { id: 'mobile', kind: 'blueprints' }, w) || {};
-      v.title.textContent = 'BLUEPRINT';
     } else borrow(id);
     return v;
-  }
-
-  // A widget handle for views that aren't on the board (Blueprint list): opens go full screen on a phone.
-  function pseudoW(v, el) {
-    const host = { ...(ctx.host() || {}), openBoard: (bid) => { if (bid) go(`board/${bid}`); }, addPortal: () => {} };
-    return {
-      el, spaceId: host.spaceId, me, tools: v.tools, slot: v.slot, host, mobile: true,
-      setTitle() {}, setBadge() {}, current: () => el, patch() {}, live() {},
-    };
   }
 
   // The object on the board that answers for this view.
@@ -206,8 +137,6 @@ export function mountMobile(ctx) {
     v.body.replaceChildren();
     // The object's own header (its tabs and tools) and body move in; the grip and ··· stay meaningless here.
     v.head.classList.add('has-wg');
-    // Voice Chat ⇄ Radio: the two tabs take the title's place in the object's own header row.
-    if (st.pair) { v.pairEl = pairTabs(st); head.prepend(v.pairEl); }
     v.head.replaceChildren(head);
     v.body.append(body);
     node.classList.add('is-on-phone');
@@ -266,7 +195,7 @@ export function mountMobile(ctx) {
   }
   bind(ed);
   requestAnimationFrame(() => show(cur, { animate: false }));
-  const onResize = () => paintRail(cur);
+  const onResize = () => { if (innerWidth >= 720 && sideOpen) setSide(false); };
   window.addEventListener('resize', onResize);
 
   return {
@@ -275,6 +204,7 @@ export function mountMobile(ctx) {
     show,
     // "Open the board": every borrowed object goes home so the board is whole while you look at it.
     hide() {
+      setSide(false);
       offChange?.(); offChange = null;
       for (const v of views.values()) giveBack(v);
       root.hidden = true; page.classList.remove('is-mob'); document.body.classList.remove('is-mob');
@@ -287,6 +217,7 @@ export function mountMobile(ctx) {
     destroy() {
       offChange?.();
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('keydown', onKey);
       for (const v of views.values()) { giveBack(v); try { v.ctl?.destroy?.(); } catch {} }
       root.remove();
       page.classList.remove('is-mob');

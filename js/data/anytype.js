@@ -33,50 +33,132 @@ export const anytypeOn = () => configured && !!getPref('anytypeSync', false);
 let snap = null;
 let loading = null;
 let lastLoad = 0;
+let lastFull = 0;
+let lastSig = '';
 const snapshot = () => (snap ||= store.get(K.snap(), null) || { items: [], runs: [], connectors: [], at: 0 });
 
 const missing = (e) => /relation .* does not exist|Could not find the table|42P01|PGRST205|permission denied/i.test(`${e?.code || ''} ${e?.message || e || ''}`);
 
-/** Refresh the imports (at most every 20 s unless forced). Errors keep the last snapshot. */
+/* Nov 25 — sync delay, traced: an Anytype edit reached Path only after (1) the PC connector's next pass
+   (~45 s) and then (2) Path's own poll, which ran every 60 s and re-downloaded every item, mapping, run and
+   op before re-drawing the whole Path. Worst case ≈ 1 m 45 s, plus a full redraw that could interrupt you.
+   Now Path asks "anything newer?" every few seconds (one tiny query), downloads only the records that
+   changed since the newest one it has, merges them in place, and redraws only when something visible
+   changed. A full read still runs every few minutes to catch anything removed outright.
+   The time from an item's update in Architect's backend to it showing here is measured and kept
+   (lastSyncLag) so the status line can show it. */
+const DELTA_MS = 6_000, FULL_MS = 5 * 60_000;
+const maxStamp = (items) => items.reduce((m, it) => (it.updated_at && it.updated_at > m ? it.updated_at : m), '');
+const sigOf = (sn) => `${(sn.items || []).map((it) => `${it.key}:${it.updated_at}:${it.archived ? 1 : 0}`).join('|')}#${(sn.ops || []).map((o) => `${o.id}:${o.status}`).join('|')}#${(sn.runs || []).map((r) => `${r.mapping_id}:${r.status}:${r.last_success_at}`).join('|')}#${(sn.connectors || []).map((c) => c.last_seen_at).join('|')}`;
+let lastSyncLag = null;
+export const syncLag = () => lastSyncLag;
+// Same Anytype object, new key (the mapping was edited): remember the old key so its checkmark carries over.
+const aliasKey = () => `architect.ax.alias.${me()}`;
+const aliases = () => store.get(aliasKey(), {}) || {};
+function noteAliases(prev, next) {
+  const before = new Map();
+  for (const it of prev || []) if (it.source_object_id) before.set(`${it.dest_id}|${it.source_object_id}`, it.key);
+  const a = aliases();
+  let changed = false;
+  for (const it of next || []) {
+    const old = it.source_object_id && before.get(`${it.dest_id}|${it.source_object_id}`);
+    if (old && old !== it.key && a[it.key] !== old) { a[it.key] = old; changed = true; }
+  }
+  if (changed) store.set(aliasKey(), Object.fromEntries(Object.entries(a).slice(-600)));
+}
+
+/** Refresh the imports. Errors keep the last snapshot. */
 export function loadImports({ force = false } = {}) {
   if (!anytypeOn()) return Promise.resolve(snapshot());
   if (loading) return loading;
-  if (!force && Date.now() - lastLoad < 20_000) return Promise.resolve(snapshot());
+  if (!force && Date.now() - lastLoad < DELTA_MS) return Promise.resolve(snapshot());
   loading = (async () => {
+    const t0 = Date.now();
     try {
-      const [items, runs, connectors, mappings] = await Promise.all([
-        api.db.select('anytype_items', { columns: 'key,mapping_id,dest_kind,dest_id,source_space_id,source_object_id,fields,sort,archived,updated_at', filters: { archived: false }, order: 'sort.asc' }),
-        api.db.select('anytype_runs', { columns: 'mapping_id,status,message,last_attempt_at,last_success_at,item_count' }),
-        api.db.select('anytype_connectors', { columns: 'id,name,last_seen_at,revoked_at' }),
-        api.db.select('anytype_mappings', { columns: 'id,name,dest_kind,dest_id,enabled,paused,source_kind' }).catch(() => []),
-      ]);
+      const prev = snapshot();
+      const full = force || !prev.items?.length || Date.now() - lastFull > FULL_MS || prev.setupNeeded;
+      let items, runs = prev.runs, connectors = prev.connectors, mappings = prev.mappings;
+      const cols = 'key,mapping_id,dest_kind,dest_id,source_space_id,source_object_id,fields,sort,archived,updated_at';
+      if (full) {
+        [items, runs, connectors, mappings] = await Promise.all([
+          api.db.select('anytype_items', { columns: cols, filters: { archived: false }, order: 'sort.asc' }),
+          api.db.select('anytype_runs', { columns: 'mapping_id,status,message,last_attempt_at,last_success_at,item_count' }),
+          api.db.select('anytype_connectors', { columns: 'id,name,last_seen_at,revoked_at' }),
+          api.db.select('anytype_mappings', { columns: 'id,name,dest_kind,dest_id,enabled,paused,source_kind' }).catch(() => []),
+        ]);
+        lastFull = Date.now();
+      } else {
+        // Only what changed since the newest record we have (archived ones too, so removals show).
+        const since = maxStamp(prev.items || []);
+        const fresh = await api.db.select('anytype_items', { columns: cols, filters: since ? { updated_at: { gt: since } } : {}, order: 'sort.asc' });
+        const byKey = new Map((prev.items || []).map((it) => [it.key, it]));
+        for (const it of fresh) { if (it.archived) byKey.delete(it.key); else byKey.set(it.key, it); }
+        items = [...byKey.values()].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0));
+        if (fresh.length) {
+          const newest = Math.max(...fresh.map((it) => Date.parse(it.updated_at) || 0));
+          if (newest) lastSyncLag = Math.max(0, t0 - newest);
+          [runs, connectors] = await Promise.all([
+            api.db.select('anytype_runs', { columns: 'mapping_id,status,message,last_attempt_at,last_success_at,item_count' }).catch(() => prev.runs),
+            api.db.select('anytype_connectors', { columns: 'id,name,last_seen_at,revoked_at' }).catch(() => prev.connectors),
+          ]);
+        }
+      }
+      noteAliases(prev.items, items);
       await flushOps();
-      let ops = [];
-      try { ops = await api.db.select('anytype_ops', { columns: 'id,mapping_id,item_key,op,payload,status,message,created_at', order: 'created_at.asc' }); opsReady = true; }
-      catch (e) { if (missing(e)) opsReady = false; }
+      let ops = prev.ops || [];
+      if (full || outbox().length || ops.some((o) => o.status === 'pending' || o.status === 'taken')) {
+        try { ops = await api.db.select('anytype_ops', { columns: 'id,mapping_id,item_key,op,payload,status,message,created_at', order: 'created_at.asc' }); opsReady = true; }
+        catch (e) { if (missing(e)) opsReady = false; }
+      }
       snap = { items, runs, connectors, mappings, ops, at: Date.now() };
       store.set(K.snap(), snap);
       lastLoad = Date.now();
       await flushChecks();
-      await loadChecks();
+      if (full || pendingList().length) await loadChecks();
     } catch (e) { if (missing(e)) snap = { ...snapshot(), setupNeeded: true }; }
     finally { loading = null; }
-    emit();
+    // Re-draw only when something you'd see changed.
+    const sig = sigOf(snapshot()) + JSON.stringify(checksMap()).length;
+    if (sig !== lastSig || force) { lastSig = sig; emit(); }
     return snapshot();
   })();
   return loading;
 }
 
+/* An item with no date of its own belongs to the Architect day it first arrived on — it doesn't carry over
+   into Tomorrow (or reappear on later days) just because the sync runs again. Pinned on your account by
+   its Anytype object, so a re-mapped item keeps its day. */
+const dayPins = () => getPref('anytypeDays', {}) || {};
+let pinT = 0, pinBuf = null;
+function pinDay(it, today) {
+  const id = it.source_object_id || it.key;
+  const pins = pinBuf || dayPins();
+  if (pins[id]) return pins[id];
+  pinBuf = { ...pins, [id]: today };
+  clearTimeout(pinT);
+  pinT = setTimeout(() => { const next = pinBuf; pinBuf = null; const keep = Object.entries(next).sort((a, b) => (a[1] < b[1] ? 1 : -1)).slice(0, 1500); setPref('anytypeDays', Object.fromEntries(keep)).catch(() => {}); }, 800);
+  return today;
+}
+const dayOfItem = (it, today) => it.fields?.date || (today ? pinDay(it, today) : null);
+
 /** Imported items for one Path column on a given Architect day (undated items show every day). Pending
  *  Architect-side changes show at once: a rename has its new title, a delete is gone, an add is there. */
-export function importsFor(colId, day) {
+export function importsFor(colId, day, { today = null } = {}) {
   if (!anytypeOn()) return [];
   const hidden = hiddenMap();
   const ops = openOps();
   const gone = new Set(ops.filter((o) => o.op === 'delete').map((o) => o.item_key));
   const named = new Map(ops.filter((o) => o.op === 'rename').map((o) => [o.item_key, o.payload?.title]));
-  const list = snapshot().items
-    .filter((it) => it.dest_kind === 'path' && it.dest_id === colId && !it.archived && (!it.fields?.date || it.fields.date === day))
+  // One Path item per Anytype object in a Set-Point: an edit replaces it, never duplicates it.
+  const seen = new Map();
+  for (const it of snapshot().items) {
+    if (it.dest_kind !== 'path' || it.dest_id !== colId || it.archived) continue;
+    const k = it.source_object_id || it.key;
+    const have = seen.get(k);
+    if (!have || (it.updated_at || '') > (have.updated_at || '')) seen.set(k, it);
+  }
+  const list = [...seen.values()].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
+    .filter((it) => { const d = dayOfItem(it, today); return !d || d === day; })
     .filter((it) => !hidden[it.key] && !gone.has(it.key))
     .map((it) => (named.has(it.key) ? { ...it, fields: { ...it.fields, title: named.get(it.key) }, pendingEdit: true } : it));
   const maps = new Set(mappingsFor(colId).map((m) => m.id));
@@ -180,7 +262,8 @@ export function importStatus() {
   if (!live.length) return { tone: 'err', text: 'Anytype connector disconnected — showing the last import' };
   if (bad) return { tone: 'err', text: `Anytype: ${STATUS[bad.status] || bad.status}${success ? ` · last good import ${ago(success)}` : ''}` };
   if (Date.now() - seen > 12 * 60_000) return { tone: 'wait', text: `Waiting for desktop${success ? ` · last imported ${ago(success)}` : ''}` };
-  return { tone: 'ok', text: success ? `Last imported ${ago(success)}` : 'Connected — first import pending' };
+  const lag = lastSyncLag != null && lastSyncLag < 10 * 60_000 ? ` · last change showed ${Math.max(1, Math.round(lastSyncLag / 1000))}s after it synced` : '';
+  return { tone: 'ok', text: success ? `Last imported ${ago(success)}${lag}` : 'Connected — first import pending' };
 }
 export const STATUS = {
   error: 'import failed', missing_section: 'the section heading is missing', no_access: 'access to Anytype was revoked',
@@ -208,7 +291,8 @@ async function loadChecks() {
 export function checkOf(key, day, { item = null, dayOf = null } = {}) {
   const p = pendingList().filter((x) => x.key === key && x.day === day).pop();
   if (p) return { done: !!p.done, pending: true };
-  const c = checksMap()[`${key}|${day}`];
+  const old = aliases()[key];
+  const c = checksMap()[`${key}|${day}`] || (old ? checksMap()[`${old}|${day}`] : undefined);
   const f = item?.fields;
   if (f && typeof f.done === 'boolean' && f.done_at && dayOf) {
     const at = Date.parse(f.done_at) || 0;

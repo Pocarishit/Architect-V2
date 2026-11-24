@@ -52,7 +52,7 @@ export function loadMyVars() {
       if (configured && !missing(e)) console.warn('Variables: falling back to this browser', e);
       if (local) data = normal(local); else fresh = true;
     }
-    data ||= { sections: null, entries: [], ideas: null, vfree: false, rev: 0 };
+    data ||= { sections: null, entries: [], ideas: null, vfree: false, gone: [], rev: 0 };
     if (remote && !poller) {
       poller = setInterval(pull, POLL_MS);
       document.addEventListener('visibilitychange', () => { if (!document.hidden) pull(); });
@@ -69,8 +69,32 @@ const normal = (d) => ({
   entries: Array.isArray(d.entries) ? d.entries : [],
   ideas: Array.isArray(d.ideas) ? d.ideas : null, // null: never saved (your old personal-Space ideas move in once)
   vfree: !!d.vfree, // Variables' object-level Free View is on (Nov 18)
+  gone: Array.isArray(d.gone) ? d.gone : [], // ids you deleted (Nov 25): tombstones for shared categories
   rev: Number(d.rev) || 0,
 });
+
+/* Tombstones (Nov 25). Deleting a chat, a subsection or a note records its id on your account (not this
+   device), so a shared copy can never bring it back — from any of your devices. Restoring it (undo)
+   takes the id off again. */
+const GONE_MAX = 4000;
+function idsIn(d, withNotes = true) {
+  const out = new Set();
+  for (const s of d?.sections || []) if (s?.id) out.add(s.id);
+  for (const e of d?.entries || []) {
+    if (!e?.id) continue;
+    out.add(e.id);
+    if (withNotes) for (const n of e.notes || []) if (n?.id) out.add(n.id);
+  }
+  return out;
+}
+/** next.gone after an edit from prev to next: what disappeared is added, what came back is removed. */
+export function nextGone(prev, next, gone = []) {
+  const a = idsIn(prev), b = idsIn(next);
+  const set = new Set(gone);
+  for (const id of a) if (!b.has(id)) set.add(id);
+  for (const id of b) set.delete(id);
+  return [...set].slice(-GONE_MAX);
+}
 
 export const myVars = () => data;
 export const myVarsRemote = () => remote;
@@ -107,7 +131,9 @@ export const canRedoMyVars = () => future.length > 0;
 export function setMyVars(patch) {
   if (!data) return;
   remember(patch);
-  data = { ...data, ...patch, rev: Date.now() };
+  const touches = 'sections' in patch || 'entries' in patch;
+  const gone = touches && !('gone' in patch) ? nextGone(data, { ...data, ...patch }, data.gone || []) : (patch.gone || data.gone || []);
+  data = { ...data, ...patch, gone, rev: Date.now() };
   store.set(localKey(), data);
   dirty = true;
   emit(Object.keys(patch));

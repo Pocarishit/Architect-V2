@@ -18,10 +18,17 @@
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { menu, toast, confirmDialog } from '../core/ui.js';
-import { uid } from '../core/util.js';
+import { uid, store } from '../core/util.js';
 import { api, configured, friendlyError } from '../data/api.js';
 import { getPref, setPref } from '../data/prefs.js';
 
+// Nov 25 — the canvas IS a regular Blueprint now: the same canvas, toolbar, menus and keyboard shortcuts as
+// any board (pan, zoom, select, move, edit, connectors). Update notes are sticky notes; a preview is an image
+// connected to its note. Push Update, Schedule and the run status stay in the panel beside it, for the
+// selected note. The old simple canvas (prefs.updCanvas) moves onto the board once, then isn't used.
+import { mountBoard } from '../board/board.js';
+import { setSurface, getSurface } from '../board/editor.js';
+import { go } from '../core/router.js';
 const NOTE = { w: 220, h: 150 };
 const PREV = { w: 200 };
 const LIVE = new Set(['queued', 'running', 'blocked']);
@@ -36,7 +43,7 @@ async function loadRuns() {
   return api.db.select('architect_update_runs', { columns: 'id,note_id,title,status,step,eta_at,need,answer,result,run_at,started_at,ended_at,created_at,session,log', order: 'created_at.desc' });
 }
 
-export function updatesCanvas({ extras } = {}) {
+function legacyCanvas({ extras } = {}) {
   let data = clean(getPref('updCanvas', null));
   let picked = null;            // selected note id
   let runs = [];
@@ -380,5 +387,268 @@ export function updatesCanvas({ extras } = {}) {
 
   paint();
   refresh();
+  return wrap;
+}
+
+
+/* ================= the Blueprint version (Nov 25) ================= */
+const BOARD_NAME = 'Architect SYSTEM Updates — HQ';
+const SURFACE = 'settings-updates';
+const TONE_FILL = { todo: '#F2C94C', done: '#3FAE6A' };
+const escHtml = (t) => String(t || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const plain = (html) => { const d = document.createElement('div'); d.innerHTML = String(html || '').replace(/<br\s*\/?>/gi, '\n').replace(/<(div|p|li|h\d)\b/gi, '\n<$1').replace(/<\/(div|p|li|h\d)>/gi, '\n'); return (d.textContent || '').replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').trim(); };
+
+/** The old canvas's notes, previews and links as board elements (sticky notes, images, connectors). */
+function migrate(c) {
+  const els = [];
+  for (const n of c.notes) {
+    els.push({ id: n.id, type: 'sticky', x: n.x || 0, y: n.y || 0, w: Math.max(200, n.w || NOTE.w), h: Math.max(160, n.h || NOTE.h), fill: TONE_FILL[n.tone === 'done' ? 'done' : 'todo'], align: 'left', fontSize: 15,
+      html: `<b>${escHtml(n.title || 'Update')}</b>${n.text ? `<div>${escHtml(n.text).replace(/\n/g, '<br>')}</div>` : ''}${n.result ? `<div><b>RESULT</b> ${escHtml(n.result)}</div>` : ''}`,
+      text: [n.title || 'Update', n.text || '', n.result ? `RESULT ${n.result}` : ''].filter(Boolean).join('\n'), ...(n.tone ? { updTone: n.tone } : {}) });
+  }
+  for (const p of c.previews) {
+    const w = p.w || PREV.w;
+    els.push({ id: p.id, type: 'image', x: p.x || 0, y: p.y || 0, w, h: Math.round(w * 0.66), ...(p.path ? { path: p.path } : { src: p.url }), ...(p.name ? { alt: p.name } : {}) });
+  }
+  for (const l of c.links) {
+    if (!els.some((e) => e.id === l.note) || !els.some((e) => e.id === l.preview)) continue;
+    els.push({ id: uid(), type: 'line', a: { id: l.note }, b: { id: l.preview }, stroke: 'auto', strokeWidth: 2, route: 'straight', startCap: 'none', endCap: 'none', dash: 'dashed' });
+  }
+  return els;
+}
+
+async function ensureBoard() {
+  const have = getPref('updBoardId', null);
+  if (have) {
+    try { if (await api.db.get('blueprints', have, 'id')) return have; } catch (e) { if (!/not.*found|no rows/i.test(String(e?.message))) throw e; }
+  }
+  const id = uid();
+  const row = { id, name: BOARD_NAME, kind: 'board', folder_id: null, pinned: false, data: { v: 1, elements: migrate(clean(getPref('updCanvas', null))) }, preview: [] };
+  await api.db.insert('blueprints', row).catch(async (e) => {
+    if (/kind/.test(String(e?.message))) { delete row.kind; return api.db.insert('blueprints', row); }
+    throw e;
+  });
+  await setPref('updBoardId', id);
+  return id;
+}
+
+export function updatesCanvas({ extras } = {}) {
+  let ed = null;            // the board's editor once it's up
+  let picked = null;        // the selected update note (a sticky note's id)
+  let runs = [];
+  let runsErr = null;
+  let destroyed = false;
+  let handle = null;
+  let boardId = null;
+  const host = h('div', { class: 'uf-board', 'data-surface': SURFACE });
+  const panel = h('aside', { class: 'uf-panel', 'aria-live': 'polite' });
+  const root = h('div', { class: 'uf is-board' }, h('div', { class: 'uf-main' }, host), panel);
+  const wrap = h('div', { class: 'stack uf-wrap' }, root, ...(extras ? [extras()] : []));
+  host.append(h('div', { class: 'bp-loading' }, h('span', { class: 'dots-loader' }, h('i'), h('i'), h('i'))));
+  const prevSurface = getSurface();
+
+  const notes = () => (ed ? ed.els.filter((e) => e.type === 'sticky') : []);
+  const noteById = (id) => (ed ? ed.byId.get(id) : null);
+  const noteRun = (id) => runs.find((r) => r.note_id === id) || null;
+  const txt = (n) => plain(n?.html || n?.text).replace(/^\n+/, '');
+  const noteTitle = (n) => txt(n).split('\n')[0].trim().slice(0, 140) || 'Untitled update';
+  const noteBody = (n) => txt(n).split('\n').slice(1).join('\n').replace(/\n?RESULT [\s\S]*$/, '').trim().slice(0, 4000);
+  const linkedPreviews = (n) => {
+    if (!ed || !n) return [];
+    const ids = new Set();
+    for (const l of ed.els) if (l.type === 'line') { if (l.a?.id === n.id && l.b?.id) ids.add(l.b.id); if (l.b?.id === n.id && l.a?.id) ids.add(l.a.id); }
+    return [...ids].map((id) => ed.byId.get(id)).filter((x) => x && (x.type === 'image' || x.type === 'link' || x.type === 'embed'));
+  };
+
+  (async () => {
+    try { boardId = await ensureBoard(); }
+    catch (e) {
+      // No board possible (e.g. no Supabase table access): the previous simple canvas still works.
+      if (destroyed) return;
+      wrap.replaceWith(legacyCanvas({ extras }));
+      toast(`Updates & Fixes couldn’t open as a Blueprint — ${friendlyError(e)}`, { tone: 'error', ms: 5000 });
+      return;
+    }
+    if (destroyed) return;
+    host.replaceChildren();
+    setSurface(SURFACE);
+    handle = mountBoard(host, boardId, {
+      windowed: {
+        surface: SURFACE,
+        onExpand: () => { const id = boardId; closeDlg(); go(`board/${id}`); },
+        onClose: () => closeDlg(),
+        onName: () => {},
+      },
+      extendMenu: (items, { onElement, sel }) => {
+        const n = onElement && sel.length === 1 && sel[0].type === 'sticky' ? sel[0] : null;
+        if (!n) return items;
+        const r = noteRun(n.id);
+        const live = r && LIVE.has(r.status);
+        const done = (n.updTone || (r?.status === 'done' ? 'done' : 'todo')) === 'done';
+        return [
+          { label: 'Push Update', icon: 'upload', disabled: !!live, onSelect: () => push(n.id) },
+          { label: 'Schedule…', icon: 'clock', disabled: !!live, onSelect: () => { select(n.id); paintPanel(true); } },
+          { label: done ? 'Mark as to build (yellow)' : 'Mark as shipped (green)', icon: 'check', onSelect: () => setTone(n.id, done ? 'todo' : 'done') },
+          '-', ...items,
+        ];
+      },
+      onReady: (tools) => {
+        ed = tools.editor;
+        // Settings focuses its first field on open — here that's the board's name; nobody meant to type there.
+        const unfocus = () => { if (document.activeElement?.classList?.contains('bp-title')) document.activeElement.blur(); };
+        unfocus(); requestAnimationFrame(unfocus); setTimeout(unfocus, 120);
+        if (!store.get(`architect.cam.${boardId}`, null) && ed.els.length) requestAnimationFrame(() => ed.zoomToFit(false));
+        ed.on('selection', () => {
+          const sel = ed.selected();
+          const one = sel.length === 1 && sel[0].type === 'sticky' ? sel[0].id : null;
+          // Clicking a preview linked to one note keeps that note in the panel.
+          const prev = !one && sel.length === 1 ? notes().find((x) => linkedPreviews(x).some((p) => p.id === sel[0].id)) : null;
+          select(one || prev?.id || (sel.length ? picked : null));
+        });
+        ed.on('change', () => { if (picked && !noteById(picked)) select(null); else paintPanel(); });
+        refresh();
+      },
+    });
+  })();
+
+  function closeDlg() { const f = host.closest('form.dlg'); if (f?._close) f._close(true); }
+  // Settings is a form: Enter in the board's fields must not submit (close) it, and Esc first clears what
+  // you're doing on the board — only an Esc with nothing selected closes Settings.
+  host.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target instanceof HTMLInputElement) e.preventDefault(); });
+  const onEsc = (e) => {
+    if (e.key !== 'Escape' || !ed || !host.isConnected) return;
+    if (getSurface() !== SURFACE && !host.contains(document.activeElement)) return;
+    if (document.querySelector('.menu, .pop')) return;
+    if (ed.editingId) ed.finishEditing();
+    else if (ed.sel.size) ed.clearSel();
+    else return;
+    e.preventDefault(); e.stopImmediatePropagation();
+  };
+  window.addEventListener('keydown', onEsc, true);
+  function select(id) { if (picked === id) return; picked = id; paintPanel(); }
+  function setTone(id, tone) {
+    if (!ed) return;
+    ed.updateEls([id], { updTone: tone, fill: TONE_FILL[tone] });
+    paintPanel();
+  }
+
+  const noteSnapshot = (n) => ({
+    title: noteTitle(n), text: noteBody(n),
+    previews: linkedPreviews(n).map((p) => ({ path: p.path || null, url: p.src || p.url || null, name: p.alt || p.title || '' })),
+  });
+  async function push(id, runAt = null) {
+    const n = noteById(id);
+    if (!n) return;
+    if (!configured) { toast('Push Update needs Supabase sync (config.js).', { tone: 'error' }); return; }
+    if (!txt(n)) { toast('Write what the update should do on the note first.', { tone: 'error' }); return; }
+    const last = runs.find((r) => r.note_id === n.id && r.session);
+    const snap = noteSnapshot(n);
+    try {
+      const paths = snap.previews.map((p) => p.path).filter(Boolean);
+      if (paths.length) { const m = await api.media.sign(paths); snap.previews.forEach((p) => { if (p.path && m?.[p.path]) p.url = m[p.path]; }); }
+    } catch {}
+    try {
+      await api.db.insert('architect_update_runs', {
+        id: uid(), note_id: n.id, title: snap.title, note: snap,
+        status: 'queued', run_at: (runAt || new Date()).toISOString(), session: last?.session || null, log: [],
+      });
+      toast(runAt ? `Scheduled for ${when(runAt)}.` : 'Pushed — it starts on your PC within a few seconds.', { ms: 2600 });
+      await refresh();
+    } catch (e) { toast(missing(e) ? 'Updates & Fixes needs one database update: run supabase/nov24.sql in the Supabase SQL editor.' : friendlyError(e), { tone: 'error', ms: 6000 }); }
+  }
+  async function patchRun(r, p) {
+    try { await api.db.update('architect_update_runs', r.id, p); await refresh(); } catch (e) { toast(friendlyError(e), { tone: 'error' }); }
+  }
+
+  function paintPanel(scheduling = false) {
+    if (destroyed) return;
+    const n = picked ? noteById(picked) : null;
+    if (!n) {
+      const live = runs.filter((r) => LIVE.has(r.status));
+      panel.replaceChildren(...[
+        h('h4', { class: 'uf-h' }, 'RUNS'),
+        runsErr ? h('p', { class: 'uf-hint is-bad' }, runsErr) : null,
+        live.length ? h('div', { class: 'uf-runs' }, ...live.map((r) => runCard(r, true))) : h('p', { class: 'uf-hint' }, 'Nothing running. Select an update note on the canvas, then Push Update or Schedule.'),
+        h('p', { class: 'uf-hint' }, 'Notes are sticky notes: yellow is to build, green is shipped. Connect a picture to a note to send it along as a preview.'),
+        runnerHelp()].filter(Boolean));
+      return;
+    }
+    const mine = runs.filter((r) => r.note_id === n.id);
+    const cur = mine.find((r) => LIVE.has(r.status)) || null;
+    const dt = h('input', { class: 'input sm', type: 'datetime-local', 'aria-label': 'Run at', value: localInput(new Date(Date.now() + 3600_000)), onkeydown: (e) => { e.stopPropagation(); if (e.key === 'Enter') e.preventDefault(); } });
+    const sched = h('div', { class: 'uf-sched', hidden: !scheduling },
+      dt,
+      h('button', { type: 'button', class: 'btn sm', onclick: () => { const t = new Date(dt.value); if (!dt.value || Number.isNaN(+t)) { toast('Pick a date and time.', { tone: 'error' }); return; } if (t < new Date()) { toast('That time has passed.', { tone: 'error' }); return; } push(n.id, t); } }, 'Schedule'));
+    const pv = linkedPreviews(n).length;
+    panel.replaceChildren(...[
+      h('h4', { class: 'uf-h' }, noteTitle(n).toUpperCase()),
+      pv ? h('p', { class: 'uf-hint' }, `${pv} linked preview${pv === 1 ? '' : 's'}`) : null,
+      h('div', { class: 'uf-actions' },
+        h('button', { type: 'button', class: 'btn btn-primary sm', disabled: !!cur, onclick: () => push(n.id) }, icon('upload', 13), 'Push Update'),
+        h('button', { type: 'button', class: 'btn sm', disabled: !!cur, onclick: () => { sched.hidden = !sched.hidden; if (!sched.hidden) dt.focus(); } }, icon('clock', 13), 'Schedule')),
+      sched,
+      mine.length ? h('div', { class: 'uf-runs' }, ...mine.slice(0, 6).map((r) => runCard(r))) : h('p', { class: 'uf-hint' }, 'Not run yet.'),
+      runsErr ? h('p', { class: 'uf-hint is-bad' }, runsErr) : null].filter(Boolean));
+    if (scheduling) requestAnimationFrame(() => dt.focus());
+  }
+  function runCard(r, showTitle = false) {
+    const due = r.status === 'queued' && Date.parse(r.run_at) > Date.now() + 30_000;
+    const st = due ? 'scheduled' : r.status;
+    const eta = r.eta_at && r.status === 'running' ? Date.parse(r.eta_at) - Date.now() : null;
+    const ans = h('textarea', { class: 'input uf-answer', rows: 2, placeholder: 'Your answer…', 'aria-label': 'Answer', onkeydown: (e) => e.stopPropagation() });
+    return h('div', { class: ['uf-run', `is-${st}`] },
+      h('div', { class: 'uf-run-top' }, h('span', { class: ['uf-badge', `is-${st}`] }, h('i'), STATUS_TEXT[st] || st), h('span', { class: 'uf-flex' }), h('small', {}, when(r.started_at || r.run_at || r.created_at))),
+      showTitle ? h('button', { type: 'button', class: 'uf-run-title is-link', onclick: () => { if (noteById(r.note_id)) { ed?.select([r.note_id]); ed?.zoomToSelection?.(); select(r.note_id); } } }, r.title) : null,
+      due ? h('p', { class: 'uf-step' }, `Runs ${when(r.run_at)}`) : null,
+      r.step && LIVE.has(r.status) ? h('p', { class: 'uf-step' }, r.step) : null,
+      eta != null ? h('p', { class: 'uf-eta' }, eta > 0 ? `About ${fmtLeft(eta)} left` : 'Finishing up…') : null,
+      r.status === 'blocked' ? h('div', { class: 'uf-block' },
+        h('p', {}, r.need || 'The run needs your input.'),
+        ans,
+        h('button', { type: 'button', class: 'btn btn-primary sm', onclick: () => { const v = ans.value.trim(); if (!v) { ans.focus(); return; } patchRun(r, { answer: v, status: 'queued', need: null, run_at: new Date().toISOString() }); } }, 'Send answer')) : null,
+      (r.status === 'done' || r.status === 'failed') && r.result ? h('p', { class: 'uf-res' }, r.result) : null,
+      LIVE.has(r.status) ? h('button', { type: 'button', class: 'btn sm uf-cancel', onclick: () => patchRun(r, { status: 'canceled', ended_at: new Date().toISOString() }) }, 'Cancel') : null);
+  }
+  function runnerHelp() {
+    return h('details', { class: 'uf-help' },
+      h('summary', {}, 'How runs work'),
+      h('p', {}, 'Runs happen on your PC with the Architect runner (the runner/ folder in your Architect repo). It checks for pushed and scheduled updates every few seconds, resumes the Claude session linked to Architect when there is one — or starts a new one with the note and the latest saved project — then reports each step here.'),
+      h('p', {}, 'Set it up once: Settings → API → generate a token, then on the PC run  node runner/architect-runner.mjs setup  and  install-windows.ps1. It runs hidden: no windows, no pop-ups, no focus stealing.'));
+  }
+  const localInput = (d) => { const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 16); };
+
+  async function refresh() {
+    if (destroyed || !configured) { paintPanel(); return; }
+    try { runs = await loadRuns(); runsErr = null; }
+    catch (e) { runsErr = missing(e) ? 'Run supabase/nov24.sql in the Supabase SQL editor to turn on Push Update.' : friendlyError(e); }
+    // A finished run writes its result onto its note (once) and turns it green.
+    if (ed && !ed.editingId) {
+      const done = getPref('updResults', {}) || {};
+      let changed = false;
+      for (const r of runs) {
+        if (r.status !== 'done' || !r.result || done[r.note_id] === r.id) continue;
+        const n = noteById(r.note_id);
+        if (!n) continue;
+        const res = r.result.slice(0, 1200);
+        ed.updateEls([n.id], { html: `${n.html || escHtml(n.text || '').replace(/\n/g, '<br>')}<div><b>RESULT</b> ${escHtml(res)}</div>`, text: `${n.text || ''}\nRESULT ${res}`, ...(n.updTone ? {} : { updTone: 'done', fill: TONE_FILL.done }) });
+        done[r.note_id] = r.id; changed = true;
+      }
+      if (changed) setPref('updResults', done).catch(() => {});
+    }
+    paintPanel();
+  }
+  const poll = setInterval(() => { if (!wrap.isConnected) { stop(); return; } if (!document.hidden) refresh(); }, 5000);
+  function stop() {
+    if (destroyed) return;
+    destroyed = true; clearInterval(poll);
+    window.removeEventListener('keydown', onEsc, true);
+    try { handle?.destroy(); } catch {}
+    if (getSurface() === SURFACE) setSurface(prevSurface && prevSurface !== SURFACE ? prevSurface : null);
+  }
+  // Settings closing or switching tabs removes the canvas: stop with it.
+  const mo = new MutationObserver(() => { if (!wrap.isConnected && wrap._seen) { mo.disconnect(); stop(); } if (wrap.isConnected) wrap._seen = true; });
+  mo.observe(document.body, { childList: true, subtree: true });
+
+  paintPanel();
   return wrap;
 }

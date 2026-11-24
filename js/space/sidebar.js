@@ -27,14 +27,21 @@ import { loadMyVars, myVars, setMyVars, onMyVars, myVarsSource } from '../data/m
 import { startVarShare, foreignCats, onShared, shareCategory, unshareCategory, setSharedSpace, syncShared, sharedSource } from '../data/varshare.js';
 
 // The rail's own icons: thin strokes, round caps, drawn on a 24 grid.
+// Nov 25 — Overview is the official dotted Architect mark (its red dot included), Variables an atom, Path
+// the compass from the approved mockup: a round rim, four short directional marks, a diagonal needle with
+// a centre dot.
+const DOT = (x, y, red) => `<circle cx="${x}" cy="${y}" r="1.45" fill="${red ? '#D71921' : 'currentColor'}" stroke="none"/>`;
 const RAIL_ICONS = {
+  logo: [[12.0, 5.25], [9.375, 8.625], [14.625, 8.625], [7.5, 12.0], [16.5, 12.0], [6.0, 15.375], [9.0, 15.375], [12.0, 15.375], [15.0, 15.375], [18.0, 15.375], [4.875, 18.75], [19.125, 18.75]].map(([x, y]) => DOT(x, y)).join('') + DOT(12, 18.75, true),
+  atom: '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><ellipse cx="12" cy="12" rx="9" ry="3.6"/><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(120 12 12)"/>',
+  compass: '<circle cx="12" cy="12" r="8.6"/><path d="M12 1.6v2.3M12 20.1v2.3M1.6 12h2.3M20.1 12h2.3"/><path d="M15.6 8.4 12.9 12.9 8.4 15.6 11.1 11.1Z" fill="currentColor" fill-opacity=".18"/><circle cx="12" cy="12" r="1.05" fill="currentColor" stroke="none"/>',
   frame: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
   stack: '<rect x="4" y="4.5" width="11" height="4" rx="2"/><rect x="8" y="10" width="12" height="4" rx="2"/><rect x="4" y="15.5" width="11" height="4" rx="2"/>',
   route: '<circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="5.5" r="2"/><path d="M7.2 17.2C9 14 11 14.5 13 13s3.2-3.8 4-5.8"/>',
   dots: '<circle cx="12" cy="5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/>',
   square: '<rect x="5" y="5" width="14" height="14" rx="3"/>',
 };
-function railIcon(name) {
+export function railIcon(name) {
   const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('width', '22'); s.setAttribute('height', '22');
   s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '1.6');
@@ -82,18 +89,30 @@ export function mountSidebar(ctx) {
   }
   function paintRail() {
     rail.replaceChildren(
-      item('space', 'frame', 'Architect', () => show('space')),
-      item('variables', 'stack', 'Variables', () => show('variables')),
-      item('path', 'route', 'Path', () => show('path')),
-      item('more', 'dots', 'More', (b) => moreMenu(b)),
+      item('space', 'logo', 'Overview', () => show('space')),
+      item('variables', 'atom', 'Variables', () => show('variables')),
+      item('path', 'compass', 'Path', () => show('path')),
       ...views().map((v) => item(`custom:${v.id}`, 'square', v.name || 'My view', () => show(`custom:${v.id}`), {
         oncontextmenu: (e) => { e.preventDefault(); viewMenu({ x: e.clientX, y: e.clientY }, v); },
-      })));
+      })),
+      // More sits at the very bottom of the rail (Nov 25).
+      h('span', { class: 'sb-push', 'aria-hidden': 'true' }),
+      item('more', 'dots', 'More', (b) => moreMenu(b), { class: 'sb-item sb-more' }));
+    ctx.onRail?.(railSpec());
   }
+
+  // What the rail holds, for the phone's icon sidebar (the same icons, in the same order).
+  const railSpec = () => [
+    { id: 'space', svg: railIcon('logo'), label: 'Overview' },
+    { id: 'variables', svg: railIcon('atom'), label: 'Variables' },
+    { id: 'path', svg: railIcon('compass'), label: 'Path' },
+    ...views().map((v) => ({ id: `custom:${v.id}`, svg: railIcon('square'), label: v.name || 'My view' })),
+    { id: 'more', svg: railIcon('dots'), label: 'More', bottom: true },
+  ];
 
   function moreMenu(anchor) {
     const r = anchor.getBoundingClientRect();
-    menu({ x: r.right + 6, y: r.top }, [
+    menu({ x: r.right + 6, y: Math.min(r.top, innerHeight - 220) }, [
       { label: 'Settings', icon: 'settings', onSelect: () => ctx.openSettings('general') },
       { label: 'Profile', icon: 'user', onSelect: () => ctx.openSettings('profile') },
       { label: 'Custom', icon: 'layers', onSelect: () => newView() },
@@ -265,7 +284,42 @@ export function mountSidebar(ctx) {
   }
 
   /* ================= PATH: Path left, Fleeting Moments right ================= */
+  /* Path's own "Customize My View" (Nov 25): the very same editor as My View — every control, the same
+     editing — for the Path view: show / hide the title and header, start a new layout on a blank dot grid,
+     add objects, drag them freely inside the border, lock / unlock positions. No top bar, no pan, no zoom.
+     Kept separately (prefs.sbPathLayout), so changing Path never changes a My View, or the other way round. */
+  const pathLayout = () => getPref('sbPathLayout', null);
+  const savePathLayout = (next) => setPref('sbPathLayout', next).catch((e) => toast(friendlyError(e), { tone: 'error' }));
   function pathView(v) {
+    const lay = pathLayout();
+    if (lay?.on) return pathCustom(v, lay);
+    return pathSplit(v);
+  }
+  function customizePath(blank = false) {
+    const ratio = Math.min(0.8, Math.max(0.25, Number(getPref('sbSplit', 0.59)) || 0.59));
+    const prev = pathLayout() || {};
+    const items = blank ? [] : (prev.items?.length ? prev.items : [
+      { id: uid(), kind: 'path', box: { x: 0.008, y: 0.012, w: ratio - 0.016, h: 0.976 } },
+      { id: uid(), kind: 'fleeting', box: { x: ratio + 0.008, y: 0.012, w: 1 - ratio - 0.016, h: 0.976 } },
+    ]);
+    savePathLayout({ ...prev, on: true, items, locked: false }).then(() => { if (cur === 'path') { active?.destroy(); active = null; cur = ''; show('path'); } });
+  }
+  function pathCustom(v, lay) {
+    v.classList.add('sbv-path-custom');
+    let state = { ...lay };
+    const io = {
+      zoomPrefix: 'path',
+      save: (patch) => { state = { ...state, ...patch, on: true }; return savePathLayout(state); },
+      controls: () => [h('button', { type: 'button', class: 'mv-ctl', title: 'Customize My View', 'aria-label': 'Customize My View', onclick: (e) => menu(e.currentTarget, io.menu(), { align: 'end' }) }, icon('more', 15))],
+      menu: () => [
+        { header: 'Customize My View' },
+        { label: 'New blank layout', icon: 'grid', onSelect: () => customizePath(true) },
+        { label: 'Back to the standard layout', icon: 'collapse', onSelect: () => savePathLayout({ ...state, on: false }).then(() => { active?.destroy(); active = null; cur = ''; show('path'); }) },
+      ],
+    };
+    return customView(v, { id: 'path', name: 'Path', items: lay.items || [], locked: !!lay.locked }, io);
+  }
+  function pathSplit(v) {
     const left = objectPanel('path', { zoomKey: 'path:path' });
     const right = objectPanel('fleeting', { zoomKey: 'path:fleeting' });
     v.classList.add('sbv-split');
@@ -292,6 +346,13 @@ export function mountSidebar(ctx) {
     gutter.addEventListener('dblclick', () => setRatio(0.59, true));
     gutter.addEventListener('keydown', (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setRatio(ratio + (e.key === 'ArrowLeft' ? -0.03 : 0.03), true); } });
     v.append(row);
+    // The way into Customize My View: a quiet control in the corner, and a right-click on the gutter.
+    v.append(h('button', { type: 'button', class: 'sbv-customize', title: 'Customize My View', 'aria-label': 'Customize My View', onclick: (e) => menu(e.currentTarget, [
+      { header: 'Customize My View' },
+      { label: 'Edit this layout', icon: 'layers', onSelect: () => customizePath(false) },
+      { label: 'New blank layout', icon: 'grid', onSelect: () => customizePath(true) },
+    ], { align: 'end' }) }, icon('layers', 14)));
+    gutter.addEventListener('contextmenu', (e) => { e.preventDefault(); menu({ x: e.clientX, y: e.clientY }, [{ label: 'Customize My View…', icon: 'layers', onSelect: () => customizePath(false) }]); });
     return { destroy() { left.destroy(); right.destroy(); } };
   }
 
@@ -314,6 +375,16 @@ export function mountSidebar(ctx) {
     let adding = null;             // { parent } — the inline "new chat" field is open under this section
     let renaming = null;           // { kind: 'entry' | 'sec', id } — renaming in place
     const remember = () => store.set(vmem, { cat, open, sideHidden });
+    // Nov 25 — subsections fold away (the toggle beside each one); remembered on this device.
+    const foldKey = `architect.sb.folded.${me.id}`;
+    const folded = new Set(store.get(foldKey, []) || []);
+    const toggleFold = (id) => { if (folded.has(id)) folded.delete(id); else folded.add(id); store.set(foldKey, [...folded].slice(-400)); paintList(true); };
+    // A small picture beside a name — only when there is one (no placeholder, no empty space).
+    const thumb = (path) => {
+      if (!path) return null;
+      const url = urlOf(path, () => paintList());
+      return url ? h('img', { class: 'sbv-thumb', src: url, alt: '', draggable: false, loading: 'lazy' }) : null;
+    };
 
     /* ---------- sources: your Variables, or a space shared with you ---------- */
     const mine = () => myVars() || { sections: null, entries: [] };
@@ -481,14 +552,20 @@ export function mountSidebar(ctx) {
           onclick: () => { if (v._dragged) return; open = x.id; remember(); paintList(); paintMain(); },
           ondblclick: () => { renaming = { kind: 'entry', id: x.id }; paintList(); },
           oncontextmenu: (e) => { e.preventDefault(); entryMenu({ x: e.clientX, y: e.clientY }, x); },
-        }, h('span', { class: 'sbv-row-name' }, (x.name || 'Untitled').toUpperCase()), (x.notes || []).length ? h('em', {}, String((x.notes || []).length)) : null);
+        }, thumb(x.photo), h('span', { class: 'sbv-row-name' }, (x.name || 'Untitled').toUpperCase()), (x.notes || []).length ? h('em', {}, String((x.notes || []).length)) : null);
       const groupRow = (s, depth) => renaming?.kind === 'sec' && renaming.id === s.id
         ? h('div', { class: 'sbv-group is-renaming', style: { '--d': depth } }, inline('Subsection name', (n) => { renaming = null; if (n) setV({ sections: sections().map((y) => (y.id === s.id ? { ...y, name: n.slice(0, 120) } : y)) }); paintList(true); }, s.name))
         : h('div', {
-          class: ['sbv-group', s.color && 'has-color'], style: { '--d': depth, ...(s.color ? { '--vc': s.color } : {}) }, 'data-sid': s.id,
-          ondblclick: () => { renaming = { kind: 'sec', id: s.id }; paintList(); },
+          class: ['sbv-group', s.color && 'has-color', folded.has(s.id) && 'is-folded'], style: { '--d': depth, ...(s.color ? { '--vc': s.color } : {}) }, 'data-sid': s.id,
+          ondblclick: (e) => { if (e.target.closest('.sbv-fold')) return; renaming = { kind: 'sec', id: s.id }; paintList(); },
           oncontextmenu: (e) => { e.preventDefault(); groupMenu({ x: e.clientX, y: e.clientY }, s); },
-        }, h('span', { class: 'sbv-group-name' }, s.name.toUpperCase()),
+        }, h('button', {
+          type: 'button', class: 'sbv-fold', 'aria-expanded': String(!folded.has(s.id)),
+          'aria-label': `${folded.has(s.id) ? 'Expand' : 'Collapse'} ${s.name}`, title: folded.has(s.id) ? 'Expand' : 'Collapse',
+          onclick: (e) => { e.stopPropagation(); toggleFold(s.id); },
+        }, icon(folded.has(s.id) ? 'chevronRight' : 'chevronDown', 12)),
+          thumb(s.img),
+          h('span', { class: 'sbv-group-name' }, s.name.toUpperCase()),
           h('button', { type: 'button', class: 'sbv-group-add', title: `New chat in ${s.name}`, 'aria-label': `New chat in ${s.name}`, onclick: () => { adding = { parent: s.id }; paintList(); } }, icon('plus', 12)));
       const addField = (parent, depth) => h('div', { class: 'sbv-row is-adding', style: { '--d': depth } },
         inline('New chat name', (n) => { adding = null; if (n) createChat(parent, n); else paintList(true); }));
@@ -499,8 +576,8 @@ export function mountSidebar(ctx) {
           for (const x of entriesIn(id)) out.push(row(x, depth));
           for (const s of kids(id)) {
             out.push(groupRow(s, depth));
-            if (adding?.parent === s.id) out.push(addField(s.id, depth + 1));
-            walk(s.id, depth + 1);
+            if (adding?.parent === s.id) { folded.delete(s.id); out.push(addField(s.id, depth + 1)); }
+            if (!folded.has(s.id)) walk(s.id, depth + 1);
           }
         };
         walk(r, 0);
@@ -583,11 +660,33 @@ export function mountSidebar(ctx) {
     side.addEventListener('pointerdown', startDrag);
 
     /* ---------- the map ---------- */
+    // Nov 25 — the square shows the space's map right away (its chats and subsections, nested), instead of
+    // a blank grid until you click it. Clicking opens the same map larger; full screen is optional.
     function mapCard() {
       if (!rootId() || isOrgans()) return h('span');
-      return h('div', { class: 'sbv-mapsq', role: 'button', tabindex: 0, 'aria-label': 'Open the map', onclick: () => openMap('compact'),
+      return h('div', { class: 'sbv-mapsq has-preview', role: 'button', tabindex: 0, 'aria-label': 'Open the map', onclick: () => openMap('compact'),
         onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMap('compact'); } } },
+        mapPreview(rootId()),
         h('button', { type: 'button', class: 'sbv-mapsq-full', 'aria-label': 'Open the map full screen', title: 'Full screen', onclick: (e) => { e.stopPropagation(); openMap('full'); } }, icon('fullscreen', 14)));
+    }
+    function mapPreview(rid) {
+      const chip = (x) => {
+        const url = x.photo ? urlOf(x.photo, () => paintSide()) : null;
+        return h('span', { class: ['sbv-mchip', x.color && 'has-color'], title: x.name, style: { '--h': hue(x.name), ...(x.color ? { '--vc': x.color } : {}) } },
+          url ? h('img', { src: url, alt: '', draggable: false }) : h('b', {}, (x.name || '?').trim().slice(0, 1).toUpperCase()));
+      };
+      const seen = new Set();
+      const box = (s, depth) => {
+        seen.add(s.id);
+        const subs = kids(s.id).filter((k) => !seen.has(k.id));
+        return h('span', { class: ['sbv-mgroup', s.color && 'has-color'], style: s.color ? { '--vc': s.color } : null },
+          h('i', {}, s.name || ''),
+          h('span', { class: 'sbv-mbody' }, ...entriesIn(s.id).slice(0, 12).map(chip), ...(depth < 3 ? subs.map((k) => box(k, depth + 1)) : [])));
+      };
+      seen.add(rid);
+      const items = [...entriesIn(rid).slice(0, 16).map(chip), ...kids(rid).map((k) => box(k, 0))];
+      return h('div', { class: 'sbv-mprev', 'aria-hidden': 'true' },
+        items.length ? items : [h('span', { class: 'sbv-mempty' }, 'Empty')]);
     }
     function openMap(mode) {
       mapMode = mode;
@@ -854,17 +953,21 @@ export function mountSidebar(ctx) {
     return { x: 0.06 + k * 0.04, y: 0.06 + k * 0.04, w: 0.38, h: 0.56 };
   }
 
-  function customView(root2, v) {
+  // io (Nov 25): where the layout is kept — a custom view in sbViews (default), or Path's own layout.
+  function customView(root2, v, io = null) {
     root2.classList.add('sbv-custom', 'sbv-myview');
     const panels = new Map(); // item id → { p, node }
     let locked = !!v.locked;
     let items = (v.items || []).some((it) => !it.box) ? legacyBoxes(v.items || []) : [...(v.items || [])];
-    const save = (patch = {}) => saveViews(views().map((x) => (x.id === v.id ? { ...x, items, locked, ...patch } : x))).then(() => { v = viewById(v.id) || v; });
+    const save = io
+      ? (patch = {}) => io.save({ items, locked, ...patch })
+      : (patch = {}) => saveViews(views().map((x) => (x.id === v.id ? { ...x, items, locked, ...patch } : x))).then(() => { v = viewById(v.id) || v; });
     const field = h('div', { class: ['mv-field', locked && 'is-locked'], 'aria-label': `${v.name} — workspace` });
     const hint = h('p', { class: 'mv-empty' }, 'Right-click to add an object — then drag it into place.');
     const addBtn = h('button', { type: 'button', class: 'mv-ctl', title: 'Add an object', 'aria-label': 'Add an object', onclick: (e) => addMenu(e.currentTarget) }, icon('plus', 15));
     const lockBtn = h('button', { type: 'button', class: 'mv-ctl', 'aria-pressed': String(locked) });
-    const ctls = h('div', { class: 'mv-ctls' }, addBtn, lockBtn);
+    const extra = io?.controls?.() || [];
+    const ctls = h('div', { class: 'mv-ctls' }, addBtn, lockBtn, ...extra);
     field.append(hint, ctls);
     root2.append(field);
 
@@ -881,7 +984,7 @@ export function mountSidebar(ctx) {
     function addMenu(anchor) {
       const have = new Set(items.map((x) => x.kind));
       const at = anchor && 'x' in anchor && anchor.fx != null ? anchor : null;
-      menu(anchor, [{ header: 'Add to this view' }, ...KINDS.map((k) => ({
+      menu(anchor, [...(io?.menu ? [...io.menu(), '-'] : []), { header: 'Add to this view' }, ...KINDS.map((k) => ({
         label: label(k), icon: k === 'path' ? 'toPaths' : WIDGETS[k]?.icon || 'widget', disabled: have.has(k),
         onSelect: () => {
           const box = freeBox(items);
@@ -895,7 +998,7 @@ export function mountSidebar(ctx) {
     field.addEventListener('contextmenu', (e) => {
       if (e.target !== field && !e.target.classList.contains('mv-empty')) return;
       e.preventDefault();
-      if (locked) { menu({ x: e.clientX, y: e.clientY }, [{ label: 'Unlock layout', icon: 'lockOpen', onSelect: () => lockBtn.click() }]); return; }
+      if (locked) { menu({ x: e.clientX, y: e.clientY }, [{ label: 'Unlock layout', icon: 'lockOpen', onSelect: () => lockBtn.click() }, ...(io?.menu?.() || [])]); return; }
       const r = field.getBoundingClientRect();
       addMenu({ x: e.clientX, y: e.clientY, fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height });
     });
@@ -914,11 +1017,12 @@ export function mountSidebar(ctx) {
     }
     function mountItem(it) {
       const p = objectPanel(it.kind, {
-        title: it.title, hideTitle: it.hideTitle, hideHeader: it.hideHeader, zoomKey: `custom:${v.id}:${it.id}`,
+        title: it.title, hideTitle: it.hideTitle, hideHeader: it.hideHeader, zoomKey: `${io ? io.zoomPrefix : `custom:${v.id}`}:${it.id}`,
         menuItems: () => [
           { label: 'Rename…', icon: 'edit', onSelect: async () => { const n = await promptDialog('Rename object', { value: it.title || label(it.kind), maxLength: 32 }); if (n != null) patchItem(it.id, { title: n.trim() || null }); } },
           { label: it.hideTitle ? 'Show title' : 'Hide title', icon: 'type', onSelect: () => patchItem(it.id, { hideTitle: !it.hideTitle }) },
           { label: it.hideHeader ? 'Show header' : 'Hide header', icon: 'rect', onSelect: () => patchItem(it.id, { hideHeader: !it.hideHeader }) },
+          { label: locked ? 'Unlock position' : 'Lock position', icon: locked ? 'lockOpen' : 'lock', onSelect: () => lockBtn.click() },
           '-',
           { label: 'Remove from view', icon: 'close', danger: true, disabled: locked, onSelect: () => removeItem(it.id) },
         ],

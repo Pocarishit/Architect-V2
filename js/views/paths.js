@@ -116,6 +116,12 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   const shown = () => columns.filter((c) => (opts.only ? c.id === opts.only : !exclude.has(c.id)));
   const ordered = () => shown().flatMap((c) => tasksOf(c.id));
   const pickedTasks = () => ordered().filter((t) => picked.has(t.id));
+  // Synced (Anytype) items in the selection — they take part in every batch action (Nov 25).
+  const axPicked = () => [...picked].filter((id) => String(id).startsWith('ax:')).map((id) => {
+    const key = id.slice(3);
+    for (const c of columns) { const it = axItem(c, key); if (it && !it.placeholder) return it; }
+    return null;
+  }).filter(Boolean);
 
   // A new day: plans for today join the path, and yesterday's setpoint tasks are cleared
   // (the clean-up you'd otherwise do by hand). Timeless paths (no setpoint) are never cleared.
@@ -349,24 +355,21 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   // widget — countdown, gold goal, add task — and the next one peeks in below.
   let phoneCol = null;
   const narrow = () => el.clientWidth > 0 && el.clientWidth < 620;
+  // Nov 25 — one Set-Point bar: Morning · Afternoon · Nighttime · Secondwind as one continuous bar with thin
+  // dividers (no separate pills, times or numbers). The selected segment is highlighted, the red dot stays on
+  // the live Set-Point even while you look at another, and only the selected Set-Point's list shows below —
+  // no faded preview of the next one. Tapping a segment swaps the list in place.
   function tabbed(cols) {
     const live = cols.find((c) => stOf(c)?.phase === 'live');
     if (!cols.some((c) => c.id === phoneCol)) phoneCol = (live || cols[0]).id;
     const i = cols.findIndex((c) => c.id === phoneCol);
-    const tabs = h('div', { class: 'ptabs', role: 'tablist', 'aria-label': 'Setpoints' }, cols.map((c) => h('button', {
-      type: 'button', role: 'tab', class: ['ptab', c.id === phoneCol && 'is-on', stOf(c)?.phase === 'live' && 'is-live'], 'aria-selected': String(c.id === phoneCol),
-      onclick: () => { phoneCol = c.id; render(); el.querySelector('.pboard')?.scrollTo({ top: 0 }); },
-    }, c.title)));
-    const next = cols[i + 1];
-    const board = h('div', { class: 'pboard is-tabbed' }, columnView(cols[i]), next ? h('div', { class: 'ppeek', onclick: () => { phoneCol = next.id; render(); } }, columnView(next)) : null);
-    // Swiping down past the end of a setpoint moves to the next one.
-    board.addEventListener('scroll', () => {
-      if (!next || board._swapping) return;
-      const peek = board.querySelector('.ppeek');
-      if (peek && peek.getBoundingClientRect().top < board.getBoundingClientRect().top + 40) { board._swapping = true; phoneCol = next.id; render(); }
-    }, { passive: true });
-    requestAnimationFrame(() => tabs.querySelector('.ptab.is-on')?.scrollIntoView({ inline: 'center', block: 'nearest' }));
-    return h('div', { class: 'pphone' }, tabs, board);
+    const bar = h('div', { class: 'pspbar', role: 'tablist', 'aria-label': 'Set-Points', style: { '--n': cols.length } }, cols.map((c) => h('button', {
+      type: 'button', role: 'tab', class: ['pspbar-seg', c.id === phoneCol && 'is-on', stOf(c)?.phase === 'live' && 'is-live'], 'aria-selected': String(c.id === phoneCol),
+      title: stOf(c)?.phase === 'live' ? `${c.title} · now` : c.title,
+      onclick: () => { if (phoneCol === c.id) return; phoneCol = c.id; render(); el.querySelector('.pboard')?.scrollTo({ top: 0 }); },
+    }, h('span', { class: 'pspbar-label' }, c.title), stOf(c)?.phase === 'live' ? h('i', { class: 'pspbar-dot', 'aria-label': 'Live now' }) : null)));
+    const board = h('div', { class: 'pboard is-tabbed is-one' }, columnView(cols[i]));
+    return h('div', { class: 'pphone has-spbar' }, bar, board);
   }
   let renderedNarrow = null;
   const onNarrow = new ResizeObserver(() => { if (renderedNarrow !== null && narrow() !== renderedNarrow) render(); });
@@ -401,28 +404,30 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
      in Anytype come back with the next import (the newer side wins, without duplicates). The checkmark is
      still kept per Architect day. "Remove from Path" only hides an item here. */
   const axDayOf = (ms) => spDayKey(new Date(ms), dayStart(columns, timesArg()));
-  const axItem = (col, key) => importsFor(col?.id, goalDay()).find((x) => x.key === key) || null;
+  const axItem = (col, key) => importsFor(col?.id, goalDay(), { today: todayKey() }).find((x) => x.key === key) || null;
   function axViews(col) {
     if (readOnly || !anytypeOn()) return null;
     const day = goalDay();
-    return importsFor(col.id, day).map((it) => {
+    return importsFor(col.id, day, { today: todayKey() }).map((it) => {
       if (it.placeholder) {
         return h('article', { class: ['ptask', 'is-imported', 'is-pending', it.failed && 'is-failed'], 'data-ax': it.key, title: it.failed ? `Couldn’t add it in Anytype: ${it.message || 'error'}` : 'Adding in Anytype…' },
           h('span', { class: 'pcheck is-ghost', 'aria-hidden': 'true' }),
-          h('div', { class: 'ptask-body' }, h('div', { class: 'ptask-title' }, it.fields.title, h('span', { class: 'pax-tag' }, it.failed ? 'NOT ADDED' : 'ADDING…'))),
+          h('div', { class: 'ptask-body' }, h('div', { class: 'ptask-title' }, it.fields.title, it.failed ? h('span', { class: 'pax-tag is-bad' }, 'NOT ADDED') : null)),
           h('button', { class: 'icon-btn xs ptask-more', 'data-act': 'ax-menu', 'aria-label': 'Item options' }, icon('more', 16)));
       }
       const c = checkOf(it.key, day, { item: it, dayOf: axDayOf });
       const two = twoWayReady() && !!it.mapping_id;
       const isEditing = editing && editing.id === `ax:${it.key}`;
-      return h('article', { class: ['ptask', 'is-imported', c.done && 'is-done', (c.pending || it.pendingEdit) && 'is-pending'], 'data-ax': it.key, title: c.pending || it.pendingEdit ? 'Saved on this device — syncing with Anytype' : null },
+      // Nov 25: a synced item looks and works like any Path item — no tag; the sync link stays underneath.
+      const sel = picked.has(`ax:${it.key}`);
+      return h('article', { class: ['ptask', 'is-imported', c.done && 'is-done', (c.pending || it.pendingEdit) && 'is-pending', sel && 'is-picked'], 'data-ax': it.key, 'aria-selected': picked.size ? String(sel) : null, title: c.pending || it.pendingEdit ? 'Saved on this device — syncing' : null },
         h('button', { class: 'pcheck', 'data-act': 'ax-toggle', role: 'checkbox', 'aria-checked': String(c.done), 'aria-label': `${c.done ? 'Mark not done' : 'Mark done'}: ${it.fields?.title || ''}` }, icon('check', 12, { weight: 2.4 })),
         h('div', { class: 'ptask-body' },
           isEditing
             ? h('textarea', { class: 'ptask-input', rows: 1, 'data-ax-rename': it.key, 'aria-label': 'Rename in Architect and Anytype', value: it.fields?.title || '' })
-            : h('div', { class: 'ptask-title', 'data-act': two ? 'ax-rename' : null }, it.fields?.title || 'Untitled', h('span', { class: 'pax-tag', title: two ? 'Linked to Anytype — changes sync both ways' : 'Imported from Anytype — edit it in Anytype' }, 'ANYTYPE')),
+            : h('div', { class: 'ptask-title', 'data-act': 'ax-rename' }, it.fields?.title || 'Untitled'),
           it.fields?.body ? h('div', { class: 'ptask-note' }, it.fields.body) : null),
-        h('button', { class: 'icon-btn xs ptask-more', 'data-act': 'ax-menu', 'aria-label': 'Linked item options' }, icon('more', 16)));
+        h('button', { class: 'icon-btn xs ptask-more', 'data-act': 'ax-menu', 'aria-label': 'Task options' }, icon('more', 16)));
     });
   }
   function axStatus() {
@@ -545,6 +550,8 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   }
 
   async function bulkDone(done) {
+    const day = goalDay();
+    for (const it of axPicked()) if (checkOf(it.key, day, { item: it, dayOf: axDayOf }).done !== done) setCheck(it.key, day, done, it);
     const list = pickedTasks().filter((t) => !!t.done !== done);
     list.forEach((t) => { t.done = done; });
     render();
@@ -598,7 +605,15 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
 
   async function bulkDelete() {
     const list = pickedTasks();
-    if (!list.length) return;
+    const ax = axPicked();
+    if (ax.length) {
+      // Synced items: deleted in Anytype too when the link is two-way (it asks first); otherwise removed
+      // from Path only. Either way, nothing comes back with the next sync.
+      const both = ax.filter((it) => twoWayReady() && it.mapping_id);
+      if (both.length && !(await confirmDialog(`Delete ${plural(list.length + ax.length, 'task')}?`, `${plural(both.length, 'synced item')} ${both.length === 1 ? 'is' : 'are'} deleted in Anytype too (moved to its bin).`, { ok: 'Delete' }))) return;
+      for (const it of ax) { if (both.includes(it)) deleteItem(it); else hideItem(it); picked.delete(`ax:${it.key}`); }
+    }
+    if (!list.length) { picked = new Set(); render(); return; }
     const ids = new Set(list.map((t) => t.id));
     tasks = tasks.filter((t) => !ids.has(t.id));
     picked = new Set();
@@ -826,17 +841,28 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       if (!key) return;
       const day = goalDay();
       const it = axItem(col, key);
+      // Selecting works exactly like Path tasks: ⌘/Ctrl-click toggles, Shift-click too; once anything is
+      // selected, a click toggles.
+      if (act !== 'ax-menu' && act !== 'ax-toggle' && !it?.placeholder && (e.metaKey || e.ctrlKey || e.shiftKey || picked.size)) {
+        const id = `ax:${key}`;
+        if (picked.has(id)) picked.delete(id); else picked.add(id);
+        editing = null; composerFor = null; render(); return;
+      }
+      if (act === 'ax-menu' && picked.has(`ax:${key}`) && picked.size > 1) { selectionMenu(t); return; }
       if (act === 'ax-toggle') { if (it) setCheck(key, day, !checkOf(key, day, { item: it, dayOf: axDayOf }).done, it); render(); return; }
-      if (act === 'ax-rename') { if (e.metaKey || e.ctrlKey || e.shiftKey) return; editing = { id: `ax:${key}`, field: 'ax' }; composerFor = null; render(); return; }
+      if (act === 'ax-rename') { if (!(twoWayReady() && !!it?.mapping_id)) return; editing = { id: `ax:${key}`, field: 'ax' }; composerFor = null; render(); return; }
       if (it?.placeholder) {
         menu(t, [{ label: it.failed ? 'Dismiss' : 'Cancel adding', icon: 'close', onSelect: () => dropOp(key) }], { align: 'end' });
         return;
       }
       const two = twoWayReady() && !!it?.mapping_id;
       const sync = () => { requestSync(); loadImports({ force: true }).then(render); toast('Syncing with Anytype…', { ms: 1600 }); };
+      const done = it ? checkOf(key, day, { item: it, dayOf: axDayOf }).done : false;
       menu(t, [
-        { header: 'Linked to Anytype' },
-        two ? { label: 'Rename', icon: 'edit', onSelect: () => { editing = { id: `ax:${key}`, field: 'ax' }; composerFor = null; render(); } } : null,
+        two ? { label: 'Edit task', icon: 'edit', onSelect: () => { editing = { id: `ax:${key}`, field: 'ax' }; composerFor = null; render(); } } : null,
+        it ? { label: done ? 'Mark not done' : 'Mark done', icon: 'check', onSelect: () => { setCheck(key, day, !done, it); render(); } } : null,
+        { label: picked.has(`ax:${key}`) ? 'Deselect' : 'Select', icon: 'selectAll', kbd: '⌘Click', onSelect: () => { const id = `ax:${key}`; if (picked.has(id)) picked.delete(id); else picked.add(id); render(); } },
+        '-',
         it ? { label: 'Remove from Path', icon: 'eyeOff', onSelect: () => { hideItem(it).then(render); toast('Removed from Path — it stays in Anytype. Restore it in Settings → Integrations.', { ms: 3600 }); } } : null,
         '-',
         it ? { label: 'Open in Anytype', icon: 'external', onSelect: () => { location.href = anytypeLink(it); } } : null,
@@ -908,7 +934,8 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       e.preventDefault();
       bulkDelete();
     } else if (e.key.toLowerCase() === 'd' && !mod && picked.size) {
-      bulkDone(!pickedTasks().every((t) => t.done));
+      const day = goalDay();
+      bulkDone(!(pickedTasks().every((t) => t.done) && axPicked().every((it) => checkOf(it.key, day, { item: it, dayOf: axDayOf }).done)));
     }
   }
   window.addEventListener('keydown', onKey);
@@ -958,9 +985,11 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   // ··· on any selected task: act on every selected task.
   function selectionMenu(anchor) {
     const list = pickedTasks();
-    const allDone = list.every((t) => t.done);
+    const ax = axPicked();
+    const day = goalDay();
+    const allDone = list.every((t) => t.done) && ax.every((it) => checkOf(it.key, day, { item: it, dayOf: axDayOf }).done);
     menu(anchor, [
-      { header: `${list.length} selected` },
+      { header: `${list.length + ax.length} selected` },
       { label: allDone ? 'Mark not done' : 'Mark done', icon: 'check', kbd: 'D', onSelect: () => bulkDone(!allDone) },
       '-',
       { header: 'Move to' },
@@ -968,7 +997,7 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       '-',
       readOnly ? null : { label: 'Back to ideas', icon: 'spark', onSelect: () => toIdeas(list) },
       { label: 'Clear selection', icon: 'close', kbd: 'Esc', onSelect: clearPick },
-      { label: `Delete ${plural(list.length, 'task')}`, icon: 'trash', kbd: 'Del', danger: true, onSelect: bulkDelete },
+      { label: `Delete ${plural(list.length + ax.length, 'task')}`, icon: 'trash', kbd: 'Del', danger: true, onSelect: bulkDelete },
     ], { align: 'end' });
   }
 
@@ -1284,11 +1313,12 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     const w = Math.abs(e.clientX - m.x0), hh = Math.abs(e.clientY - m.y0);
     Object.assign(m.box.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${hh}px` });
     const next = new Set(m.base);
-    el.querySelectorAll('.ptask[data-task]').forEach((n) => {
+    el.querySelectorAll('.ptask[data-task], .ptask[data-ax]:not(.is-pending)').forEach((n) => {
+      const id = n.dataset.task || `ax:${n.dataset.ax}`;
       const r = n.getBoundingClientRect();
       const hit = r.left < x + w && r.right > x && r.top < y + hh && r.bottom > y;
-      if (hit) next.add(n.dataset.task);
-      n.classList.toggle('is-picked', next.has(n.dataset.task));
+      if (hit) next.add(id);
+      n.classList.toggle('is-picked', next.has(id));
     });
     picked = next;
     renderSelBar();
@@ -1412,7 +1442,17 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
   }
 
   // Stop the long-press callout / text selection menu on tiles and tasks.
-  el.addEventListener('contextmenu', (e) => { if (press || e.target.closest('.ptile')) e.preventDefault(); });
+  el.addEventListener('contextmenu', (e) => {
+    if (press || e.target.closest('.ptile')) { e.preventDefault(); return; }
+    // Right-click a task or a synced item: its menu (the selection's menu when it's part of a selection).
+    if (readOnly || e.target.closest('textarea, input')) return;
+    const row = e.target.closest('.ptask[data-task], .ptask[data-ax]');
+    if (!row || !el.contains(row)) return;
+    e.preventDefault(); e.stopPropagation();
+    const at = { x: e.clientX, y: e.clientY };
+    if (row.dataset.task) { const t = tasks.find((x) => x.id === row.dataset.task); if (t) taskMenu(at, t); return; }
+    row.querySelector('[data-act="ax-menu"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: e.clientX, clientY: e.clientY }));
+  });
 
   // Tick the setpoint timers every second without re-rendering; re-render only when a setpoint starts or ends.
   const phases = () => columns.map((c) => stOf(c)?.phase || '').join('|');
@@ -1483,7 +1523,8 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
 
   // Anytype imports refresh on their own clock (cheap: three small reads), and repaint when a checkmark syncs.
   const offAx = onAnytype(() => { if (!readOnly && idleNow()) render(); });
-  const axPoll = !readOnly ? setInterval(() => { if (!document.hidden && anytypeOn()) loadImports(); }, 60_000) : 0;
+  // Nov 25: a cheap "anything newer?" check every few seconds instead of a full reload every minute.
+  const axPoll = !readOnly ? setInterval(() => { if (!document.hidden && anytypeOn()) loadImports(); }, 6_000) : 0;
 
   render();
   load();

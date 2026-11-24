@@ -136,6 +136,25 @@ export class Editor {
     // Widgets (Ticket board, Paths…) drag their own things; the canvas leaves them alone.
     const inWidget = (e) => (e.target instanceof Element && e.target.closest('.wg-body'));
     L(this.vp, 'dragstart', (e) => { if (!inWidget(e)) e.preventDefault(); });
+    // Nov 25 — right-drag pans from anywhere, objects included (a Variables object, a chat…): the object's own
+    // right-click menu must not open at the end of the drag (Windows sends it after the button comes up) or
+    // at the start of one (macOS sends it on press). A plain right-click still reaches the object's menu.
+    L(this.vp, 'contextmenu', (e) => {
+      if (e.__replay) return;
+      if (performance.now() - (this._rightPannedAt || 0) < 450) { e.preventDefault(); e.stopPropagation(); return; }
+      const g = this.g;
+      if (g?.type === 'pan' && g.right) {
+        e.preventDefault(); e.stopPropagation();
+        // The board holds the pointer during the press, so the event says "the board": find what's really
+        // under the pointer, so its own menu (a Variables tab, a chat…) is the one that opens.
+        if (!g.panned) g.pendingInner = { target: this.targetAt(e) || e.target, x: e.clientX, y: e.clientY };
+        return;
+      }
+      // Lock lives on the frame (Nov 25): a right-click on an object's outer border opens the object menu
+      // (Lock / Unlock…), even when its header is hidden and its inside has a menu of its own.
+      const edge = this.edgeHit(e);
+      if (edge) { e.preventDefault(); e.stopPropagation(); this.openContextMenu({ clientX: e.clientX, clientY: e.clientY, target: edge }); }
+    }, true);
     L(this.vp, 'contextmenu', (e) => this.onContextMenu(e));
     L(this.vp, 'wheel', (e) => this.onWheel(e), { passive: false });
     L(this.vp, 'dragover', (e) => { if (inWidget(e)) return; if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
@@ -948,7 +967,15 @@ export class Editor {
 
     const handle = e.target.closest('[data-handle]');
     const node = e.target.closest('[data-eid]');
-    const el = node ? this.byId.get(node.dataset.eid) : null;
+    let el = node ? this.byId.get(node.dataset.eid) : null;
+    start.tgt = e.target;
+    // A locked frame holds its place without walling off what's inside it (Nov 25): clicking its open
+    // middle works like the canvas (select, drag a selection box). Its title and border still pick it.
+    if (el?.locked && el.type === 'frame' && !handle && this.tool === 'select' && !e.target.closest('.el-frame-title, [data-frame-title]') && node._title !== e.target && !node._title?.contains(e.target)) {
+      const r = node.getBoundingClientRect();
+      const d = Math.min(e.clientX - r.left, r.right - e.clientX, e.clientY - r.top, r.bottom - e.clientY);
+      if (d > 8) el = null;
+    }
 
     switch (this.tool) {
       case 'select': this.downSelect(start, handle, el); break;
@@ -982,7 +1009,9 @@ export class Editor {
         if (this.sel.has(el.id)) { ids.forEach((id) => this.sel.delete(id)); this.syncSelection(); return; }
         this.select(ids, { add: true });
       } else if (!this.sel.has(el.id)) { start.link = null; this.select([el.id]); }
-      if (this.selected().every((x) => x.locked)) { if (start.link) window.open(start.link, '_blank', 'noopener'); return; }
+      // Locked: nothing moves or resizes, but a click still edits what's inside (beginMove moves only the
+      // unlocked ones — here none — and turns a still click into editing).
+      if (this.selected().every((x) => x.locked) && start.link) { window.open(start.link, '_blank', 'noopener'); return; }
       this.beginMove(start);
       return;
     }
@@ -1119,6 +1148,12 @@ export class Editor {
       onUp: () => {
         if (!g.right) return;
         if (g.panned) { this._rightPannedAt = performance.now(); return; }
+        if (g.pendingInner) {
+          // A right-click that didn't move, whose menu arrived while the button was down: deliver it now.
+          const p = g.pendingInner;
+          setTimeout(() => { if (!p.target.isConnected) return; const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: p.x, clientY: p.y, button: 2 }); ev.__replay = true; p.target.dispatchEvent(ev); }, 0);
+          return;
+        }
         if (g.pendingMenu) this.openContextMenu(g.pendingMenu); // macOS/Linux fire contextmenu on press
       },
     };
@@ -1691,9 +1726,23 @@ export class Editor {
     }
     if (el.type === 'video' || el.type === 'embed') { this.activate(el.id); return; }
     if (el.type === 'pdf') { this.emit('open-pdf', el); return; }
-    if (this.presenting || el.locked) return;
+    if (this.presenting) return;
     if (TEXTUAL.has(el.type) || el.type === 'frame') this.startEditing(el.id);
     else if (el.type === 'link' && el.url) window.open(el.url, '_blank', 'noopener');
+  }
+
+  // The object whose outer border (a few screen pixels wide) is under the pointer, for widgets and other
+  // objects whose inside handles its own clicks.
+  edgeHit(e) {
+    const t = this.targetAt(e);
+    const node = t?.closest?.('.el[data-eid]');
+    if (!node || !this.vp.contains(node)) return null;
+    const el = this.byId.get(node.dataset.eid);
+    if (!el || el.type === 'line' || el.type === 'pen') return null;
+    if (!t.closest('.wg-body, .el-media, iframe') && !el.locked) return null; // the ordinary path handles it
+    const r = node.getBoundingClientRect();
+    const d = Math.min(e.clientX - r.left, r.right - e.clientX, e.clientY - r.top, r.bottom - e.clientY);
+    return d >= -2 && d <= 7 ? node : null;
   }
 
   onContextMenu(e) {
@@ -1722,7 +1771,7 @@ export class Editor {
   // (or double-clicking it) starts typing right where you clicked.
   clickToEdit(start) {
     const el = start.el && this.byId.get(start.el.id);
-    if (!el || el.locked || this.presenting || this.sel.size !== 1 || !this.sel.has(el.id)) return;
+    if (!el || this.presenting || this.sel.size !== 1 || !this.sel.has(el.id)) return;
     const editable = TEXTUAL.has(el.type) || el.type === 'shape' || el.type === 'frame';
     if (!editable || !start.wasSelected) return;
     this.startEditing(el.id);
@@ -1747,7 +1796,7 @@ export class Editor {
   // fresh: the element was just created, so typing into it shouldn't add a second undo step.
   startEditing(id, { selectAll = false, fresh = false } = {}) {
     const el = this.byId.get(id);
-    if (!el || el.locked) return;
+    if (!el) return; // locked keeps the frame in place; what's written inside stays editable (Nov 25)
     this.finishEditing();
     const node = this.nodes.get(id);
     const target = el.type === 'frame' ? node?._title : node?._text;
@@ -1877,7 +1926,7 @@ export class Editor {
       this.emit('textselection');
       return;
     }
-    const ids = this.selected().filter((e) => TEXTUAL.has(e.type) && !e.locked).map((e) => e.id);
+    const ids = this.selected().filter((e) => TEXTUAL.has(e.type)).map((e) => e.id);
     if (!ids.length) return;
     const before = this.els;
     for (const id of ids) {
@@ -1892,7 +1941,7 @@ export class Editor {
   toggleTextProp(prop) {
     const cmd = { bold: 'bold', italic: 'italic', underline: 'underline', strike: 'strikeThrough' }[prop];
     if (this.isEditingText()) { if (cmd === 'strikeThrough') this.execText(cmd); else this.toggleInline(cmd); return; }
-    const texty = this.selected().filter((e) => TEXTUAL.has(e.type) && !e.locked);
+    const texty = this.selected().filter((e) => TEXTUAL.has(e.type));
     if (!texty.length) return;
     this.applyStyle(texty.map((e) => e.id), { [prop]: !texty.every((e) => e[prop]) });
   }
@@ -1981,11 +2030,11 @@ export class Editor {
     this.emit('selection');
   }
 
-  setTextAlign(align, ids = this.selected().filter((e) => TEXTUAL.has(e.type) && !e.locked).map((e) => e.id)) {
+  setTextAlign(align, ids = this.selected().filter((e) => TEXTUAL.has(e.type)).map((e) => e.id)) {
     if (ids.length) this.patchWhileEditing(ids, { align });
   }
 
-  stepFontSize(dir, ids = this.selected().filter((e) => TEXTUAL.has(e.type) && !e.locked).map((e) => e.id)) {
+  stepFontSize(dir, ids = this.selected().filter((e) => TEXTUAL.has(e.type)).map((e) => e.id)) {
     const SIZES = [12, 14, 16, 18, 22, 28, 36, 48, 64, 96, 144];
     const els = ids.map((id) => this.byId.get(id)).filter(Boolean);
     if (!els.length) return;

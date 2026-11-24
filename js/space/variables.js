@@ -134,6 +134,66 @@ export function trackUndo(root, src) {
   return () => { undoRoots.delete(root); if (lastRoot === root) lastRoot = null; root.removeEventListener('pointerdown', touch, true); root.removeEventListener('focusin', touch); };
 }
 
+/* Nov 26 — on the board, a drag that starts inside a Variables object:
+   · right button → pans the Variables canvas itself (any direction), never the Architect workspace around it;
+   · middle button → pans the workspace (the board's own middle-drag; Free View no longer takes it here).
+   A right-click that doesn't move still opens the menu of what's under it. */
+function scrollableIn(t, root) {
+  for (let n = t; n && n !== root.parentNode; n = n.parentElement) {
+    if (!(n instanceof HTMLElement)) continue;
+    const cs = getComputedStyle(n);
+    const ox = /(auto|scroll)/.test(cs.overflowX) && n.scrollWidth > n.clientWidth + 1;
+    const oy = /(auto|scroll)/.test(cs.overflowY) && n.scrollHeight > n.clientHeight + 1;
+    if (ox || oy) return n;
+    if (n === root) break;
+  }
+  return root.querySelector('.vr-fv') || null;
+}
+function innerRightPan(root) {
+  let g = null;
+  const onDown = (e) => {
+    if (e.button !== 2 || e.pointerType !== 'mouse' || e.target.closest('[contenteditable="true"], input, textarea')) return;
+    const sc = scrollableIn(e.target, root);
+    e.stopPropagation(); // the board doesn't see it: the workspace stays where it is
+    g = { id: e.pointerId, x: e.clientX, y: e.clientY, sc, l: sc?.scrollLeft || 0, t: sc?.scrollTop || 0, moved: false, menu: null,
+      k: sc ? (sc.getBoundingClientRect().width / (sc.offsetWidth || 1)) || 1 : 1 };
+    window.addEventListener('pointermove', onMove, true);
+    window.addEventListener('pointerup', onUp, true);
+    window.addEventListener('pointercancel', onUp, true);
+  };
+  const onMove = (e) => {
+    if (!g || e.pointerId !== g.id) return;
+    const dx = e.clientX - g.x, dy = e.clientY - g.y;
+    if (!g.moved) { if (Math.hypot(dx, dy) < 5) return; g.moved = true; root.classList.add('is-rpanning'); }
+    e.preventDefault(); e.stopPropagation();
+    if (g.sc) { g.sc.scrollLeft = g.l - dx / g.k; g.sc.scrollTop = g.t - dy / g.k; }
+  };
+  const onUp = (e) => {
+    if (!g || e.pointerId !== g.id) return;
+    window.removeEventListener('pointermove', onMove, true);
+    window.removeEventListener('pointerup', onUp, true);
+    window.removeEventListener('pointercancel', onUp, true);
+    root.classList.remove('is-rpanning');
+    const done = g; g = null;
+    if (done.moved) { eatUntil = performance.now() + 450; return; }
+    // A still right-click whose menu came on press (macOS / Linux): deliver it now.
+    if (done.menu && done.menu.target.isConnected) {
+      const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: done.menu.x, clientY: done.menu.y, button: 2 });
+      ev.__replay = true; ev.__inner = true;
+      done.menu.target.dispatchEvent(ev);
+    }
+  };
+  let eatUntil = 0;
+  const onMenu = (e) => {
+    if (e.__inner) return;
+    if (performance.now() < eatUntil) { e.preventDefault(); e.stopPropagation(); return; }
+    if (g) { e.preventDefault(); e.stopPropagation(); if (!g.moved) g.menu = { target: e.target, x: e.clientX, y: e.clientY }; }
+  };
+  root.addEventListener('pointerdown', onDown);
+  root.addEventListener('contextmenu', onMenu, true);
+  return () => { root.removeEventListener('pointerdown', onDown); root.removeEventListener('contextmenu', onMenu, true); };
+}
+
 export function mountVariables(root, el0, w) {
   let el = el0;
   const me = api.auth.current()?.user;
@@ -385,7 +445,7 @@ export function mountVariables(root, el0, w) {
     } else if (w?.field) {
       // The sidebar's map (Nov 24): each subsection opens out in place — its variables and its own
       // subsections are on the map without opening it first.
-      main = h('div', { class: 'vr-grid is-groups' }, ...cards(), addCard, ...cats.map((c) => group(c)));
+      main = h('div', { class: 'vr-grid is-groups' }, ...cards(), w?.preview ? null : addCard, ...cats.map((c) => group(c)));
       main.addEventListener('contextmenu', (e) => { if (e.target === main) gridMenu(e); });
     } else {
       main = h('div', { class: 'vr-grid' }, ...tiles(), ...cards(), addCard);
@@ -823,6 +883,25 @@ export function mountVariables(root, el0, w) {
           });
         },
         idle: () => { if (pending) setTimeout(render, 0); },
+        // Zones (Nov 26): Capture moves the section into this chat's Library in one write — the messages
+        // leave the chat as they enter the cube (moved, never duplicated).
+        zones: true,
+        capture: async (cube, msgIds, fp) => {
+          const gone = new Set(msgIds);
+          const byId = new Map(((entries().find((e) => e.id === x.id) || x).notes || []).map((m) => [m.id, m]));
+          if (msgIds.some((id) => !byId.has(id))) throw new Error('Some of those messages changed — try again.');
+          patchEntry(x.id, (e) => {
+            const f = { pos: {}, size: {}, links: [], ...(e.free || {}), ...fp, on: true };
+            const pos = { ...f.pos }, size = { ...f.size };
+            gone.forEach((id) => { delete pos[id]; delete size[id]; });
+            const lib = e.library || { cubes: [] };
+            const n = (lib.cubes || []).length;
+            const placed = { ...cube, x: 40 + (n % 4) * 230, y: 40 + Math.floor(n / 4) * 210 };
+            return { notes: (e.notes || []).filter((m) => !gone.has(m.id)), free: { ...f, pos, size }, library: { ...lib, cubes: [...(lib.cubes || []), placed] } };
+          });
+        },
+        paste: async (notes, fp) => patchEntry(x.id, (e) => ({ notes: [...(e.notes || []), ...notes].slice(-MAX_NOTES), free: { ...(e.free || {}), ...fp, on: true } })),
+        library: libraryOf(x),
       });
     }
     const toggle = h('button', {
@@ -870,6 +949,7 @@ export function mountVariables(root, el0, w) {
       h('button', { class: 'sc-mode-x', type: 'button', 'aria-label': 'Cancel editing', title: 'Cancel (Esc)', onclick: () => cancelEdit() }, icon('close', 13)));
   }
   function beginEdit(x, m) {
+    { const z = zonedIn(x, m.id); if (z) { zoneLocked(z); return; } }
     editing = { entry: x.id, id: m.id, keep: editing ? editing.keep : draft, focus: true };
     draft = m.text || '';
     busy = false;
@@ -893,7 +973,43 @@ export function mountVariables(root, el0, w) {
     });
   }
 
+  // A chat's Library of Zone Cubes (Nov 26).
+  function libraryOf(x) {
+    const cur = () => entries().find((e) => e.id === x.id) || x;
+    const get = () => cur().library || { cubes: [] };
+    const set = (p, { dropEmbeds = null } = {}) => patchEntry(x.id, (e) => {
+      const out = { library: { ...(e.library || { cubes: [] }), ...p } };
+      if (dropEmbeds && e.free?.embeds) out.free = { ...e.free, embeds: e.free.embeds.filter((q) => q.cube !== dropEmbeds) };
+      return out;
+    });
+    return {
+      name: cur().name, get, set,
+      patchCube: (id, p) => set({ cubes: (get().cubes || []).map((c) => (c.id === id ? { ...c, ...p } : c)) }),
+      others: () => entries().filter((e) => e.id !== x.id && !e.kind).map((e) => ({ id: e.id, name: `${e.name}${e.section ? ` · ${pathOf(e.section)}` : ''}` })),
+      // Copy keeps it here too; Move takes it (and its embeds) out of this chat.
+      copyTo: async (cube, id, move) => {
+        const copy = { ...structuredClone(cube), id: uid(), x: 40, y: 40 };
+        setEntries(entries().map((e) => {
+          if (e.id === id) { const lib = e.library || { cubes: [] }; return { ...e, library: { ...lib, cubes: [...(lib.cubes || []), { ...copy, x: 40 + ((lib.cubes || []).length % 4) * 230 }] } }; }
+          if (move && e.id === x.id) return { ...e, library: { ...(e.library || {}), cubes: (e.library?.cubes || []).filter((c) => c.id !== cube.id) }, free: e.free ? { ...e.free, embeds: (e.free.embeds || []).filter((q) => q.cube !== cube.id) } : e.free };
+          return e;
+        }));
+        toast(`${move ? 'Moved' : 'Copied'} to ${entries().find((e) => e.id === id)?.name || 'that chat'}.`, { ms: 1800 });
+      },
+    };
+  }
+  const zonedIn = (x, id) => (x.free?.on ? (x.free.zones || []).find((z) => (z.members || []).includes(id)) : null);
+  const zoneLocked = (z) => toast(`In the zone “${z.name}”: read and copy only. Remove the zone to release it.`, { ms: 3000 });
+
   function msgMenu(anchor, x, m) {
+    const z = zonedIn(x, m.id);
+    if (z) {
+      menu(anchor, [
+        { header: `In zone “${z.name}” · protected` },
+        m.text ? { label: 'Copy', icon: 'copy', onSelect: async () => { try { await navigator.clipboard.writeText(m.text); toast('Copied.', { ms: 1400 }); } catch {} } } : null,
+      ].filter(Boolean));
+      return;
+    }
     menu(anchor, [
       m.text ? { label: 'Copy', icon: 'copy', onSelect: async () => { try { await navigator.clipboard.writeText(m.text); toast('Copied.', { ms: 1400 }); } catch {} } } : null,
       !x.free?.on ? { label: 'Move up', icon: 'chevronUp', disabled: (x.notes || [])[0]?.id === m.id, onSelect: () => nudgeNote(x, m, -1) } : null,
@@ -949,6 +1065,7 @@ export function mountVariables(root, el0, w) {
     sendFiles: (files) => { if (open && files?.length) pushNote(open, note({ files })); },
   });
   const offUndo = trackUndo(box, src);
+  const offRpan = w?.host?.editor ? innerRightPan(box) : () => {};
   src.load().then(() => {
     // Your account has no Variables yet: your personal Space's list becomes yours automatically.
     // (The shared object's old list could be anyone's, so that one waits for "Bring in".)
@@ -976,6 +1093,6 @@ export function mountVariables(root, el0, w) {
       el = next;
       if (legacyChanged && ready && !open) render();
     },
-    destroy() { off(); offSay(); offUndo(); free?.destroy(); box.remove(); },
+    destroy() { off(); offSay(); offUndo(); offRpan(); free?.destroy(); box.remove(); },
   };
 }

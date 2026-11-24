@@ -206,11 +206,14 @@ export function mountBoard(root, boardId, opts = {}) {
       collab = startCollab({
         editor, boardId, me, live: api.live,
         onPeople: renderPeople,
-        onStatus: (st) => {
+        onStatus: (st, detail) => {
           peoplePill.dataset.live = st;
-          if (st === 'error' && people > 1 && !warned) {
+          peoplePill.title = st === 'live' ? 'Live: cursors and edits sync instantly' : st === 'error' ? `Live channel refused${detail ? ` (${detail})` : ''} — cursors can’t show` : st === 'offline' ? 'Live channel offline — reconnecting' : 'Connecting…';
+          // Nov 26: say it whenever live collaboration can't connect on a board others can open — that's the
+          // one thing that makes everyone's cursors invisible — with the server's own reason.
+          if (st === 'error' && !warned && (people > 1 || space)) {
             warned = true;
-            toast('Live editing isn’t connected. Run supabase/collab.sql in Supabase, then reload.', { tone: 'error', ms: 7000 });
+            toast(`Live collaboration isn’t connected${detail ? ` (${detail})` : ''}, so cursors can’t show. Run supabase/collab.sql in Supabase, then reload.`, { tone: 'error', ms: 9000 });
           }
         },
         onMeta: (m) => {

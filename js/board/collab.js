@@ -95,7 +95,7 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
     curTimer = setTimeout(() => {
       curTimer = null;
       lastCur = performance.now();
-      if (ch.live) send('cur', mine);
+      if (ch.live) send('cur', { ...mine, uid: me.id, name: me.username, color, avatar: me.avatar || null });
     }, Math.max(0, CURSOR_MS - (performance.now() - lastCur)));
   }
   // Nov 25 — your pointer is sent whenever it moves over the board, objects included (listened for at the
@@ -124,6 +124,9 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
   document.addEventListener('visibilitychange', onHide);
   window.addEventListener('blur', onLeave);
   const hideTick = setInterval(() => { if (mine.x != null && !visible()) onLeave(); }, 1500);
+  const onPageHide = () => { try { if (ch.live) send('bye', {}); } catch {} };
+  window.addEventListener('pagehide', onPageHide);
+  offs.push(() => window.removeEventListener('pagehide', onPageHide));
   offs.push(() => {
     window.removeEventListener('pointermove', onPtr, { capture: true }); editor.vp.removeEventListener('pointerleave', onLeave);
     document.removeEventListener('visibilitychange', onHide); window.removeEventListener('blur', onLeave); clearInterval(hideTick);
@@ -163,10 +166,14 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
     } else if (event === 'cur') {
       const peer = peerFor(p.from);
       const moved = peer.x !== p.x || peer.y !== p.y;
+      // Nov 26: a cursor carries who it is, so it shows at once — it never waits for (or depends on) presence.
+      if (p.uid) { peer.uid ||= p.uid; peer.name = p.name || peer.name || 'Someone'; peer.color = p.color || peer.color || colorFor(p.uid); if (p.avatar !== undefined) peer.avatar = p.avatar; }
       Object.assign(peer, { x: p.x, y: p.y, sel: p.sel || [], editing: p.editing || null, mbox: p.box || null, seen: Date.now() });
       if (moved) peer.moved = Date.now();
       if (layer.nextSibling) layer.parentNode.append(layer); // always drawn above every object
       paintPeer(peer);
+    } else if (event === 'bye') {
+      dropPeer(p.from); emitPeople();
     } else if (event === 'sig') {
       editor.emit('signal-in', { uid: p.uid, name: p.name, ...p.sig });
     } else if (event === 'type') {
@@ -230,7 +237,17 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
     return p;
   }
 
+  function dropPeer(k) { const p = peers.get(k); if (!p) return; p.cursor?.remove(); p.box?.remove(); p.mq?.remove(); peers.delete(k); }
+  // Stale cursors: nothing heard for a while and gone from presence.
+  const staleTick = setInterval(() => {
+    let changed = false;
+    for (const [k, p] of peers) if (p.seen && Date.now() - p.seen > 45_000 && !presentKeys.has(k)) { dropPeer(k); changed = true; }
+    if (changed) emitPeople();
+  }, 5000);
+  offs.push(() => clearInterval(staleTick));
+  let presentKeys = new Set();
   function onPresence(list) {
+    presentKeys = new Set(list.map((m) => m.key));
     const keys = new Set();
     for (const m of list) {
       if (!m.key || m.key === clientId) continue;
@@ -238,8 +255,9 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
       const p = peerFor(m.key);
       p.uid = m.uid; p.name = m.name || 'Someone'; p.color = m.color || colorFor(m.uid || m.key); p.avatar = m.avatar || null;
     }
-    // Someone left the board or lost their connection: their cursor goes at once.
-    for (const [k, p] of peers) if (!keys.has(k)) { p.cursor?.remove(); p.box?.remove(); p.mq?.remove(); peers.delete(k); }
+    // Someone left the board or lost their connection: their cursor goes at once. (A cursor heard from in the
+    // last few seconds stays: presence can lag behind, and must never be what hides a live cursor.)
+    for (const [k, p] of peers) if (!keys.has(k) && !(p.seen && Date.now() - p.seen < 8000)) dropPeer(k);
     paintPeers();
     emitPeople();
   }
@@ -275,7 +293,7 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
     const label = p.cursor.lastChild;
     const text = p.editing ? `${p.name} · typing` : idle ? `${p.name} · idle` : p.name;
     if (label.textContent !== text) label.textContent = text;
-    const show = p.x != null && p.y != null && !!p.uid && Date.now() - (p.seen || 0) < 120_000; // a silent peer's cursor goes
+    const show = p.x != null && p.y != null && Date.now() - (p.seen || 0) < 120_000; // a silent peer's cursor goes
     p.cursor.hidden = !show;
     if (show) { p.cursor.style.left = `${p.x}px`; p.cursor.style.top = `${p.y}px`; }
     p.cursor.classList.toggle('is-idle', idle);
@@ -314,6 +332,7 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
     },
     sendMeta(m) { if (ch.live) send('meta', m); },
     stop() {
+      try { if (ch.live) send('bye', {}); } catch {}
       flushOps();
       clearTimeout(opsTimer); clearTimeout(curTimer); clearTimeout(typeTimer);
       clearTimeout(syncTimer); clearTimeout(answerTimer); clearInterval(idleTick);

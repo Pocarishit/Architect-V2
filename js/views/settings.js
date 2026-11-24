@@ -15,6 +15,7 @@ import { CATALOGUE } from '../data/catalogue.js';
 import { integrations } from './integrations.js';
 import { PATTERNS, bgOf, setBg, paintBg } from '../space/backgrounds.js';
 import { updatesCanvas } from './updates.js';
+import { urlOf } from '../space/media.js';
 
 const TABS = [['profile', 'Profile'], ['general', 'General'], ['personalize', 'Personalize'], ['members', 'Members'], ['integrations', 'Integrations'], ['api', 'API'], ['custom', 'Updates & Fixes']];
 
@@ -154,8 +155,57 @@ function personalize() {
     return h('div', { class: 'sbg' }, prev, h('div', { class: 'stack' }, h('p', { class: 'dlg-text' }, text), opts, layout, scale), file);
   };
   return h('div', { class: 'stack' },
+    sec('Sidebar', sidebarLook()),
     sec('Personal Space background', block('personal', 'Behind your personal Space only. The Shared Space and the objects on the board stay as they are.')),
     sec('Shared Space background', block('shared', 'Only you see this one: everyone else in the Shared Space keeps their own background. The board itself doesn’t change.')));
+}
+
+/* Nov 26 — the sidebar's color and PNG (beside Customize My View, which lives in the sidebar itself). Kept on
+   your account (prefs.sbLook), so it's the same after a reload and on your other devices. Changing it never
+   touches the sidebar's layout, its views, or what's shown or hidden. */
+const SB_COLORS = ['#141414', '#1d1f24', '#22201b', '#1b2420', '#1f1b24', '#2a1a1a', '#e9e6df'];
+function sidebarLook() {
+  let look = { ...(getPref('sbLook', null) || {}) };
+  const swatches = h('div', { class: 'sbl-swatches', role: 'radiogroup', 'aria-label': 'Sidebar color' });
+  const custom = h('input', { type: 'color', class: 'sbl-custom', 'aria-label': 'Custom sidebar color', value: look.color || '#141414' });
+  const prev = h('div', { class: 'sbl-prev', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'));
+  const imgRow = h('div', { class: 'sbg-opts' });
+  const file = h('input', { type: 'file', accept: 'image/png', hidden: true });
+  const save = async (next) => {
+    look = next;
+    paint();
+    try { await setPref('sbLook', Object.keys(look).length ? look : null); window.dispatchEvent(new Event('architect:sidebar-look')); }
+    catch (e) { toast(friendlyError(e), { tone: 'error' }); }
+  };
+  const without = (k) => { const n = { ...look }; delete n[k]; return n; };
+  function paint() {
+    swatches.replaceChildren(
+      h('button', { type: 'button', class: ['sbl-sw is-default', !look.color && 'is-on'], role: 'radio', 'aria-checked': String(!look.color), title: 'Default', 'aria-label': 'Default color', onclick: () => save(without('color')) }),
+      ...SB_COLORS.map((c) => h('button', { type: 'button', class: ['sbl-sw', look.color === c && 'is-on'], role: 'radio', 'aria-checked': String(look.color === c), title: c, 'aria-label': `Color ${c}`, style: { '--c': c }, onclick: () => save({ ...look, color: c }) })),
+      custom);
+    imgRow.replaceChildren(
+      h('button', { type: 'button', class: 'btn sm', onclick: () => file.click() }, icon('upload', 13), look.png ? 'Replace PNG' : 'Choose PNG…'),
+      look.png ? h('button', { type: 'button', class: 'btn sm', onclick: () => save(without('png')) }, icon('close', 13), 'Remove PNG') : null);
+    prev.style.setProperty('--c', look.color || '');
+    prev.classList.toggle('has-color', !!look.color);
+    const url = look.png ? urlOf(look.png, paint) : null;
+    prev.style.backgroundImage = url ? `url("${url}")` : '';
+  }
+  let t = 0;
+  custom.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => save({ ...look, color: custom.value }), 200); });
+  file.addEventListener('change', async () => {
+    const f = file.files[0];
+    file.value = '';
+    if (!f) return;
+    if (f.type !== 'image/png') { toast('Pick a PNG image.', { tone: 'error' }); return; }
+    if (f.size > 15 * 1024 * 1024) { toast('That PNG is over 15 MB.', { tone: 'error' }); return; }
+    try { const { path } = await api.media.upload(f); await save({ ...look, png: path }); toast('The sidebar has its new image.', { ms: 2000 }); }
+    catch (e) { toast(friendlyError(e), { tone: 'error', ms: 5000 }); }
+  });
+  paint();
+  return h('div', { class: 'sbg' }, prev, h('div', { class: 'stack' },
+    h('p', { class: 'dlg-text' }, 'The sidebar’s color and an optional PNG behind its icons. Its layout and what it shows don’t change.'),
+    swatches, imgRow), file);
 }
 
 /* ---------------- Members ---------------- */

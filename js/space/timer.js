@@ -9,6 +9,7 @@ import { icon } from '../core/icons.js';
 import { prefersReducedMotion, store } from '../core/util.js';
 import { popover, closeFloating, toast } from '../core/ui.js';
 import { SETPOINTS } from './fleeting.js';
+import { serverNow, syncClock } from '../data/clock.js';
 
 const DOTS = 60;
 const MAX = 99 * 3600 + 59 * 60 + 59;
@@ -65,7 +66,9 @@ export function mountTimer(root, el0, w) {
   w.slot.replaceChildren(tabs);
 
   /* ---------------- derived ---------------- */
-  const now = () => Date.now();
+  // Nov 26: everyone's timer reads the same clock (the server's), so the time left matches on every screen.
+  const now = () => serverNow();
+  syncClock().then(() => { lastFrame = 0; });
   const timerLeft = (t) => (t.end ? (t.end - now()) / 1000 : t.left);
   const isDone = (t) => t.mode === 'timer' && !!t.end && t.end <= now();
   const watchMs = (t) => (t.wAcc || 0) + (t.wStart ? now() - t.wStart : 0);
@@ -368,7 +371,8 @@ export function mountTimer(root, el0, w) {
   let raf = requestAnimationFrame(frame);
 
   return {
-    update(next) { el = next; },
+    // Started, paused, resumed or reset by someone else: show it now, not on the next tick.
+    update(next) { el = next; lastFrame = 0; lastCtl = ''; },
     destroy() { cancelAnimationFrame(raf); io?.disconnect(); clearInterval(chimeT); try { ac?.close(); } catch {} w.slot.replaceChildren(); box.remove(); },
   };
 }

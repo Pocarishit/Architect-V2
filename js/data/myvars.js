@@ -141,6 +141,9 @@ export function setMyVars(patch) {
   timer = setTimeout(flush, SAVE_MS);
 }
 
+/** Save now (Nov 26: a deletion must survive an immediate reload). */
+export function flushMyVars() { clearTimeout(timer); return flush(); }
+
 function flush() {
   if (!remote || !dirty) return saving;
   const snapshot = data;

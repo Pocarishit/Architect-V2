@@ -63,7 +63,6 @@ export function mountMobile(ctx) {
     menu({ x: r.right + 6, y: Math.max(12, r.top - 260) }, [
       { label: ctx.mode() === 'personal' ? 'Go to the Shared Space' : 'Go to your Personal Space', icon: 'home', onSelect: () => { setSide(false); ctx.toggleSpace(); } },
       { label: 'Side Chat', icon: 'chat', onSelect: () => { setSide(false); window.dispatchEvent(new CustomEvent('architect:sidechat-open', { detail: { ideas: false } })); } },
-      { label: 'Ideas', icon: 'spark', onSelect: () => { setSide(false); window.dispatchEvent(new CustomEvent('architect:sidechat-open', { detail: { ideas: true } })); } },
       '-', ...ctx.menuItems().map((it) => (it && typeof it === 'object' && it.onSelect ? { ...it, onSelect: () => { setSide(false); it.onSelect(); } } : it)),
     ]);
   }

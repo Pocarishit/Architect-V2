@@ -23,18 +23,19 @@ import { mountVariables, pickColor, trackUndo } from './variables.js';
 import { mountSideChat } from './sidechat.js';
 import { WIDGETS } from './widgets.js';
 import { urlOf, pickMedia, uploadMedia } from './media.js';
-import { loadMyVars, myVars, setMyVars, onMyVars, myVarsSource } from '../data/myvars.js';
+import { loadMyVars, myVars, setMyVars, onMyVars, myVarsSource, flushMyVars } from '../data/myvars.js';
+import { removeShared } from '../data/shared.js';
 import { startVarShare, foreignCats, onShared, shareCategory, unshareCategory, setSharedSpace, syncShared, sharedSource } from '../data/varshare.js';
 
 // The rail's own icons: thin strokes, round caps, drawn on a 24 grid.
 // Nov 25 — Overview is the official dotted Architect mark (its red dot included), Variables an atom, Path
 // the compass from the approved mockup: a round rim, four short directional marks, a diagonal needle with
 // a centre dot.
-const DOT = (x, y, red) => `<circle cx="${x}" cy="${y}" r="1.45" fill="${red ? '#D71921' : 'currentColor'}" stroke="none"/>`;
+const DOT = (x, y, red) => `<circle cx="${x}" cy="${y}" r="${red ? 1.3 : 1.1}" fill="${red ? '#D71921' : 'currentColor'}" stroke="none"${red ? ' class="sb-red"' : ''}/>`;
 const RAIL_ICONS = {
   logo: [[12.0, 5.25], [9.375, 8.625], [14.625, 8.625], [7.5, 12.0], [16.5, 12.0], [6.0, 15.375], [9.0, 15.375], [12.0, 15.375], [15.0, 15.375], [18.0, 15.375], [4.875, 18.75], [19.125, 18.75]].map(([x, y]) => DOT(x, y)).join('') + DOT(12, 18.75, true),
-  atom: '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><ellipse cx="12" cy="12" rx="9" ry="3.6"/><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(120 12 12)"/>',
-  compass: '<circle cx="12" cy="12" r="8.6"/><path d="M12 1.6v2.3M12 20.1v2.3M1.6 12h2.3M20.1 12h2.3"/><path d="M15.6 8.4 12.9 12.9 8.4 15.6 11.1 11.1Z" fill="currentColor" fill-opacity=".18"/><circle cx="12" cy="12" r="1.05" fill="currentColor" stroke="none"/>',
+  atom: '<circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/><ellipse cx="12" cy="12" rx="8.8" ry="3.3"/><ellipse cx="12" cy="12" rx="8.8" ry="3.3" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="8.8" ry="3.3" transform="rotate(120 12 12)"/>',
+  compass: '<circle cx="12" cy="12" r="8.4"/><path d="M12 2.2v1.9M12 19.9v1.9M2.2 12h1.9M19.9 12h1.9"/><path d="M15.4 8.6 12.8 12.8 8.6 15.4 11.2 11.2Z" fill="currentColor" fill-opacity=".12"/><circle cx="12" cy="12" r=".9" fill="currentColor" stroke="none"/>',
   frame: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
   stack: '<rect x="4" y="4.5" width="11" height="4" rx="2"/><rect x="8" y="10" width="12" height="4" rx="2"/><rect x="4" y="15.5" width="11" height="4" rx="2"/>',
   route: '<circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="5.5" r="2"/><path d="M7.2 17.2C9 14 11 14.5 13 13s3.2-3.8 4-5.8"/>',
@@ -44,7 +45,7 @@ const RAIL_ICONS = {
 export function railIcon(name) {
   const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('width', '22'); s.setAttribute('height', '22');
-  s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '1.6');
+  s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '1.25'); // Nov 26: lighter
   s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); s.setAttribute('aria-hidden', 'true');
   s.classList.add('sb-ic');
   s.innerHTML = RAIL_ICONS[name];
@@ -68,6 +69,18 @@ export function mountSidebar(ctx) {
   const offs = [];
 
   const rail = h('nav', { class: 'sb-rail', 'aria-label': 'Architect' });
+  // Nov 26 — the sidebar's own look (Settings → Personalize → Sidebar): a color and an optional PNG. Only paint:
+  // the rail's layout, size and which views show stay exactly as they are.
+  const applyLook = () => {
+    const look = getPref('sbLook', null) || {};
+    rail.style.setProperty('--sb-tint', look.color || '');
+    rail.classList.toggle('has-tint', !!look.color);
+    const url = look.png ? urlOf(look.png, applyLook) : null;
+    rail.style.backgroundImage = url ? `url("${url}")` : '';
+    rail.classList.toggle('has-png', !!url);
+  };
+  const onLook = () => applyLook();
+  window.addEventListener('architect:sidebar-look', onLook);
   const stage = h('div', { class: 'sb-stage', 'data-surface': 'sidebar', hidden: true });
   const root = h('div', { class: 'sb' }, rail, stage);
   page.append(root);
@@ -660,34 +673,30 @@ export function mountSidebar(ctx) {
     side.addEventListener('pointerdown', startDrag);
 
     /* ---------- the map ---------- */
-    // Nov 25 — the square shows the space's map right away (its chats and subsections, nested), instead of
-    // a blank grid until you click it. Clicking opens the same map larger; full screen is optional.
+    // Nov 26 — the square is the map itself, shrunk: the same Variables map the expand button opens (its
+    // nodes where they sit, their connections), drawn straight on the card — no badges, no inner frame.
+    let mini = null; // { key, node, ctl, ro }
     function mapCard() {
       if (!rootId() || isOrgans()) return h('span');
-      return h('div', { class: 'sbv-mapsq has-preview', role: 'button', tabindex: 0, 'aria-label': 'Open the map', onclick: () => openMap('compact'),
+      const key = `${cat}`;
+      if (!mini || mini.key !== key) {
+        destroyMini();
+        const stage = h('div', { class: 'sbv-mapmini-stage', 'aria-hidden': 'true', inert: '' });
+        const node = h('div', { class: 'sbv-mapmini' }, stage);
+        const ctl = mountVariables(stage, { id: `sidebar-mini-${me.id}-${cat}`, kind: 'variables', sections: [], entries: [] }, { host: { personal: false }, field: true, source: S(), preview: true });
+        ctl.show?.({ section: rootId(), sub: null, open: null });
+        // The map is laid out at a fixed size and scaled to the card, so it looks like the open map.
+        const fit = () => { const w = node.clientWidth || 1; node.style.setProperty('--mk', String(w / 560)); };
+        const ro = new ResizeObserver(fit); ro.observe(node);
+        mini = { key, node, ctl, ro };
+        requestAnimationFrame(fit);
+      } else mini.ctl.show?.({ section: rootId(), sub: null, open: null });
+      return h('div', { class: 'sbv-mapsq has-preview is-live', role: 'button', tabindex: 0, 'aria-label': 'Open the map', onclick: () => openMap('compact'),
         onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMap('compact'); } } },
-        mapPreview(rootId()),
-        h('button', { type: 'button', class: 'sbv-mapsq-full', 'aria-label': 'Open the map full screen', title: 'Full screen', onclick: (e) => { e.stopPropagation(); openMap('full'); } }, icon('fullscreen', 14)));
+        mini.node,
+        h('button', { type: 'button', class: 'sbv-mapsq-full', 'aria-label': 'Open the map full screen', title: 'Open the map', onclick: (e) => { e.stopPropagation(); openMap('full'); } }, icon('fullscreen', 14)));
     }
-    function mapPreview(rid) {
-      const chip = (x) => {
-        const url = x.photo ? urlOf(x.photo, () => paintSide()) : null;
-        return h('span', { class: ['sbv-mchip', x.color && 'has-color'], title: x.name, style: { '--h': hue(x.name), ...(x.color ? { '--vc': x.color } : {}) } },
-          url ? h('img', { src: url, alt: '', draggable: false }) : h('b', {}, (x.name || '?').trim().slice(0, 1).toUpperCase()));
-      };
-      const seen = new Set();
-      const box = (s, depth) => {
-        seen.add(s.id);
-        const subs = kids(s.id).filter((k) => !seen.has(k.id));
-        return h('span', { class: ['sbv-mgroup', s.color && 'has-color'], style: s.color ? { '--vc': s.color } : null },
-          h('i', {}, s.name || ''),
-          h('span', { class: 'sbv-mbody' }, ...entriesIn(s.id).slice(0, 12).map(chip), ...(depth < 3 ? subs.map((k) => box(k, depth + 1)) : [])));
-      };
-      seen.add(rid);
-      const items = [...entriesIn(rid).slice(0, 16).map(chip), ...kids(rid).map((k) => box(k, 0))];
-      return h('div', { class: 'sbv-mprev', 'aria-hidden': 'true' },
-        items.length ? items : [h('span', { class: 'sbv-mempty' }, 'Empty')]);
-    }
+    function destroyMini() { if (!mini) return; try { mini.ro.disconnect(); mini.ctl.destroy?.(); } catch {} mini = null; }
     function openMap(mode) {
       mapMode = mode;
       if (mapCtl?._watch) clearInterval(mapCtl._watch);
@@ -801,7 +810,47 @@ export function mountSidebar(ctx) {
         '-',
         undoItem(),
         theirs ? null : { label: 'New space…', icon: 'plus', onSelect: newCategory },
+        '-',
+        { label: 'Delete space…', icon: 'trash', danger: true, onSelect: () => deleteSpace(s) },
       ].filter(Boolean));
+    }
+    /* Nov 26 — Delete Space, for your own spaces and the shared ones you may delete. The confirmation names the
+       space; for a shared one it says plainly that it goes for everyone. Gone after a reload too: your copy is
+       removed from your account and the shared copy from the database. */
+    async function deleteSpace(s) {
+      const theirs = isForeign();
+      const it = theirs ? foreignItem() : null;
+      const shared = theirs || !!s.share?.item;
+      const ok = await confirmDialog(`Delete ${s.name}?`, shared
+        ? `${s.name} is shared: deleting it removes it — its chats, messages and pictures — for everyone in your shared Space, not just you. This can't be undone.`
+        : `${s.name} and everything in it — its chats, sub-sections and messages — are deleted from your account. This can't be undone.`,
+        { ok: shared ? 'Delete for everyone' : 'Delete space', danger: true });
+      if (!ok) return;
+      try {
+        if (theirs) {
+          if (!it) throw new Error('This space is no longer shared with you.');
+          await removeShared(it);           // the database refuses unless you may delete it
+          await syncShared();
+          if (foreignCats().some((x) => x.id === it.id)) throw new Error('permission');
+        } else {
+          if (s.share?.item) { try { await removeShared({ id: s.share.item }); } catch (e) { throw new Error(`Couldn’t delete the shared copy — ${friendlyError(e)}`); } }
+          const v = mine();
+          const gone = new Set(subtreeIds(v.sections || [], s.id));
+          setMyVars({ sections: (v.sections || []).filter((x) => !gone.has(x.id)), entries: (v.entries || []).filter((e) => !gone.has(e.section)) });
+          await flushMyVars();
+        }
+        const next = tops().find((x) => x.id !== s.id && !x.organs) || tops().find((x) => x.id !== s.id) || null;
+        cat = next?.id || null; open = null; remember();
+        toast(`${s.name} deleted.`, { ms: 2200 });
+      } catch (e) {
+        toast(/permission|denied|rls|policy|0 rows|not allowed/i.test(String(e?.message)) ? `Only ${s.name}’s owner can delete it.` : (e?.message || friendlyError(e)), { tone: 'error', ms: 5000 });
+      }
+      paint();
+    }
+    function subtreeIds(list, rootId) {
+      const out = [rootId];
+      for (let i = 0; i < out.length; i++) for (const x of list) if (x.parent === out[i] && !out.includes(x.id)) out.push(x.id);
+      return out;
     }
     function groupMenu(anchor, s) {
       menu(anchor, [
@@ -905,7 +954,7 @@ export function mountSidebar(ctx) {
     return {
       destroy() {
         window.removeEventListener('keydown', onEsc);
-        offVars(); offShared(); offUndo(); closeMap();
+        offVars(); offShared(); offUndo(); closeMap(); destroyMini();
         try { chatCtl?.destroy?.(); } catch {}
         try { organs?.destroy(); } catch {}
       },
@@ -1080,8 +1129,10 @@ export function mountSidebar(ctx) {
 
   /* ---------------- life ---------------- */
   offs.push(startVarShare());
+  offs.push(() => window.removeEventListener('architect:sidebar-look', onLook));
   setSharedSpace(ctx.sharedSpaceId?.() || null);
   paintRail();
+  applyLook();
   requestAnimationFrame(() => show(cur || 'space'));
 
   return {

@@ -3,16 +3,27 @@
 // can show (and add to) the same pool in its Shared view. Nothing new in the database: the pool is the
 // shared object's `ideas`, synced like every other object on the shared canvas.
 const subs = new Set();
-let pool = null; // { id, get(), set(list, live) }
+let pool = null; // { id, get(), set(list, live), field(k), patch(p), priv?() }
+// Nov 26: every shared-Space Fleeting object offers itself; the pool is chosen the same way on every screen —
+// never one hidden from others ("Hide from others"), then the lowest id — so Hiru and Maveri always read and
+// write the same record. (It used to be whichever object mounted first, which could differ per person, or be
+// one only its owner could see: that's how Hiru's moments never reached Maveri's Story.)
+const cands = new Set();
 
 const emit = () => { for (const fn of subs) { try { fn(); } catch {} } };
+function choose() {
+  const best = [...cands].filter((p) => !p.priv?.()).sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || null;
+  if (best !== pool) { pool = best; emit(); return true; }
+  return false;
+}
 
-/** Called by the shared Space's Fleeting Ideas object. Returns { changed(), off() }. */
+/** Called by the shared Space's Fleeting objects. Returns { changed(), off() }. */
 export function registerPool(p) {
-  if (!pool) { pool = p; emit(); }
+  cands.add(p);
+  choose();
   return {
-    changed() { if (pool === p) emit(); },
-    off() { if (pool === p) { pool = null; emit(); } },
+    changed() { if (!choose() && pool === p) emit(); },
+    off() { cands.delete(p); if (!choose() && pool === p) emit(); },
   };
 }
 

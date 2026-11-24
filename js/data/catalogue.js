@@ -3,6 +3,46 @@
 // area: the part of Architect it touches. Add new entries at the top.
 export const CATALOGUE = [
   {
+    day: '2026-11-26', area: 'Variables', title: 'Zones on the chat canvas',
+    text: 'A Zone tool (Z) in a chat’s Free View: drag to draw a named, colored section with a faint tint and thin border, behind the messages and connectors. Anything that touches it belongs to it and is protected — readable and copyable, but it can’t be moved, edited or deleted, batch actions included. Its label renames, recolors, presents, exports or captures it; its edges adjust what it covers; removing it frees the messages.',
+  },
+  {
+    day: '2026-11-26', area: 'Variables', title: 'Capture Zone → Zone Cubes in the Library',
+    text: 'Capture Zone moves the section (messages, attachments, layout, connectors) out of the chat into its Library as a Zone Cube — moved, not copied. The Library (B) is a map you can pan, zoom and arrange; each cube shows its name, color and a miniature. A cube opens here as an overlay, embeds in the chat (view-only, Edit Mode moves it, Return to Library removes it), presents as a spoken walkthrough with an order you can edit, copies (then Paste section on a canvas), copies or moves to another chat, and exports.',
+  },
+  {
+    day: '2026-11-26', area: 'Variables', title: 'Toolbar matches the Blueprint',
+    text: 'The chat canvas tools now follow the Blueprint’s names, icons, order and shortcuts, with Zone added. Right-drag inside a Variables object pans its canvas; middle-drag pans the workspace; a plain right-click still opens the menu.',
+  },
+  {
+    day: '2026-11-26', area: 'Variables', title: 'Map card shows the real map',
+    text: 'The map square in the sidebar is the actual map, scaled down — same items, same places — with no badges or inner frame. The expand button stays top-right.',
+  },
+  {
+    day: '2026-11-26', area: 'Spaces', title: 'Delete a space',
+    text: 'Each space’s menu has Delete space. The confirmation names it (and says it affects everyone for a shared one); it stays gone after a reload.',
+  },
+  {
+    day: '2026-11-26', area: 'Fleeting', title: 'Zoom that really zooms; shared Story fixed',
+    text: 'Zoom now scales the whole timeline — cards, text, timestamps, markers and spine — on desktop and mobile, without changing the time scale. Shared Moments go into one shared Story both people see on load and live; private Moments stay private.',
+  },
+  {
+    day: '2026-11-26', area: 'Timer', title: 'Same time for everyone',
+    text: 'The shared timer corrects for device clock differences and repaints right away when the other person starts, pauses, resumes or resets.',
+  },
+  {
+    day: '2026-11-26', area: 'Board', title: 'Locked objects stay quiet while you pan; live cursors',
+    text: 'Right-dragging or right-clicking a locked object no longer selects it; a deliberate double right-click on its border does (it stays locked). Collaborator cursors carry their name and color on every move, hide when the pointer leaves without marking anyone offline, and clear when someone leaves.',
+  },
+  {
+    day: '2026-11-26', area: 'Sidebar', title: 'Lighter icons; your color and PNG',
+    text: 'Rail icons are thinner and softer with a subtle accent for the active one. Settings → Personalize → Sidebar sets a color and an optional PNG behind the rail; it’s kept after a reload.',
+  },
+  {
+    day: '2026-11-26', area: 'Mobile', title: 'Variables without the leftover Ideas chat',
+    text: 'Mobile Variables opens the same objects as desktop; the old Ideas side chat, its tab and button are gone from the phone view. No data was removed.',
+  },
+  {
     day: '2026-11-25', area: 'Variables', title: "The map shows everything right away",
     text: "The Variables map now shows a space’s chats and every subsection (nested ones too) as soon as it opens — no empty dotted grid, no opening each subsection first. The square preview at the bottom of the sidebar shows the same map before you click it; clicking opens it larger, full screen is optional. It refreshes as things are added, moved or deleted, in your own and in shared spaces.",
   },

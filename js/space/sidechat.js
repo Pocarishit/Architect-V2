@@ -521,7 +521,7 @@ export function mountSideChat({ me, embed = null, launcher = true, onChats = nul
         ondblclick: () => renameChat(c),
         oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); tabMenu({ x: e.clientX, y: e.clientY }, c); },
       }, h('span', { class: 'sc-ava-in' }, face ? h('img', { src: face, alt: '', draggable: false }) : h('b', {}, initials(c.name))));
-    }), h('button', {
+    }), noIdeas ? null : h('button', {
       class: ['sc-ava', 'sc-bulb', ideasOn && 'is-on'], type: 'button', role: 'tab', 'aria-selected': String(ideasOn), 'aria-label': 'Ideas', title: 'Ideas',
       onclick: () => setIdeas(!ideasOn),
     }, h('span', { class: 'sc-ava-in' }, icon('bulb', 17))));
@@ -534,10 +534,14 @@ export function mountSideChat({ me, embed = null, launcher = true, onChats = nul
     const n = chats[(i + (e.key === 'ArrowDown' ? 1 : -1) + chats.length) % chats.length];
     if (n) { select(n.id); railList.querySelector(`[data-id="${n.id}"]`)?.focus(); }
   });
-  let ideasOn = !!store.get(`architect.sidechat.ideas.${uidKey}`, false);
+  // Nov 26 — on a phone the Ideas side chat is gone from the UI (its tab, its bulb, and anything that opened it).
+  // Only the UI: saved ideas and chats are untouched, and the desktop keeps it as it was.
+  const noIdeas = launcher === false;
+  let ideasOn = !noIdeas && !!store.get(`architect.sidechat.ideas.${uidKey}`, false);
   let ideasCtl = null;
   const ideasEl = { id: `sidechat-ideas-${uidKey}`, ideas: [] };
   function setIdeas(on) {
+    if (noIdeas) on = false;
     ideasOn = !!on;
     store.set(`architect.sidechat.ideas.${uidKey}`, ideasOn);
     panel.classList.toggle('is-ideas', ideasOn);

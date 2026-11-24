@@ -140,10 +140,9 @@ export class Editor {
     // right-click menu must not open at the end of the drag (Windows sends it after the button comes up) or
     // at the start of one (macOS sends it on press). A plain right-click still reaches the object's menu.
     L(this.vp, 'contextmenu', (e) => {
-      if (e.__replay) return;
-      if (performance.now() - (this._rightPannedAt || 0) < 450) { e.preventDefault(); e.stopPropagation(); return; }
       const g = this.g;
-      if (g?.type === 'pan' && g.right) {
+      if (!e.__replay && performance.now() - (this._rightPannedAt || 0) < 450) { e.preventDefault(); e.stopPropagation(); return; }
+      if (!e.__replay && g?.type === 'pan' && g.right) {
         e.preventDefault(); e.stopPropagation();
         // The board holds the pointer during the press, so the event says "the board": find what's really
         // under the pointer, so its own menu (a Variables tab, a chat…) is the one that opens.
@@ -153,7 +152,7 @@ export class Editor {
       // Lock lives on the frame (Nov 25): a right-click on an object's outer border opens the object menu
       // (Lock / Unlock…), even when its header is hidden and its inside has a menu of its own.
       const edge = this.edgeHit(e);
-      if (edge) { e.preventDefault(); e.stopPropagation(); this.openContextMenu({ clientX: e.clientX, clientY: e.clientY, target: edge }); }
+      if (edge) { e.preventDefault(); e.stopPropagation(); this.openContextMenu({ clientX: e.clientX, clientY: e.clientY, target: edge, edge: true }); }
     }, true);
     L(this.vp, 'contextmenu', (e) => this.onContextMenu(e));
     L(this.vp, 'wheel', (e) => this.onWheel(e), { passive: false });
@@ -427,6 +426,7 @@ export class Editor {
     if (this.presenting) return;
     const sel = this.selected();
     if (!sel.length) return;
+    if (this.quietSel && sel.length === 1 && sel[0].id === this.quietSel) return;
     const busy = g && (g.moved || g.type === 'resize' || g.type === 'endpoint' || g.type === 'anchor');
     const handle = (d, r) => {
       const x = r.x + (d.includes('w') ? 0 : d.includes('e') ? r.w : r.w / 2);
@@ -798,7 +798,9 @@ export class Editor {
   selectAll() { this.select(this.visibleEls().map((e) => e.id)); }
 
   syncSelection() {
-    for (const [id, node] of this.nodes) node.classList.toggle('is-selected', this.sel.has(id));
+    // A locked object picked by a single right-click (its menu) stays visually unselected (Nov 26).
+    if (this.quietSel && !(this.sel.size === 1 && this.sel.has(this.quietSel))) this.quietSel = null;
+    for (const [id, node] of this.nodes) node.classList.toggle('is-selected', this.sel.has(id) && id !== this.quietSel);
     this.renderOverlay();
     this.emit('selection');
   }
@@ -1147,7 +1149,7 @@ export class Editor {
       },
       onUp: () => {
         if (!g.right) return;
-        if (g.panned) { this._rightPannedAt = performance.now(); return; }
+        if (g.panned) { this._rightPannedAt = performance.now(); this._rclick = null; return; }
         if (g.pendingInner) {
           // A right-click that didn't move, whose menu arrived while the button was down: deliver it now.
           const p = g.pendingInner;
@@ -1761,6 +1763,21 @@ export class Editor {
     const target = e.target;
     const node = target.closest('[data-eid]');
     const el = node ? this.byId.get(node.dataset.eid) : null;
+    // Nov 26 — a locked object never lights up from a single right-click: its menu opens (Unlock, Copy…) but
+    // no selection border shows. A deliberate double right-click on its outer border selects it (it stays
+    // locked). Right-drags never count toward that double click.
+    if (el?.locked && !this.sel.has(el.id)) {
+      const now = performance.now();
+      const dbl = this._rclick && this._rclick.id === el.id && now - this._rclick.t < 420 && e.edge;
+      this._rclick = dbl ? null : { id: el.id, t: now };
+      this.quietSel = dbl ? null : el.id;
+      this.select([el.id]);
+      if (dbl) return; // the second click selects; no menu over it
+    } else if (el?.locked && this.quietSel === el.id && e.edge) {
+      const now = performance.now();
+      if (this._rclick && this._rclick.id === el.id && now - this._rclick.t < 420) { this._rclick = null; this.quietSel = null; this.syncSelection(); return; }
+      this._rclick = { id: el.id, t: now };
+    } else this._rclick = null;
     if (el && !this.sel.has(el.id)) this.select([el.id]);
     if (!el) this.clearSel();
     this.emit('contextmenu', { x: e.clientX, y: e.clientY, onElement: !!el, at: this.toWorld(e.clientX, e.clientY) });

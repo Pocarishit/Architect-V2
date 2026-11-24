@@ -20,14 +20,16 @@
 // (older layouts stored size as a bare width — still read.)
 import { h, s } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { menu, confirmDialog, popover, closeFloating, toast } from '../core/ui.js';
+import { menu, confirmDialog, promptDialog, popover, closeFloating, toast } from '../core/ui.js';
 import { uid, store } from '../core/util.js';
+import { ZONE_COLORS, zoneColor, overlaps, renderSection, openLibrary, openHere, present, exportSection, colorPicker, getClip } from './zones.js';
 
 const scrollMem = new Map(); // entry id → { left, top } so a repaint doesn't throw you back
 const selMem = new Map();    // entry id → the selection, so it survives the chat repainting after a save
 const histMem = new Map();   // entry id → { undo: [], redo: [] } layout history, kept across repaints
 const SHAPES = [['box', 'rect', 'Rectangle'], ['ring', 'ellipse', 'Ellipse'], ['diamond', 'diamond', 'Diamond'], ['triangle', 'triangle', 'Triangle']];
-const KEYS = { v: 'move', h: 'hand', n: 'note', t: 'text', s: 'shape', l: 'link', p: 'pen', q: 'lasso' };
+// Shortcuts as on the Blueprint (Nov 26), plus Z for the Variables-only Zone tool.
+const KEYS = { v: 'move', h: 'hand', n: 'note', t: 'text', s: 'shape', l: 'link', p: 'pen', q: 'lasso', z: 'zone' };
 const MIN_W = 60, MAX_W = 1600, MIN_H = 32, MAX_H = 2400, NOTE_W = 210, TEXT_W = 220, IMG_W = 240;
 const LEFT_PAD = 140; // room kept beyond the left-most object
 const sizeOf = (v) => (v == null ? null : typeof v === 'number' ? { w: v } : v); // old saves: a bare width
@@ -52,10 +54,12 @@ export function mountFreeView(o) {
   const BUBBLE = o.bubble || '.sc-bubble';     // the part links attach to
   const noun = o.noun || 'message', home = o.home || 'the column';
   let x = o.entry();
-  const TOOLS = ['move', 'hand', 'note', 'text', 'shape', 'link', 'pen', 'lasso'];
+  const TOOLS = ['move', 'hand', 'note', 'text', 'shape', 'link', 'pen', 'lasso', 'zone'];
+  const zonesOn = !!o.zones; // chats only (the object-level grid has no messages to protect)
   let tool = TOOLS.includes(lastTool) ? lastTool : 'move';
   let busy = false;
-  const free = () => ({ on: true, pos: {}, size: {}, links: [], ink: [], shapes: [], cards: [], ...(x.free || {}) });
+  // Read fresh (Nov 26): a save can land after an await (a dialog), when this view may have been rebuilt.
+  const free = () => ({ on: true, pos: {}, size: {}, links: [], ink: [], shapes: [], cards: [], zones: [], embeds: [], ...((o.entry?.() || x).free || {}) });
   const sel = selMem.get(x.id) || { msgs: new Set(), cards: new Set(), shapes: new Set() };
   selMem.set(x.id, sel);
   const selCount = () => sel.msgs.size + sel.cards.size + sel.shapes.size;
@@ -112,11 +116,14 @@ export function mountFreeView(o) {
       return wrap;
     });
     const cards = f.cards.map((c) => cardEl(c));
-    world.replaceChildren(svg, flow, ...placed, ...cards);
+    // Zones sit behind everything (grid-faint wash + thin border); embedded cubes sit with the content.
+    zoneLayer.replaceChildren(...(zonesOn ? (f.zones || []).map(zoneEl) : []));
+    embedLayer.replaceChildren(...(zonesOn ? (f.embeds || []).map(embedEl).filter(Boolean) : []));
+    world.replaceChildren(zoneLayer, svg, flow, ...placed, ...cards, embedLayer);
     board.dataset.tool = tool;
     paintTools();
     paintSel();
-    requestAnimationFrame(() => { size(); draw(); });
+    requestAnimationFrame(() => { size(); draw(); if (zonesOn) { syncMembers(); paintZoned(); } });
   }
 
   // Sized items take the width and a minimum height: content that needs more (a long name) still grows it.
@@ -178,6 +185,15 @@ export function mountFreeView(o) {
     });
     node.addEventListener('contextmenu', (e) => {
       e.preventDefault(); e.stopPropagation();
+      const z = zoneOf(c.id);
+      if (z) {
+        menu({ x: e.clientX, y: e.clientY }, [
+          { header: `In zone “${z.name}” · protected` },
+          c.text ? { label: 'Copy text', icon: 'copy', onSelect: async () => { try { await navigator.clipboard.writeText(c.text); toast('Copied.', { ms: 1200 }); } catch {} } } : null,
+          { label: 'Zone options…', icon: 'more', onSelect: () => zoneMenu({ x: e.clientX, y: e.clientY }, z) },
+        ].filter(Boolean));
+        return;
+      }
       const many = isSel('cards', c.id) && selCount() > 1;
       const label = k === 'img' ? 'image' : k === 'text' ? 'text' : 'note';
       menu({ x: e.clientX, y: e.clientY }, many ? selItems() : [
@@ -191,14 +207,270 @@ export function mountFreeView(o) {
   }
   const patchCard = (id, p) => save({ cards: free().cards.map((c) => (c.id === id ? { ...c, ...p } : c)) });
   function removeCards(ids) {
+    { const z = ids.map((id) => zoneOf(id)).find(Boolean); if (z) { lockedMsg(z); ids = ids.filter((id) => !zoneOf(id)); if (!ids.length) return; } }
     const gone = new Set(ids);
     gone.forEach((id) => sel.cards.delete(id));
     save({ cards: free().cards.filter((c) => !gone.has(c.id)), links: free().links.filter((l) => !gone.has(l.a) && !gone.has(l.b)) });
   }
 
+  /* ---------------- zones (Nov 26) ---------------- */
+  const zoneLayer = h('div', { class: 'vr-zones' });
+  const embedLayer = h('div', { class: 'vr-embeds' });
+  const zoneRect = (z) => ({ x: z.x, y: z.y, w: z.w, h: z.h });
+  function itemRect(kind, id) {
+    if (kind === 'cards') { const n = cardEls.get(id); return n ? { x: n.offsetLeft, y: n.offsetTop, w: n.offsetWidth, h: n.offsetHeight } : null; }
+    return rectOf(id);
+  }
+  // Who's in a zone: anything that touches it, even partly, belongs to it in full.
+  function membersOf(z) {
+    const out = { msgs: new Set(), cards: new Set() };
+    const zr = zoneRect(z);
+    for (const id of items.keys()) { const r = rectOf(id); if (r && overlaps(r, zr)) out.msgs.add(id); }
+    for (const id of cardEls.keys()) { const r = itemRect('cards', id); if (r && overlaps(r, zr)) out.cards.add(id); }
+    return out;
+  }
+  // id → zone, for every protected item (measured from the canvas; the saved lists are the fallback).
+  function zonedMap() {
+    const m = new Map();
+    if (!zonesOn) return m;
+    for (const z of free().zones || []) {
+      const mem = flow ? membersOf(z) : { msgs: new Set(z.members || []), cards: new Set(z.members || []) };
+      for (const id of [...mem.msgs, ...mem.cards]) if (!m.has(id)) m.set(id, z);
+    }
+    return m;
+  }
+  const zoneOf = (id) => zonedMap().get(id) || null;
+  const lockedMsg = (z) => toast(`In the zone “${z.name}”: it can be read and copied, not moved, edited or deleted. Remove the zone to release it.`, { ms: 3200 });
+  // The membership is also kept on each zone, so the chat's own menus know it without the canvas.
+  function syncMembers() {
+    const zs = free().zones || [];
+    if (!zs.length) return;
+    let changed = false;
+    const next = zs.map((z) => { const m = membersOf(z); const ids = [...m.msgs, ...m.cards].sort(); if (JSON.stringify(ids) !== JSON.stringify([...(z.members || [])].sort())) { changed = true; return { ...z, members: ids }; } return z; });
+    if (changed && !busy) o.save({ ...free(), zones: next, on: true });
+  }
+  function paintZoned() {
+    const zm = zonedMap();
+    for (const [id, row] of items) row.classList.toggle('is-zoned', zm.has(id));
+    for (const [id, n] of cardEls) n.classList.toggle('is-zoned', zm.has(id));
+    for (const [id, row] of items) row.closest('.vr-fv-item')?.classList.toggle('is-zoned', zm.has(id));
+  }
+  function zoneEl(z) {
+    const n = h('div', { class: 'vr-zone', 'data-zone': z.id, style: { left: `${z.x}px`, top: `${z.y}px`, width: `${z.w}px`, height: `${z.h}px`, '--zc': z.color || ZONE_COLORS[0] } });
+    const label = h('div', { class: 'vr-zone-label' },
+      h('span', { class: 'vr-zone-name', title: 'Drag to move the zone · double-click to rename' }, z.name || 'Zone'),
+      h('span', { class: 'vr-zone-ctl' },
+        zbtn('edit', 'Rename', () => renameZone(z)),
+        zbtn('textColor', 'Color', (b) => colorPicker(b, z.color, (c) => patchZone(z.id, { color: c }))),
+        zbtn('play', 'Present', () => presentZone(z)),
+        zbtn('download', 'Export', () => exportSection(cubeOf(z))),
+        zbtn('layers', 'Capture Zone (move it to the Library)', () => captureZone(z)),
+        zbtn('close', 'Remove the zone (keeps its messages)', () => removeZone(z))));
+    n.append(label);
+    label.addEventListener('dblclick', (e) => { if (!e.target.closest('button')) renameZone(z); });
+    label.addEventListener('pointerdown', (e) => { if (e.button !== 0 || e.target.closest('button')) return; e.preventDefault(); e.stopPropagation(); moveZone(e, n, z); });
+    // Edges and corners adjust which messages it covers.
+    for (const d of DIRS) {
+      const hd = h('span', { class: `vr-zone-h is-${d}`, 'aria-hidden': 'true', style: { cursor: CURSOR[d] } });
+      hd.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; e.preventDefault(); e.stopPropagation(); sizeZone(e, n, z, d); });
+      n.append(hd);
+    }
+    n.addEventListener('contextmenu', (e) => {
+      if (!e.target.closest('.vr-zone-label, .vr-zone-h')) return;
+      e.preventDefault(); e.stopPropagation();
+      zoneMenu({ x: e.clientX, y: e.clientY }, z);
+    });
+    return n;
+  }
+  function zbtn(ic, label, fn) { return h('button', { type: 'button', class: 'vr-zone-btn', 'aria-label': label, 'data-tip': label, onclick: (e) => { e.stopPropagation(); fn(e.currentTarget); } }, icon(ic, 12)); }
+  function zoneMenu(at, z) {
+    const n = membersOf(z);
+    menu(at, [
+      { header: `${z.name} · ${n.msgs.size + n.cards.size} item${n.msgs.size + n.cards.size === 1 ? '' : 's'}` },
+      { label: 'Rename…', icon: 'edit', onSelect: () => renameZone(z) },
+      { label: 'Color…', icon: 'textColor', onSelect: () => colorPicker(at, z.color, (c) => patchZone(z.id, { color: c })) },
+      { label: 'Present', icon: 'play', onSelect: () => presentZone(z) },
+      { label: 'Export (HTML)', icon: 'download', onSelect: () => exportSection(cubeOf(z)) },
+      { label: 'Capture Zone', icon: 'layers', onSelect: () => captureZone(z) },
+      '-',
+      { label: 'Remove zone (keeps the messages)', icon: 'close', onSelect: () => removeZone(z) },
+    ]);
+  }
+  const patchZone = (id, p) => save({ zones: (free().zones || []).map((z) => (z.id === id ? { ...z, ...p } : z)) });
+  async function renameZone(z) { const n = await promptDialog('Zone name', { value: z.name, maxLength: 80 }); if (n?.trim()) patchZone(z.id, { name: n.trim() }); }
+  function removeZone(z) { save({ zones: (free().zones || []).filter((q) => q.id !== z.id) }); toast(`“${z.name}” removed — its messages are free again.`, { ms: 2000 }); }
+  function moveZone(e, node, z) {
+    const start = local(e);
+    let moved = false, at = null;
+    track((ev) => {
+      const p = local(ev);
+      if (!moved && Math.hypot(p.x - start.x, p.y - start.y) < 3) return;
+      moved = true;
+      at = { x: Math.round(z.x + p.x - start.x), y: clampY(z.y + p.y - start.y) };
+      node.style.left = `${at.x}px`; node.style.top = `${at.y}px`;
+      autoScroll(ev);
+    }, () => { if (moved && at) { eatClick(); patchZone(z.id, { ...at, members: undefined }); } });
+  }
+  function sizeZone(e, node, z, dir) {
+    const start = local(e);
+    let r = zoneRect(z);
+    track((ev) => {
+      const p = local(ev);
+      const dx = p.x - start.x, dy = p.y - start.y;
+      let { x: nx, y: ny, w: nw, h: nh } = zoneRect(z);
+      if (dir.includes('e')) nw = z.w + dx;
+      if (dir.includes('s')) nh = z.h + dy;
+      if (dir.includes('w')) { nw = z.w - dx; nx = z.x + dx; }
+      if (dir.includes('n')) { nh = z.h - dy; ny = z.y + dy; }
+      if (nw < 60) { if (dir.includes('w')) nx -= 60 - nw; nw = 60; }
+      if (nh < 40) { if (dir.includes('n')) ny -= 40 - nh; nh = 40; }
+      r = { x: Math.round(nx), y: clampY(ny), w: Math.round(nw), h: Math.round(nh) };
+      Object.assign(node.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+      autoScroll(ev);
+    }, () => patchZone(z.id, { ...r, members: undefined }));
+  }
+  function startZone(e) {
+    const a = local(e);
+    const live = h('div', { class: 'vr-zone is-live', style: { '--zc': zoneColor((free().zones || []).length) } });
+    let r = null;
+    track((ev) => {
+      const p = local(ev);
+      r = { x: Math.round(Math.min(a.x, p.x)), y: clampY(Math.min(a.y, p.y)), w: Math.round(Math.abs(p.x - a.x)), h: Math.round(Math.abs(p.y - a.y)) };
+      if (!live.isConnected) zoneLayer.append(live);
+      Object.assign(live.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+      autoScroll(ev);
+    }, async (ev, how) => {
+      live.remove();
+      if (how !== 'up' || !r || r.w < 24 || r.h < 24) { setTool('move'); return; }
+      const n = (free().zones || []).length;
+      const z = { id: uid(), name: `Zone ${n + 1}`, color: zoneColor(n), ...r };
+      save({ zones: [...(free().zones || []), z] });
+      setTool('move');
+      const name = await promptDialog('Name this zone', { value: z.name, maxLength: 80, ok: 'Name it' });
+      if (name?.trim() && name.trim() !== z.name) patchZone(z.id, { name: name.trim() });
+    });
+  }
+  // The section as a cube: every member in full (even the part outside the border), the layout, and the
+  // connectors between included items.
+  function cubeOf(z) {
+    const mem = membersOf(z);
+    const f = free();
+    const raw = [];
+    for (const id of mem.msgs) {
+      const r = rectOf(id); const m = (x.notes || []).find((q) => q.id === id);
+      if (r && m) raw.push({ id, kind: 'msg', ...r, text: m.text || '', files: m.files || [], name: m.name || '', by: m.by || null, ts: m.ts, raw: m });
+    }
+    for (const id of mem.cards) {
+      const r = itemRect('cards', id); const c = f.cards.find((q) => q.id === id);
+      if (r && c) raw.push({ id, kind: c.kind || 'note', ...r, text: c.text || '', path: c.path || null, raw: c });
+    }
+    const minX = Math.min(z.x, ...raw.map((q) => q.x)), minY = Math.min(z.y, ...raw.map((q) => q.y));
+    const maxX = Math.max(z.x + z.w, ...raw.map((q) => q.x + q.w)), maxY = Math.max(z.y + z.h, ...raw.map((q) => q.y + q.h));
+    const pad = 16;
+    const ids = new Set(raw.map((q) => q.id));
+    const content = {
+      w: Math.round(maxX - minX + pad * 2), h: Math.round(maxY - minY + pad * 2),
+      items: raw.map((q) => ({ ...q, x: Math.round(q.x - minX + pad), y: Math.round(q.y - minY + pad), w: Math.round(q.w), h: Math.round(q.h) })),
+      links: (f.links || []).filter((l) => ids.has(l.a) && ids.has(l.b)).map((l) => ({ a: l.a, b: l.b, arrow: l.arrow !== false })),
+    };
+    return { id: uid(), name: z.name, color: z.color, at: Date.now(), content, from: { zone: z.id } };
+  }
+  function presentZone(z) {
+    const cube = cubeOf(z);
+    cube.seq = z.seq || null;
+    present(cube, { onSaveSeq: (seq) => patchZone(z.id, { seq }) });
+  }
+  async function captureZone(z) {
+    if (!o.capture) return;
+    const cube = cubeOf(z);
+    if (!cube.content.items.length && !(await confirmDialog(`Capture “${z.name}”?`, 'Nothing touches this zone yet — the cube will be empty.', { ok: 'Capture', danger: false }))) return;
+    const msgs = cube.content.items.filter((q) => q.kind === 'msg').map((q) => q.id);
+    const cardIds = new Set(cube.content.items.filter((q) => q.kind !== 'msg').map((q) => q.id));
+    const all = new Set(cube.content.items.map((q) => q.id));
+    const f = free();
+    const patch = {
+      zones: (f.zones || []).filter((q) => q.id !== z.id),
+      cards: f.cards.filter((c) => !cardIds.has(c.id)),
+      links: f.links.filter((l) => !all.has(l.a) && !all.has(l.b)),
+    };
+    clearSel(false);
+    try {
+      await o.capture(cube, msgs, patch);
+      toast(`“${z.name}” is in the Library now.`, { ms: 2400, action: { label: 'Open Library', onClick: () => openLib() } });
+    } catch (e) { toast(e?.message || 'The zone couldn’t be captured — nothing was moved.', { tone: 'error', ms: 4000 }); }
+  }
+
+  /* embedded cubes: an outlined, view-only section on the canvas */
+  function embedEl(em) {
+    const cube = o.library?.get().cubes?.find((c) => c.id === em.cube);
+    if (!cube) return null;
+    const sec = renderSection(cube.content, { color: cube.color, name: cube.name });
+    const ctl = h('div', { class: 'vr-embed-ctl' },
+      h('button', { type: 'button', class: ['vr-embed-btn', em.edit && 'is-on'], 'aria-pressed': String(!!em.edit), title: em.edit ? 'Edit Mode is on — drag the outline to move it' : 'Edit Mode', onclick: () => patchEmbed(em.id, { edit: !em.edit }) }, icon(em.edit ? 'lockOpen' : 'lock', 12), em.edit ? 'Editing' : 'Edit Mode'),
+      h('button', { type: 'button', class: 'vr-embed-btn', title: 'Present', onclick: () => present(cube, { onSaveSeq: (seq) => o.library.patchCube(cube.id, { seq }) }) }, icon('play', 12)),
+      h('button', { type: 'button', class: 'vr-embed-btn', title: 'Return to Library', onclick: () => returnEmbed(em) }, icon('layers', 12), 'Return to Library'));
+    const n = h('div', { class: ['vr-embed', em.edit && 'is-edit'], 'data-embed': em.id, style: { left: `${em.x}px`, top: `${em.y}px`, '--zc': cube.color } }, sec, ctl);
+    n.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || e.target.closest('button')) return;
+      e.stopPropagation();
+      if (!em.edit) return; // view-only: nothing moves
+      if (!e.target.closest('.zn-section-name') && !e.target.classList.contains('zn-section')) return; // the outline moves it as one unit
+      e.preventDefault();
+      const start = local(e); let at = null;
+      track((ev) => { const p = local(ev); at = { x: Math.round(em.x + p.x - start.x), y: clampY(em.y + p.y - start.y) }; n.style.left = `${at.x}px`; n.style.top = `${at.y}px`; autoScroll(ev); },
+        () => { if (at) { eatClick(); patchEmbed(em.id, at); } });
+    });
+    n.addEventListener('contextmenu', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      menu({ x: e.clientX, y: e.clientY }, [
+        { header: cube.name },
+        { label: em.edit ? 'Turn Edit Mode off (lock it)' : 'Edit Mode', icon: em.edit ? 'lock' : 'lockOpen', onSelect: () => patchEmbed(em.id, { edit: !em.edit }) },
+        { label: 'Open here', icon: 'eye', onSelect: () => openHere(cube) },
+        { label: 'Present', icon: 'play', onSelect: () => present(cube, { onSaveSeq: (seq) => o.library.patchCube(cube.id, { seq }) }) },
+        '-',
+        { label: 'Return to Library', icon: 'layers', onSelect: () => returnEmbed(em) },
+      ]);
+    });
+    return n;
+  }
+  const patchEmbed = (id, p) => save({ embeds: (free().embeds || []).map((q) => (q.id === id ? { ...q, ...p } : q)) });
+  function returnEmbed(em) { save({ embeds: (free().embeds || []).filter((q) => q.id !== em.id) }); toast('Back in the Library — the cube and the conversation around it are kept.', { ms: 2200 }); }
+  function embedCube(cube) {
+    const c = viewCenter();
+    const ex = Math.max(72, Math.min(Math.round(c.x - cube.content.w / 2), visW() - cube.content.w));
+    save({ embeds: [...(free().embeds || []), { id: uid(), cube: cube.id, x: ex, y: Math.max(16, Math.round(c.y - cube.content.h / 2)), edit: false }] });
+  }
+  function openLib() {
+    if (!o.library) return;
+    openLibrary({ ...o.library, embed: (cube) => embedCube(cube) });
+  }
+  // Paste section: the copied cube's messages come back onto this canvas (as new messages), with its layout,
+  // connectors and a zone around them.
+  async function pasteSection(at) {
+    const cube = getClip();
+    if (!cube || !o.paste) return;
+    const c = cube.content;
+    const map = new Map(c.items.map((it) => [it.id, uid()]));
+    const ox = Math.round(at.x - c.w / 2), oy = Math.max(0, Math.round(at.y - 20));
+    const notes = [], pos = {}, size = {}, cards = [];
+    for (const it of c.items) {
+      const nid = map.get(it.id);
+      if (it.kind === 'msg') {
+        notes.push({ ...(it.raw || { text: it.text, files: it.files, name: it.name, by: it.by, ts: it.ts }), id: nid });
+        pos[nid] = { x: ox + it.x, y: oy + it.y }; size[nid] = { w: it.w, h: it.h };
+      } else cards.push({ ...(it.raw || { kind: it.kind, text: it.text, path: it.path }), id: nid, x: ox + it.x, y: oy + it.y, w: it.w, ...(it.kind === 'img' ? { h: it.h } : {}) });
+    }
+    const f = free();
+    const links = (c.links || []).map((l) => ({ id: uid(), a: map.get(l.a), b: map.get(l.b), arrow: l.arrow !== false })).filter((l) => l.a && l.b);
+    const zone = { id: uid(), name: cube.name, color: cube.color, x: ox, y: oy, w: c.w, h: c.h };
+    await o.paste(notes, { pos: { ...f.pos, ...pos }, size: { ...f.size, ...size }, cards: [...f.cards, ...cards], links: [...f.links, ...links], zones: [...(f.zones || []), zone] });
+    toast(`“${cube.name}” pasted.`, { ms: 1800 });
+  }
+
   function editCard(node, id, fresh = null) {
     const text = node.querySelector('.vr-fv-note-text');
     if (!text || text.isContentEditable) return;
+    { const z = !fresh && zoneOf(id); if (z) { lockedMsg(z); return; } }
     busy = true;
     node.classList.add('is-editing');
     text.contentEditable = 'true';
@@ -279,15 +551,18 @@ export function mountFreeView(o) {
       btn('move', 'select', 'Select (V)', () => setTool('move')),
       btn('hand', 'hand', 'Hand (H · hold Space)', () => setTool('hand')),
       sep(),
-      btn('note', 'sticky', 'Note (N)', () => setTool('note')),
+      // Nov 26 — the Blueprint's tools, names, icons and order; Zone (Z) is the Variables-only addition.
+      btn('note', 'sticky', 'Sticky note (N)', () => setTool('note')),
       btn('text', 'text', 'Text (T)', () => setTool('text')),
       btn('shape', shapeIc, 'Shapes (S)', () => flyFrom('shape', 'Shapes (S)', shapeFly), { fly: true }),
       btn('link', lastLink === 'line' ? 'line' : 'arrow', 'Connector (L)', () => flyFrom('link', 'Connector (L)', linkFly), { fly: true }),
       btn('pen', lastPen === 'eraser' ? 'eraser' : 'pen', 'Draw (P)', () => flyFrom('pen', 'Draw (P)', penFly), { fly: true }),
-      sep(),
-      btn(null, 'grid', 'Dot grid (G)', () => setGrid(!gridOn), { on: gridOn }),
+      zonesOn ? btn('zone', 'frame', 'Zone (Z) — draw a named section', () => setTool('zone')) : null,
       btn('lasso', 'lasso', 'Lasso select (Q)', () => setTool('lasso')),
-      o.media ? btn(null, 'image', 'Add an image (U)', () => addImage()) : null,
+      sep(),
+      o.media ? btn(null, 'image', 'Upload image (U)', () => addImage()) : null,
+      zonesOn && o.library ? btn(null, 'layers', 'Library — Zone Cubes (B)', () => openLib()) : null,
+      btn(null, 'grid', 'Dot grid (G)', () => setGrid(!gridOn), { on: gridOn }),
       h('span', { class: 'bp-tspace' }),
       undoB, redoB,
       sep(),
@@ -352,10 +627,11 @@ export function mountFreeView(o) {
     const f = free(), W = wall();
     const mv = (o2, w = 0) => ({ ...o2, x: Math.round(Math.min(o2.x + dx, W - w)), y: Math.round(Math.max(0, o2.y + dy)) });
     const pos = { ...f.pos };
-    for (const id of sel.msgs) if (pos[id]) pos[id] = mv(pos[id], rectOf(id)?.w || 0);
+    const zm = zonedMap();
+    for (const id of sel.msgs) if (pos[id] && !zm.has(id)) pos[id] = mv(pos[id], rectOf(id)?.w || 0);
     save({
       pos,
-      cards: f.cards.map((c) => (sel.cards.has(c.id) ? mv(c, c.w || 0) : c)),
+      cards: f.cards.map((c) => (sel.cards.has(c.id) && !zm.has(c.id) ? mv(c, c.w || 0) : c)),
       shapes: f.shapes.map((q) => (sel.shapes.has(q.id) ? mv(q, q.w || 0) : q)),
     });
   }
@@ -389,6 +665,10 @@ export function mountFreeView(o) {
     save({ pos, size: sz });
   }
   async function deleteSel() {
+    // Protected (zoned) items are never deleted, batch or not.
+    const zm = zonedMap();
+    const held = [...sel.msgs, ...sel.cards].filter((id) => zm.has(id));
+    if (held.length) { held.forEach((id) => { sel.msgs.delete(id); sel.cards.delete(id); }); lockedMsg(zm.get(held[0])); paintSel(); if (!selCount()) return; }
     // Where items can't be deleted from here (tiles and variables), Delete clears only notes and shapes.
     const msgs = o.remove ? [...sel.msgs] : [];
     if (!o.remove && !(sel.cards.size + sel.shapes.size)) return;
@@ -415,7 +695,11 @@ export function mountFreeView(o) {
   //  · Inside a chat the wall is the chat's right edge at every zoom: it's worked out in board space from
   //    the visible width, so zooming out can't let anything slide past it.
   const openRight = !!o.openRight;
-  const visW = () => Math.max(1, Math.floor((scroller.clientWidth || 1) / zoom));
+  // Nov 26: the wall no longer moves with zoom. It used to be "what's visible ÷ zoom", so zooming in pulled
+  // the wall left, squeezed the column and pushed objects in to fit — and the layout stayed rearranged after
+  // zooming back out. Now zoom only changes what you see; objects keep their places and go off-screen,
+  // and you pan to reach them. Only dragging an object changes where it's saved.
+  const visW = () => Math.max(1, Math.floor(scroller.clientWidth || 1));
   const wall = () => (openRight ? Infinity : visW()); // the right edge nothing passes
   function viewCenter() {
     return { x: (scroller.scrollLeft + scroller.clientWidth / 2) / zoom - L, y: (scroller.scrollTop + scroller.clientHeight / 2) / zoom };
@@ -446,6 +730,7 @@ export function mountFreeView(o) {
     for (const n of nodes) { minX = Math.min(minX, n.offsetLeft); maxX = Math.max(maxX, n.offsetLeft + n.offsetWidth); hgt = Math.max(hgt, n.offsetTop + n.offsetHeight + 160); }
     for (const k of free().ink) for (const [px, py] of k.pts) { minX = Math.min(minX, px); maxX = Math.max(maxX, px); hgt = Math.max(hgt, py + 80); }
     for (const raw of free().shapes) { const sh = shapeOf(raw); minX = Math.min(minX, sh.x); maxX = Math.max(maxX, sh.x + sh.w); hgt = Math.max(hgt, sh.y + sh.h + 80); }
+    for (const n of world.querySelectorAll('.vr-zone, .vr-embed')) { minX = Math.min(minX, n.offsetLeft); maxX = Math.max(maxX, n.offsetLeft + n.offsetWidth); hgt = Math.max(hgt, n.offsetTop + n.offsetHeight + 80); }
     hgt = Math.max(hgt, flow.offsetHeight + 24);
     // Open on the right (grid): the canvas reaches past the furthest object; a chat stops at its wall.
     const W = openRight ? Math.max(V, flow.offsetWidth, Math.ceil(maxX + LEFT_PAD)) : V;
@@ -659,7 +944,8 @@ export function mountFreeView(o) {
     const f = free();
     let moved = false;
     let msgs = []; // { id, wrap, x0, y0 }
-    const cards = [...sel.cards].map((id) => ({ id, node: cardEls.get(id) })).filter((c) => c.node).map((c) => ({ ...c, x0: c.node.offsetLeft, y0: c.node.offsetTop }));
+    const zoned = zonedMap(); // protected items stay where they are
+    const cards = [...sel.cards].filter((id) => !zoned.has(id)).map((id) => ({ id, node: cardEls.get(id) })).filter((c) => c.node).map((c) => ({ ...c, x0: c.node.offsetLeft, y0: c.node.offsetTop }));
     const shapes = f.shapes.filter((q) => sel.shapes.has(q.id));
     let dx = 0, dy = 0;
     track((ev) => {
@@ -668,7 +954,7 @@ export function mountFreeView(o) {
       if (!moved) {
         moved = true;
         // Column messages come out where they are first, so the group keeps its shape.
-        msgs = [...sel.msgs].map((id) => { const wrap = pullOut(id); return wrap ? { id, wrap, x0: wrap.offsetLeft, y0: wrap.offsetTop } : null; }).filter(Boolean);
+        msgs = [...sel.msgs].filter((id) => !zoned.has(id)).map((id) => { const wrap = pullOut(id); return wrap ? { id, wrap, x0: wrap.offsetLeft, y0: wrap.offsetTop } : null; }).filter(Boolean);
         msgs.forEach((m) => m.wrap.classList.add('is-held'));
         cards.forEach((c) => c.node.classList.add('is-held'));
       }
@@ -703,6 +989,7 @@ export function mountFreeView(o) {
   function resizeEl(e, node, dir, { ratio = false, card = false, text = false, done }) {
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
+    { const z = zoneOf(node.dataset.card || node.dataset.id); if (z) { lockedMsg(z); return; } }
     const start = local(e);
     const x0 = node.offsetLeft, y0 = node.offsetTop, w0 = node.offsetWidth, h0 = node.offsetHeight;
     const txt = text ? node.querySelector('.vr-fv-note-text') : null;
@@ -813,7 +1100,9 @@ export function mountFreeView(o) {
       track((ev) => zoomTo(z0 * Math.exp(((ev.clientX - sx) - (ev.clientY - sy)) * 0.006), sx, sy), () => { scroller.classList.remove('is-zooming'); eatClick(); });
       return;
     }
-    const handy = (e.button === 0 && (tool === 'hand' || spaceHeld)) || e.button === 1;
+    // On the board, the middle button belongs to the workspace (Nov 26: right-drag pans in here instead).
+    const onBoard = !!scroller.closest('.el-widget');
+    const handy = (e.button === 0 && (tool === 'hand' || spaceHeld)) || (e.button === 1 && !onBoard);
     if (!handy) return;
     e.preventDefault(); e.stopPropagation();
     const sx = e.clientX, sy = e.clientY, l0 = scroller.scrollLeft, t0 = scroller.scrollTop;
@@ -858,12 +1147,14 @@ export function mountFreeView(o) {
       const id = card.dataset.card;
       e.preventDefault();
       if (e.shiftKey || e.ctrlKey || e.metaKey) { toggleSel('cards', id); return; }
+      if (zoneOf(id)) { selectOnly('cards', id); return; } // protected: select (to copy), never move
       if (isSel('cards', id) && selCount() > 1) dragGroup(e); else dragCard(e, card, id);
       return;
     }
     if (row && board.contains(row)) {
       const id = row.dataset.id;
       if (e.shiftKey || e.ctrlKey || e.metaKey) { e.preventDefault(); eatClick(); toggleSel('msgs', id); return; }
+      if (zoneOf(id)) { selectOnly('msgs', id); return; }
       const inColumn = !row.closest('.vr-fv-item');
       if (e.pointerType === 'touch' && inColumn) { holdToLift(e, row, id); return; }
       if (e.pointerType !== 'touch') e.preventDefault(); // no text selection or image ghost while dragging
@@ -947,6 +1238,7 @@ export function mountFreeView(o) {
     if (tool === 'note' || tool === 'text') return addCard(local(e), tool);
     if (tool === 'pen') return lastPen === 'eraser' ? startErase(e) : startInk(e);
     if (tool === 'lasso') return startLasso(e);
+    if (tool === 'zone' && zonesOn) return startZone(e);
   });
 
   function startLink(e) {
@@ -1028,7 +1320,7 @@ export function mountFreeView(o) {
           g.classList.add('is-erasing');
         }
         const c = n.closest?.('.vr-fv-note[data-card]');
-        if (c && world.contains(c)) { hit.cards.add(c.dataset.card); c.classList.add('is-erasing'); }
+        if (c && world.contains(c) && !c.classList.contains('is-zoned')) { hit.cards.add(c.dataset.card); c.classList.add('is-erasing'); }
       }
     };
     capture.style.pointerEvents = 'none'; // let the hit test see what's underneath
@@ -1107,6 +1399,18 @@ export function mountFreeView(o) {
   // Right-click an object: its own options (the item's own menu still wins where it has one).
   world.addEventListener('contextmenu', (e) => {
     const row = e.target.closest(`${ITEM}[data-id]`);
+    if (!row && zonesOn && !e.defaultPrevented && !e.target.closest('.vr-fv-note, .vr-zone-label, .vr-embed, [data-shape], [data-link], [data-ink]')) {
+      // Empty canvas: paste a copied section, open the Library.
+      const at = local(e);
+      const clip = getClip();
+      e.preventDefault(); e.stopPropagation();
+      menu({ x: e.clientX, y: e.clientY }, [
+        clip ? { label: `Paste section “${clip.name}”`, icon: 'copy', onSelect: () => pasteSection(at) } : null,
+        { label: 'Draw a zone (Z)', icon: 'frame', onSelect: () => setTool('zone') },
+        o.library ? { label: 'Open Library', icon: 'layers', onSelect: () => openLib() } : null,
+      ].filter(Boolean));
+      return;
+    }
     if (!row || e.defaultPrevented) return;
     const id = row.dataset.id;
     if (!free().pos[id] && !(isSel('msgs', id) && selCount() > 1)) return;
@@ -1137,6 +1441,8 @@ export function mountFreeView(o) {
       if (k === 'p') { eat(); lastPen = 'pen'; setTool('pen'); return; }
     }
     if (!mod && !e.altKey) {
+      if (k === 'z' && !zonesOn) return;
+      if (k === 'b' && zonesOn && o.library) { e.preventDefault(); e.stopPropagation(); openLib(); return; }
       if (KEYS[k]) { e.preventDefault(); e.stopPropagation(); setTool(KEYS[k]); return; }
       if (k === 'g') { e.preventDefault(); e.stopPropagation(); setGrid(!gridOn); return; }
       if (k === 'u' && o.media) { e.preventDefault(); e.stopPropagation(); addImage(); return; }
@@ -1162,6 +1468,8 @@ export function mountFreeView(o) {
     scroller,
     tools,
     busy: () => busy,
+    zoned: () => zonedMap(),
+    openLibrary: () => openLib(),
     update(next) {
       const atEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
       x = next;

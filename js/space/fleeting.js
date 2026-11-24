@@ -131,8 +131,8 @@ export function mountFleeting(root, el0, w, opts = {}) {
   let ideaView = mem.iv === 'shared' ? 'shared' : 'mine';
   const personal = !!w.host?.personal;
   let mineReady = false;
-  // Story's time zoom (Nov 25): how much line a day gets. Zooming changes the visible stretch of the day and
-  // how far apart moments sit — never the size of the cards, their text or their pictures.
+  // Story's zoom (Nov 26: true visual zoom). Everything on the timeline — cards, text, times, marks, the spine —
+  // grows or shrinks together; the time scale and every moment's position stay exactly as they are.
   let zoomT = Math.min(6, Math.max(0.35, Number(mem.zt) || 1));
   let full = false;                       // Story fills the screen
   const selFr = new Set();                // Ctrl-click selection of moments
@@ -257,7 +257,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     else if (v === 'story') {
       renderStory();
       // Today opens around the current moment; other days open at first light.
-      if (day === storyKey()) stage.scrollTop = Math.max(0, PT + (storyMin() / 1440) * Number(tl.dataset.th) - stage.clientHeight * 0.45);
+      if (day === storyKey()) stage.scrollTop = Math.max(0, (PT + (storyMin() / 1440) * Number(tl.dataset.th)) * zoomT - stage.clientHeight * 0.45);
     }
     else if (v === 'tracker') renderTracker();
     else renderWeekly();
@@ -937,7 +937,8 @@ export function mountFleeting(root, el0, w, opts = {}) {
     const keep = stage.scrollTop;
     const keepLeft = tl && stage.contains(tl) ? stage.scrollLeft - (Number(tl.dataset.extl) || 0) : null;
     const list = [...story(), ...uploads.filter((u) => u.day === day)].sort((a, b) => a.m - b.m);
-    const H = Math.round(Math.max(stage.clientHeight || 520, 1560) * zoomT);
+    // Nov 26: the day's length is fixed; zoom scales the whole timeline (cards, words, marks, spine) together.
+    const H = Math.max(stage.clientHeight || 520, 1560);
     const TH = H - PT - PB;
     const yOf = (m) => PT + (m / 1440) * TH;
     const W0 = Math.max(260, (stage.clientWidth || 600) - 32);
@@ -960,6 +961,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     if (!list.length) tl.append(h('p', { class: 'fi-story-empty' }, day === storyKey() ? 'Nothing told yet today.' : 'An untold day.', h('br'), 'Click anywhere on the line to tell a moment, or drop photos and videos on it.'));
     for (const f of list) tl.append(fragment(f, yOf));
     tl.append(guide, dragTime);
+    applyZoom();
     lookupWho(list.map((f) => f.by), () => { if (tab === 'story') refresh(); });
     stage.replaceChildren(tl);
     stage.scrollTop = keep;
@@ -968,7 +970,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
   }
 
   // A mark every hour (every half hour once there's room); a new or moved moment snaps to the nearest one.
-  const markStep = () => (zoomT >= 1.6 ? 30 : 60);
+  const markStep = () => 60;
   function hourMarks(yOf) {
     const out = [];
     const st = markStep();
@@ -1186,23 +1188,25 @@ export function mountFleeting(root, el0, w, opts = {}) {
     ];
   }
   // Keep the moment under the pointer (or the middle of the view) where it is while the scale changes.
+  function applyZoom() { if (tl) tl.style.zoom = zoomT === 1 ? '' : String(zoomT); }
   function setZoomT(z, at = null) {
-    z = Math.min(6, Math.max(0.35, z));
-    if (!tl || Math.abs(z - zoomT) < 0.001) { zoomT = z; remember(); return; }
+    z = Math.min(4, Math.max(0.4, z));
+    if (!tl || Math.abs(z - zoomT) < 0.001) { zoomT = z; remember(); applyZoom(); return; }
     const sr = stage.getBoundingClientRect();
-    const k = (sr.width / (stage.offsetWidth || 1)) || 1;
-    const py = at ? (at.y - sr.top) / k : stage.clientHeight / 2;
-    const TH0 = Number(tl.dataset.th);
-    const mAt = ((stage.scrollTop + py) - PT) / TH0;
+    const k = (sr.width / (stage.offsetWidth || 1)) || 1;       // the board's own zoom around the object
+    const py = at?.y != null ? (at.y - sr.top) / k : stage.clientHeight / 2;
+    const px = at?.x != null ? (at.x - sr.left) / k : stage.clientWidth / 2;
+    // the point of the timeline under the pointer stays under the pointer
+    const ux = (stage.scrollLeft + px) / zoomT, uy = (stage.scrollTop + py) / zoomT;
     zoomT = z; remember();
-    renderStory();
-    const TH1 = Number(tl.dataset.th);
-    stage.scrollTop = Math.max(0, PT + mAt * TH1 - py);
+    applyZoom();
+    stage.scrollLeft = Math.max(0, ux * zoomT - px);
+    stage.scrollTop = Math.max(0, uy * zoomT - py);
   }
   stage.addEventListener('wheel', (e) => {
     if (view() !== 'story' || !(e.ctrlKey || e.metaKey)) return;
     e.preventDefault(); e.stopPropagation();
-    setZoomT(zoomT * Math.exp(-e.deltaY * 0.0022), { y: e.clientY });
+    setZoomT(zoomT * Math.exp(-e.deltaY * 0.0022), { x: e.clientX, y: e.clientY });
   }, { passive: false });
   // Two fingers pinch to zoom; one finger scrolls (pans) as usual.
   const touches = new Map();
@@ -1224,7 +1228,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
     clearTimeout(pinch.t);
     const z = pinch.z * (d / pinch.d);
-    pinch.t = setTimeout(() => setZoomT(z, { y: pinch?.y ?? (a.y + b.y) / 2 }), 16);
+    pinch.t = setTimeout(() => setZoomT(z, { x: (a.x + b.x) / 2, y: pinch?.y ?? (a.y + b.y) / 2 }), 16);
   });
   const endTouch = (e) => { touches.delete(e.pointerId); if (touches.size < 2) pinch = null; };
   stage.addEventListener('pointerup', endTouch);
@@ -1240,7 +1244,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     const sr = stage.getBoundingClientRect();
     const k = (sr.width / (stage.offsetWidth || 1)) || 1;
     const TH0 = tl ? Number(tl.dataset.th) : 0;
-    const mid = tl ? ((stage.scrollTop + stage.clientHeight / 2) - PT) / (TH0 || 1) : null;
+    const mid = tl ? ((stage.scrollTop + stage.clientHeight / 2) / zoomT - PT) / (TH0 || 1) : null;
     full = on;
     if (on) {
       // Moved to the top of the page (the board may be zoomed or transformed): the same element, so
@@ -1259,7 +1263,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     }
     void k;
     paint();
-    if (mid != null && tl) { const TH1 = Number(tl.dataset.th); stage.scrollTop = Math.max(0, PT + mid * TH1 - stage.clientHeight / 2); }
+    if (mid != null && tl) { const TH1 = Number(tl.dataset.th); stage.scrollTop = Math.max(0, (PT + mid * TH1) * zoomT - stage.clientHeight / 2); }
   }
   const onFullEsc = (e) => {
     if (!full || e.key !== 'Escape' || hold > 0 || document.querySelector('.menu, .dlg, .lb')) return;
@@ -1995,10 +1999,29 @@ export function mountFleeting(root, el0, w, opts = {}) {
     set: (list, live) => (live ? w.live : w.patch)({ ideas: list }),
     field: (k) => (w.current() || el)[k],
     patch: (p) => w.patch(p),
+    priv: () => !!(w.current() || el).privateTo, // a hidden object is nobody else's Story
   });
   if (moments && !poolReady()) w.host?.warmShared?.(); // bring the shared record in so both Spaces agree
   const ideasShown = () => tab === 'ideas';
-  const offPool = personal ? onPool(() => { if ((ideasShown() && ideaView === 'shared') || (moments && tab !== 'ideas')) refresh(); }) : () => {};
+  const offPool = personal ? onPool(() => { adoptLocal(); if ((ideasShown() && ideaView === 'shared') || (moments && tab !== 'ideas')) refresh(); }) : () => {};
+  /* Moments written in your personal Space before the shared record was open stayed on your own copy, so the
+     other person never saw them. As soon as the shared record is there, they move onto it (once, by id) and
+     leave this copy. Moments only ever leave a hidden ("Hide from others") object when you unhide it. */
+  function adoptLocal() {
+    if (!moments || !poolReady() || (w.current() || el).privateTo) return;
+    const mineStory = (w.current() || el).story || {};
+    const days = Object.keys(mineStory).filter((k) => (mineStory[k] || []).length);
+    if (!days.length) return;
+    const sh = poolField('story') || {};
+    const next = { ...sh };
+    for (const k of days) {
+      const have = new Set((sh[k] || []).map((f) => f.id));
+      next[k] = [...(sh[k] || []), ...mineStory[k].filter((f) => !have.has(f.id))].sort((a, b) => a.m - b.m);
+    }
+    patchPool({ story: next });
+    w.patch({ story: Object.fromEntries(Object.keys(mineStory).map((k) => [k, []])) });
+  }
+  adoptLocal();
   const offMine = onMyVars((d, keys) => { if ((!keys || keys.includes('ideas')) && ideasShown() && ideaView === 'mine') refresh(); });
   if (personal && ideaView === 'shared' && !poolReady()) w.host?.warmShared?.();
   loadMyVars().then(() => {

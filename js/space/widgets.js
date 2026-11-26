@@ -88,7 +88,7 @@ function placeFmBg(ed, id) {
     const minX = Math.min(...others.map((e) => e.x)), minY = Math.min(...others.map((e) => e.y));
     x = minX - W - 120; y = minY - 40;
   }
-  ed.updateEls([id], { x, y, w: W, h: H, locked: true, fmBg: 1 }, { commit: false });
+  ed.updateEls([id], { x, y, w: W, h: H, fmBg: 1 }, { commit: false });
   ed.setEls([ed.byId.get(id), ...ed.els.filter((e) => e.id !== id)].filter(Boolean), { commit: false });
 }
 
@@ -169,13 +169,18 @@ const KINDS = {
       onclick: () => { if (ctl?.toggleFull) ctl.toggleFull(); else { const ed = w.host.editor(); if (ed) { ed.select([el.id]); ed.fitRect(w.current(), { maxZ: 2.5, pad: innerWidth < 720 ? 6 : 24 }); } } },
     }, icon('fullscreen', 14)));
     // Nov 28: on the board, Story is drawn straight onto the background at the left — no panel, frame or header;
-    // the board's other objects stay to its right. The object itself is kept (not deleted), just placed once,
-    // locked and sent to the back so it reads as part of the background.
+    // the board's other objects stay to its right. The object itself is kept (not deleted), just placed once
+    // and sent to the back so it reads as part of the background.
     const node = body.parentElement;
     if (node?.classList.contains('el-widget') && typeof w.host?.editor === 'function') {
       node.classList.add('is-fm-bg');
       if (!el.fmBg) { let n = 0; const go = () => { const ed = w.host.editor(); if (ed) placeFmBg(ed, el.id); else if (n++ < 120) setTimeout(go, 100); }; setTimeout(go, 0); }
       ctl = mountFleeting(body, el, w, { bg: true });
+      // The title is its handle: drag "Fleeting Moments" to move the whole timeline (‹ TODAY › stays clickable).
+      const hd = body.querySelector('.fi-bghead');
+      if (hd) { hd.querySelector('.fi-navgroup')?.setAttribute('data-noptr', ''); node.insertBefore(hd, body); }
+      // Earlier copies were locked in place on first load — free them so they can be moved.
+      if (el.fmBg && el.locked) setTimeout(() => w.host.editor()?.updateEls([el.id], { locked: false }, { commit: false }), 0);
       return ctl;
     }
     ctl = mountFleeting(body, el, w);

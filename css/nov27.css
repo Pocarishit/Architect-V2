@@ -585,3 +585,7 @@
 .zl-empty { position: absolute; left: 0; top: 0; width: 460px; color: var(--fg-3); font: 14px/1.5 var(--f-sans, inherit); }
 .sbv-side .sbv-libbtn { margin-left: auto; }
 .sbv-side .sbv-spacebar .sbv-libbtn + :last-child { margin-left: 0; }
+/* Fleeting Moments on the background: drag it by its title */
+.el-widget.is-fm-bg > .fi-bghead { flex: none; cursor: grab; user-select: none; }
+.el-widget.is-fm-bg > .fi-bghead:active { cursor: grabbing; }
+.el-widget.is-fm-bg > .fi-bghead .fi-navgroup { cursor: default; }

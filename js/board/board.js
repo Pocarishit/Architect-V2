@@ -396,6 +396,12 @@ export function mountBoard(root, boardId, opts = {}) {
       tbtn(null, 'templates', 'Templates', (a) => templateFly(a)));
     const rail = h('div', { class: 'bp-rail' }, toolbar, history);
     page.append(rail);
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(() => toolbar.classList.toggle('is-clipped', toolbar.scrollHeight > toolbar.clientHeight + 2 && toolbar.scrollTop + toolbar.clientHeight < toolbar.scrollHeight - 2));
+      ro.observe(toolbar);
+      toolbar.addEventListener('scroll', () => toolbar.classList.toggle('is-clipped', toolbar.scrollTop + toolbar.clientHeight < toolbar.scrollHeight - 2), { passive: true });
+      cleanups.push(() => ro.disconnect());
+    }
     function insertFly(anchor) {
       const row = (ic, label, fn) => h('button', { type: 'button', class: 'tool-opt wide', onclick: () => { closeFloating(); fn(); } }, icon(ic, 18), h('span', {}, label));
       popover(anchor, h('div', { class: 'pop' }, h('div', { class: 'opt-col' },

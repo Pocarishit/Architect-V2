@@ -101,8 +101,11 @@
 .cbn-name { font-family: var(--f-mono); }
 
 /* ---------- Path: five day tabs + a calendar button ---------- */
+.pday .pday-short { display: none; }
 .pday.pday-cal { display: inline-grid; place-items: center; min-width: 34px; padding: 0 8px; }
 .pday.pday-cal svg { display: block; }
+.pday.pday-cal:has(.pday-cal-date) { display: inline-flex; gap: 6px; }
+.pday-cal-date { font: inherit; }
 /* the calendar, in Fleeting Moments' design (Doto month, arrows, weekday row, round days) */
 .popover.pcal-pop { padding: 0; }
 .pcal { width: 340px; max-width: calc(100vw - 24px); }
@@ -141,7 +144,6 @@
 @media (max-width: 719px) {
   /* object headers: the desktop title size and weight; handle and title close; less room below */
   .mob-head > .wg-head { padding-bottom: 4px; row-gap: 6px; gap: 6px; min-height: 44px; }
-  .mob-head > .wg-head .wg-grip { display: block !important; margin-right: -2px; }
   .mob-head > .wg-head .wg-title { font-size: 17px; font-weight: 800; letter-spacing: .03em; }
   .mob-head .fi-expand { display: none !important; }
   .mob-head.has-wg { padding-top: 6px; }
@@ -153,6 +155,9 @@
   .mob-view.is-path .pspbar-seg.is-on { box-shadow: inset 0 -2px 0 var(--bg); }
   .mob-view.is-path .pphone.has-spbar { padding-top: 0; }
   .mob-view.is-path .paths.is-embedded { padding-top: 0; }
+  /* the day strip fits with its calendar button: short day names on phones */
+  .pdays .pday .pday-long { display: none; }
+  .pdays .pday .pday-short { display: inline; }
 
   /* Fleeting Moments: a see-through composer — faint outline, readable text, the floating + kept */
   .fi.is-phone-story .fi-input {
@@ -228,8 +233,12 @@
 .bp-rail {
   position: absolute; z-index: 20; left: 12px; top: 50%; transform: translateY(-50%);
   display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
-  max-height: calc(100% - 140px); pointer-events: none;
+  max-height: calc(100% - 132px); pointer-events: none;
 }
+/* when the window is short, the tools pill scrolls (Undo / Redo always stay visible below it) */
+.bp-rail > .bp-tools:not(.bp-history) { min-height: 0; flex: 0 1 auto; scrollbar-width: none; }
+.bp-rail > .bp-tools:not(.bp-history)::-webkit-scrollbar { display: none; }
+.bp-rail > .bp-tools.is-clipped { mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent); }
 .bp-rail > * { pointer-events: auto; }
 .bp-rail > .bp-tools {
   position: static !important; left: auto !important; top: auto !important; right: auto !important; bottom: auto !important;
@@ -359,3 +368,4 @@
   background: var(--s1); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow);
 }
 .vr-fv-rail.is-split.is-scroll .vr-fv-pill:first-child { overflow-y: auto; scrollbar-width: none; max-height: calc(100% - 110px); }
+

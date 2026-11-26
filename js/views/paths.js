@@ -259,14 +259,14 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
       type: 'button', class: ['pday pday-cal', beyond && 'is-on'], 'aria-haspopup': 'dialog',
       'aria-label': beyond ? `Calendar — showing ${dayFull(viewDay)}` : 'Open the calendar', title: beyond ? dayFull(viewDay) : 'Calendar — plan any date',
       onclick: (e) => pathCalendar(e.currentTarget, { selected: viewDay || today, planned, onPick: (k) => pick(k === today ? null : k) }),
-    }, icon('calendar', 15));
+    }, icon('calendar', 15), beyond ? h('span', { class: 'pday-cal-date' }, (() => { const [y, m, d] = viewDay.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }).toUpperCase(); })()) : null);
     return h('div', { class: 'pdays', role: 'tablist', 'aria-label': 'Day' }, ...keys.map((k, i) => {
       const n = k ? planned.get(k) || 0 : 0;
       return h('button', {
         type: 'button', role: 'tab', class: ['pday', viewDay === k && 'is-on', n && 'has-plan'], 'aria-selected': String(viewDay === k),
         title: k ? `${n ? `${n} planned` : 'Plan'} for ${dayFull(k)} — it becomes your path when that day starts` : 'Today’s path',
         onclick: () => pick(k),
-      }, dayLabel(k, i), n ? h('b', {}, String(n)) : null);
+      }, h('span', { class: 'pday-long' }, dayLabel(k, i)), h('span', { class: 'pday-short' }, k ? new Date(`${k}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' }).toUpperCase() : dayLabel(k, i)), n ? h('b', {}, String(n)) : null);
     }), calB);
   }
   // The full calendar, in Fleeting Moments' design: Doto month and year, month arrows, weekday row, round day

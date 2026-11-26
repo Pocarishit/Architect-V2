@@ -382,15 +382,53 @@ export function mountVariables(root, el0, w) {
       ondblclick: () => renameSection(s),
       oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, s); },
     }, s.name.toUpperCase());
-    const head5 = t.slice(0, MAXT), rest = t.slice(MAXT);
-    const restOn = rest.some((s) => s.id === section);
-    const more = rest.length ? h('button', {
-      type: 'button', class: ['vr-tab-more', restOn && 'is-on'], 'aria-haspopup': 'menu', 'aria-label': `More sections (${rest.length})`, title: 'More sections',
-      onclick: (e) => menu(e.currentTarget, rest.map((s) => ({ label: s.name.toUpperCase(), checked: s.id === section, onSelect: () => pickSec(s) })), { align: 'start' }),
-    }, icon('chevronDown', 14)) : null;
+    const head5 = t.slice(0, MAXT);
+    // Whatever isn't shown as a tab (past the fifth, or squeezed out by a narrow header) goes in the ⌄ list.
+    const hiddenSecs = () => t.filter((s) => !tabs.querySelector(`.vr-tab[data-sec="${CSS.escape(s.id)}"]`));
+    const more = h('button', {
+      type: 'button', class: 'vr-tab-more', 'aria-haspopup': 'menu', 'aria-label': 'More sections', title: 'More sections',
+      onclick: (e) => menu(e.currentTarget, hiddenSecs().map((s) => ({ label: s.name.toUpperCase(), checked: s.id === section, onSelect: () => pickSec(s) })), { align: 'start' }),
+    }, icon('chevronDown', 14));
     const tabs = h('div', { class: 'vr-tabs', role: 'tablist' },
       head5.map(tabBtn), more,
       h('button', { type: 'button', class: 'vr-tab-add', title: 'Add', 'aria-label': 'Add a section or import', onclick: (e) => addMenu(e.currentTarget) }, icon('plus', 14)));
+    const paintMore = () => {
+      const hid = hiddenSecs();
+      more.hidden = !hid.length;
+      more.classList.toggle('is-on', hid.some((s) => s.id === section));
+    };
+    // Never clip tabs: while the row overflows, the last tab moves into the ⌄ list (the open one stays).
+    const fitTabs = () => {
+      if (!tabs.isConnected) return;
+      tabs.querySelectorAll('.vr-tab.is-text').forEach((n) => n.remove());
+      const add = tabs.querySelector('.vr-tab-more');
+      for (const sec of head5) add.before(tabBtn(sec));
+      let shown = [...tabs.querySelectorAll('.vr-tab.is-text')];
+      // Room = up to the header's own buttons (the slot may otherwise just push them out of view).
+      const head = tabs.closest('.wg-head');
+      const slot = tabs.closest('.wg-slot');
+      const over = () => {
+        if (tabs.scrollWidth > tabs.clientWidth + 1) return true;
+        if (!head || !slot) return false;
+        const hr = head.getBoundingClientRect();
+        const padR = parseFloat(getComputedStyle(head).paddingRight) || 0;
+        let reserve = 0;
+        for (let n = slot.nextElementSibling; n; n = n.nextElementSibling) if (!n.classList.contains('wg-space') && !n.hidden) reserve += n.getBoundingClientRect().width + 6;
+        const kids = [...tabs.children].filter((n) => !n.hidden && n.getBoundingClientRect().width > 0);
+        const right = Math.max(...kids.map((n) => n.getBoundingClientRect().right));
+        return right > Math.min(slot.getBoundingClientRect().right, hr.right - padR - reserve) + 0.5;
+      };
+      more.hidden = false;
+      while (over() && shown.length > 1) {
+        const drop = [...shown].reverse().find((n) => n.dataset.sec !== section) || shown[shown.length - 1];
+        drop.remove();
+        shown = shown.filter((n) => n !== drop);
+      }
+      paintMore();
+    };
+    paintMore();
+    requestAnimationFrame(fitTabs);
+    if (window.ResizeObserver) { const ro = new ResizeObserver(() => { if (!tabs.isConnected) { ro.disconnect(); return; } fitTabs(); }); requestAnimationFrame(() => tabs.isConnected && ro.observe(tabs.closest('.wg-head') || tabs.parentElement || tabs)); }
 
     const cur = here();
     // Nov 25: the sidebar's map always shows everything at once (never the Free View layer, which only

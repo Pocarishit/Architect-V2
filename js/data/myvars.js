@@ -50,7 +50,9 @@ function scheduleRetry() {
       const rows = await api.db.select(TABLE, { filters: { user_id: uidKey } });
       row = pickRow(rows);
       status = 'ok'; retryN = 0;
-      if (row?.data) { data = normal(row.data); store.set(localKey(), data); dirty = false; }
+      // Reached your account: its data wins, unless you changed something meanwhile — then yours is saved.
+      if (dirty) { clearTimeout(timer); timer = setTimeout(flush, 50); }
+      else if (row?.data) { data = normal(row.data); store.set(localKey(), data); }
       emit();
     } catch { scheduleRetry(); emit(); }
   }, wait);

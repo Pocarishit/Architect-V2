@@ -150,12 +150,14 @@ export function mountFleeting(root, el0, w, opts = {}) {
   });
   const attach = h('button', { class: 'fi-attach', type: 'button', title: 'Add photos or videos', 'aria-label': 'Add photos or videos', onclick: () => pickMedia().then((f) => addMediaToStory(f)) }, icon('image', 17));
   const composer = h('div', { class: 'fi-compose' }, input, attach);
-  const box = h('div', { class: ['fi', only && `is-only-${only}`] }, h('div', { class: 'fi-top' }, w.slot || only ? null : tabsRow, aside), stage, composer);
+  const bg = !!opts.bg; // Nov 28: Story drawn straight onto the board's background (no panel)
+  const bgHead = bg ? h('div', { class: 'fi-bghead' }, h('div', { class: 'fi-bgtitle' }, 'Fleeting Moments')) : null;
+  const box = h('div', { class: ['fi', only && `is-only-${only}`, bg && 'is-bg'] }, bgHead, h('div', { class: 'fi-top' }, w.slot || only || bg ? null : tabsRow, aside), stage, bg ? null : composer);
   root.append(box);
   // Title beside the tabs (like Path): the tab strip rides in the widget header, right after the name.
   // Nov 27: the header carries Story's day navigation as one group (‹ TODAY ›); there's no second toolbar row.
   const navGroup = h('div', { class: 'fi-navgroup', role: 'group', 'aria-label': 'Day' });
-  if (w.slot && !only) w.slot.replaceChildren(tabsRow, navGroup);
+  if (bg) { tab = 'story'; bgHead.append(navGroup); } else if (w.slot && !only) w.slot.replaceChildren(tabsRow, navGroup);
 
   // Paste photos/videos straight into Story (or into Ideas → they land in today's story).
   box.addEventListener('paste', (e) => {
@@ -252,7 +254,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     // Nov 27: ‹ TODAY › lives in the top bar (TODAY opens the calendar); the image, − and + buttons and the
     // standalone calendar icon are gone, and so is the second row: the timeline starts right under the top bar.
     // Without a widget header (an embedded copy) the same group sits in the row instead.
-    const inHead = !!(w.slot && !only);
+    const inHead = !!((w.slot || bg) && !only);
     navGroup.replaceChildren(...(inHead && tab === 'story' ? dayNav() : []));
     aside.replaceChildren(...(tab === 'story' ? (inHead ? [] : [...dayNav(), fullBtn()]) : tab === 'ideas' ? [viewSwitch()] : []));
     box.classList.toggle('no-top', tab === 'story' && inHead);
@@ -969,6 +971,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     if (day === storyKey()) { const now = storyMin(); tl.append(h('span', { class: 'fi-now', style: { top: `${yOf(now)}px`, '--sp': spOf(now).color }, title: `Now · ${clockOf(now)}` }, h('i'), h('b', {}, 'NOW'))); }
     // Nov 27: an empty day shows just the timeline (clicking the line and dropping media still work).
     for (const f of list) tl.append(fragment(f, yOf));
+    if (bg) tl.append(addMomentBtn(yOf));
     tl.append(guide, dragTime);
     applyZoom();
     lookupWho(list.map((f) => f.by), () => { if (tab === 'story') refresh(); });
@@ -1411,6 +1414,29 @@ export function mountFleeting(root, el0, w, opts = {}) {
     return { m, x: order.find((x) => !lane(x)) ?? order[0] };
   }
 
+  // Nov 28 (board background): + Add Moment sits on the timeline — at Now today, at the top on another day. It
+  // opens a one-line field right there; Enter adds the moment (Esc or leaving it empty cancels).
+  function addMomentBtn(yOf) {
+    const m = day === storyKey() ? storyMin() : 0;
+    const wrap = h('div', { class: 'fi-addm', style: { top: `${yOf(m) + (day === storyKey() ? 26 : 8)}px` }, 'data-noptr': '' });
+    const open0 = () => {
+      const f = h('input', { class: 'fi-addm-input', type: 'text', maxlength: 400, placeholder: day === storyKey() ? 'narrate this moment…' : `add to ${shortDate(parseKey(day))}…`, 'aria-label': 'New moment' });
+      let fin = false;
+      const done = (keep) => {
+        if (fin) return; fin = true;
+        const t = f.value.trim(); hold = Math.max(0, hold - 1);
+        f.blur(); // so the timeline can redraw with the new moment
+        if (keep && t) addFragment({ kind: 'text', text: t }); else refresh();
+      };
+      f.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); done(true); } else if (e.key === 'Escape') { e.preventDefault(); done(false); } });
+      f.addEventListener('blur', () => { if (f.isConnected) done(!!f.value.trim()); }, { once: true });
+      hold++;
+      wrap.replaceChildren(f, h('button', { type: 'button', class: 'fi-addm-media', title: 'Add photos or videos', 'aria-label': 'Add photos or videos', onmousedown: (e) => e.preventDefault(), onclick: () => pickMedia().then((x) => addMediaToStory(x)) }, icon('image', 15)));
+      f.focus();
+    };
+    wrap.append(h('button', { type: 'button', class: 'fi-addm-btn', onclick: open0 }, icon('plus', 13), h('span', {}, 'Add Moment')));
+    return wrap;
+  }
   function addFragment(f, k = day, at = null) {
     const list = story(k);
     const spot = at || nextSpot(k, list);

@@ -184,9 +184,13 @@ export function mountLive({ editor, page, getCollab, me, boardId, menuItems, onI
     const list = await navigator.mediaDevices.enumerateDevices().catch(() => []);
     return { mics: list.filter((d) => d.kind === 'audioinput'), cams: list.filter((d) => d.kind === 'videoinput') };
   }
+  let ttPanel = null;
   async function openTalktrack() {
     if (rec) { toast('A Talktrack is already recording.', { ms: 1800 }); return; }
+    if (ttPanel) { ttPanel.close(); return; }
     if (!navigator.mediaDevices?.getUserMedia) { toast('This browser can’t record.', { tone: 'error' }); return; }
+    // Nov 28: a small dark panel at the top right (not a modal) — the board stays usable, and the camera bubble
+    // previews right away so you can place and size it before recording.
     const what = h('div', { class: 'lv-what', role: 'radiogroup', 'aria-label': 'What to record' });
     let pick = store.get('architect.tt.what', 'tab');
     const opts = [['tab', 'Current tab'], ['window', 'Window'], ['screen', 'Full screen'], ['camera', 'Camera only']];
@@ -194,29 +198,57 @@ export function mountLive({ editor, page, getCollab, me, boardId, menuItems, onI
     paintWhat();
     const mic = h('select', { class: 'input sm', 'aria-label': 'Microphone' }, h('option', { value: '' }, 'Loading…'));
     const cam = h('select', { class: 'input sm', 'aria-label': 'Camera' }, h('option', { value: '' }, 'Loading…'));
+    let preview = null, bubble = null;
+    const stopPreview = () => { preview?.getTracks().forEach((t) => t.stop()); preview = null; };
+    const showPreview = async () => {
+      stopPreview();
+      const id = cam.value;
+      if (!id || id === 'off') { bubble?.remove(); bubble = null; return; }
+      preview = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: id }, width: 640, height: 640 } }).catch(() => null);
+      if (!ttPanel) { stopPreview(); return; }
+      bubble?.remove(); bubble = preview ? makeBubble(preview) : null;
+    };
     devices().then(({ mics, cams }) => {
       mic.replaceChildren(h('option', { value: 'off' }, 'No microphone'), ...mics.map((d, i) => h('option', { value: d.deviceId }, d.label || `Microphone ${i + 1}`)));
       cam.replaceChildren(h('option', { value: 'off' }, 'No camera'), ...cams.map((d, i) => h('option', { value: d.deviceId }, d.label || `Camera ${i + 1}`)));
       mic.value = store.get('architect.tt.mic', mics[0]?.deviceId || 'off'); if (!mic.value) mic.value = mics[0]?.deviceId || 'off';
       cam.value = store.get('architect.tt.cam', cams[0]?.deviceId || 'off'); if (!cam.value) cam.value = cams[0]?.deviceId || 'off';
+      showPreview();
     });
-    const ok = await dialog({
-      title: 'Record Talktrack', className: 'lv-dlg', width: 440,
-      body: h('div', { class: 'stack' },
-        h('div', { class: 'lv-pop-label' }, 'What to record'), what,
-        h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Microphone'), mic),
-        h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Camera'), cam)),
-      actions: [{ label: 'Cancel', value: false }, { label: 'Start recording', primary: true, value: true }],
-    });
-    if (!ok) return;
-    store.set('architect.tt.what', pick); store.set('architect.tt.mic', mic.value); store.set('architect.tt.cam', cam.value);
-    startRecording({ what: pick, micId: mic.value, camId: cam.value }).catch((e) => toast(`Recording didn’t start — ${e?.message || e}`, { tone: 'error', ms: 5000 }));
+    cam.addEventListener('change', showPreview);
+    const close = (keepBubble) => {
+      if (!ttPanel) return;
+      ttPanel.node.remove(); ttPanel = null; document.removeEventListener('keydown', onKey, true);
+      if (!keepBubble) { stopPreview(); bubble?.remove(); bubble = null; }
+    };
+    const onKey = (e) => { if (e.key === 'Escape' && !e.target.closest?.('select')) { e.stopPropagation(); close(false); } };
+    const node = h('div', { class: 'lv-ttpanel', role: 'dialog', 'aria-label': 'Record Talktrack' },
+      h('div', { class: 'lv-ttpanel-head' }, h('b', {}, 'Record Talktrack'),
+        h('button', { type: 'button', class: 'lv-sbtn', 'aria-label': 'Close', title: 'Close', onclick: () => close(false) }, icon('close', 14))),
+      h('div', { class: 'lv-pop-label' }, 'What to record'), what,
+      h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Microphone'), mic),
+      h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Camera'), cam),
+      h('p', { class: 'lv-ttpanel-hint' }, 'Drag the camera bubble where you want it. Hover it to resize or hide it.'),
+      h('div', { class: 'lv-ttpanel-actions' },
+        h('button', { type: 'button', class: 'btn sm', onclick: () => close(false) }, 'Cancel'),
+        h('button', { type: 'button', class: 'btn btn-primary sm', onclick: () => {
+          store.set('architect.tt.what', pick); store.set('architect.tt.mic', mic.value); store.set('architect.tt.cam', cam.value);
+          const camS = preview, b0 = bubble;
+          close(true);
+          startRecording({ what: pick, micId: mic.value, camId: cam.value, camS, bubble: b0 }).catch((e) => {
+            camS?.getTracks().forEach((t) => t.stop()); b0?.remove();
+            toast(`Recording didn’t start — ${e?.message || e}`, { tone: 'error', ms: 5000 });
+          });
+        } }, 'Start recording')));
+    document.body.append(node);
+    document.addEventListener('keydown', onKey, true);
+    ttPanel = { node, close: () => close(false) };
   }
-  async function startRecording({ what, micId, camId }) {
+  async function startRecording({ what, micId, camId, camS: preCam = null, bubble: preBubble = null }) {
     const streams = [];
     const micS = micId !== 'off' ? await navigator.mediaDevices.getUserMedia({ audio: micId ? { deviceId: { exact: micId } } : true }).catch(() => null) : null;
     if (micS) streams.push(micS);
-    const camS = camId !== 'off' ? await navigator.mediaDevices.getUserMedia({ video: camId ? { deviceId: { exact: camId }, width: 640, height: 640 } : true }).catch(() => null) : null;
+    const camS = preCam || (camId !== 'off' ? await navigator.mediaDevices.getUserMedia({ video: camId ? { deviceId: { exact: camId }, width: 640, height: 640 } : true }).catch(() => null) : null);
     if (camS) streams.push(camS);
     let video = null;
     if (what === 'camera') {
@@ -231,7 +263,7 @@ export function mountLive({ editor, page, getCollab, me, boardId, menuItems, onI
     }
     const mixed = new MediaStream([...video, ...(micS ? micS.getAudioTracks() : [])]);
     rec = { streams, mixed, chunks: [], recorder: null, startedAt: 0, pausedMs: 0, pauseAt: 0, cam: camS, what };
-    mountBubble(camS);
+    if (preBubble) rec.bubble = preBubble; else if (camS) rec.bubble = makeBubble(camS);
     mountStrip();
     begin();
   }
@@ -246,27 +278,28 @@ export function mountLive({ editor, page, getCollab, me, boardId, menuItems, onI
     paintStrip();
   }
   const elapsed = () => (!rec ? 0 : (rec.pauseAt || Date.now()) - rec.startedAt - rec.pausedMs);
-  function mountBubble(camS) {
-    if (!camS) return;
+  function makeBubble(camS) {
+    // Nov 28: just the circle — no card or border; its controls appear when you hover it.
     const v = h('video', { autoplay: true, muted: true, playsinline: true });
     v.srcObject = camS;
     const ctl = h('div', { class: 'lv-bubble-ctl' },
       h('button', { type: 'button', class: 'lv-bbtn', 'aria-label': 'Smaller', title: 'Smaller', onclick: () => size(-1) }, icon('minus', 13)),
       h('button', { type: 'button', class: 'lv-bbtn', 'aria-label': 'Larger', title: 'Larger', onclick: () => size(1) }, icon('plus', 13)),
       h('button', { type: 'button', class: 'lv-bbtn', 'aria-label': 'Hide camera', title: 'Hide camera', onclick: () => { b.hidden = true; toast('Camera hidden — the recording carries on.', { ms: 1800 }); } }, icon('eyeOff', 13)));
-    const b = h('div', { class: 'lv-bubble', style: { '--s': `${store.get('architect.tt.size', 168)}px` } }, h('div', { class: 'lv-bubble-face' }, v), ctl);
+    const b = h('div', { class: 'lv-bubble is-bare', style: { '--s': `${store.get('architect.tt.size', 168)}px` } }, h('div', { class: 'lv-bubble-face' }, v), ctl);
+    const pos = store.get('architect.tt.pos', null);
+    if (pos) { b.style.left = `${Math.min(innerWidth - 100, pos.x)}px`; b.style.top = `${Math.min(innerHeight - 100, pos.y)}px`; b.style.right = 'auto'; b.style.bottom = 'auto'; }
     const size = (d) => { const s0 = Math.min(320, Math.max(96, (parseInt(b.style.getPropertyValue('--s'), 10) || 168) + d * 28)); b.style.setProperty('--s', `${s0}px`); store.set('architect.tt.size', s0); };
-    // drag it anywhere (the circle stays put when the controls appear)
     b.addEventListener('pointerdown', (e) => {
       if (e.target.closest('button')) return;
       const r = b.getBoundingClientRect(); const dx = e.clientX - r.left, dy = e.clientY - r.top;
       b.setPointerCapture(e.pointerId);
       const mv = (ev) => { b.style.left = `${Math.max(0, Math.min(innerWidth - r.width, ev.clientX - dx))}px`; b.style.top = `${Math.max(0, Math.min(innerHeight - r.height, ev.clientY - dy))}px`; b.style.right = 'auto'; b.style.bottom = 'auto'; };
-      const up = () => { b.removeEventListener('pointermove', mv); b.removeEventListener('pointerup', up); };
+      const up = () => { b.removeEventListener('pointermove', mv); b.removeEventListener('pointerup', up); store.set('architect.tt.pos', { x: parseFloat(b.style.left) || 0, y: parseFloat(b.style.top) || 0 }); };
       b.addEventListener('pointermove', mv); b.addEventListener('pointerup', up);
     });
     document.body.append(b);
-    rec.bubble = b;
+    return b;
   }
   let stripT = 0;
   function mountStrip() {
@@ -305,30 +338,63 @@ export function mountLive({ editor, page, getCollab, me, boardId, menuItems, onI
       if (r.recorder && r.recorder.state !== 'inactive') { r.recorder.onstop = finish; r.recorder.stop(); } else finish();
     } catch { finish(); }
   }
-  offs.push(() => { if (rec) stopRecording(false); });
+  offs.push(() => { if (rec) stopRecording(false); ttPanel?.close(); });
 
   /* ---------------- calls: live video (mesh, on the board's channel) ---------------- */
   let call = null;      // a call I'm in: { id, mode, corner, at, local, pcs: Map(clientId → { pc, stream, name }), mic, cam }
   const known = new Map(); // calls on this board: id → { id, mode, at, host, members:Set }
   let dock = null, tileHost = null;
   function callTile(c) {
-    // A joinable tile on the board (Attach to Space), anchored in board coordinates.
+    // A joinable call on the board (Attach to Space), in board coordinates. Anyone can drag it by its header or
+    // resize it from the corner; the position and size are shared with everyone on the board.
     let n = layer.querySelector(`.lv-calltile[data-call="${CSS.escape(c.id)}"]`);
-    if (!n) { n = h('div', { class: 'lv-calltile', 'data-call': c.id }); layer.append(n); }
-    n.style.left = `${c.at.x}px`; n.style.top = `${c.at.y}px`;
+    if (!n) {
+      n = h('div', { class: 'lv-calltile', 'data-call': c.id });
+      layer.append(n);
+      n.addEventListener('pointerdown', (e) => {
+        const grip = e.target.closest('.lv-callhead, .lv-call-idle, .lv-resize');
+        if (!grip || e.target.closest('button')) return;
+        e.stopPropagation(); e.preventDefault();
+        const k = known.get(c.id); if (!k) return;
+        const resizing = grip.classList.contains('lv-resize');
+        const z = editor.cam.z || 1, x0 = e.clientX, y0 = e.clientY;
+        const at0 = { ...k.at }, w0 = k.w || 360;
+        n.setPointerCapture(e.pointerId);
+        const mv = (ev) => {
+          const dx = (ev.clientX - x0) / z, dy = (ev.clientY - y0) / z;
+          if (resizing) k.w = Math.round(Math.max(240, Math.min(960, w0 + dx)));
+          else k.at = { x: Math.round(at0.x + dx), y: Math.round(at0.y + dy) };
+          if (call?.id === c.id) { call.at = k.at; call.w = k.w; }
+          place(n, k);
+        };
+        const up = () => { n.removeEventListener('pointermove', mv); n.removeEventListener('pointerup', up); send('call', { op: 'move', id: c.id, at: k.at, w: k.w }); };
+        n.addEventListener('pointermove', mv); n.addEventListener('pointerup', up);
+      });
+    }
+    place(n, c);
     return n;
   }
+  const place = (n, c) => { n.style.left = `${c.at.x}px`; n.style.top = `${c.at.y}px`; n.style.width = `${c.w || 360}px`; };
+  const count = (c) => (call?.id === c.id ? call.pcs.size + 1 : (c.members?.size || 1));
+  const callHead = (c) => h('div', { class: 'lv-callhead' },
+    h('span', { class: 'lv-livedot' }), h('b', {}, 'Live call'), h('span', { class: 'lv-callsep' }, '···'),
+    h('span', { class: 'lv-callcount' }, `${count(c)} participant${count(c) === 1 ? '' : 's'}`));
   function paintCalls() {
     for (const n of layer.querySelectorAll('.lv-calltile')) if (!known.has(n.dataset.call)) n.remove();
     for (const c of known.values()) {
       if (c.mode !== 'attach') continue;
       const n = callTile(c);
-      if (call?.id === c.id) { n.replaceChildren(videoGrid(), callCtl()); continue; }
-      n.replaceChildren(h('div', { class: 'lv-call-idle' }, svgIcon(IC.camera, 20), h('span', {}, `${c.host || 'Someone'}’s call`), h('button', { type: 'button', class: 'btn btn-primary sm', onclick: () => joinCall(c) }, 'Join')));
+      if (call?.id === c.id) { n.replaceChildren(callHead(c), videoGrid(), callCtl(), h('i', { class: 'lv-resize', title: 'Resize' })); continue; }
+      n.replaceChildren(callHead(c),
+        h('div', { class: 'lv-call-idle' }, svgIcon(IC.camera, 20), h('span', {}, `${c.host || 'Someone'}’s call`),
+          h('button', { type: 'button', class: 'btn btn-primary sm', onclick: () => joinCall(c) }, 'Join call')),
+        h('i', { class: 'lv-resize', title: 'Resize' }));
     }
     dock?.remove(); dock = null;
     if (call?.mode === 'dock') {
-      dock = h('div', { class: ['lv-dock', `is-${call.corner}`] }, videoGrid(), callCtl());
+      const k = known.get(call.id) || call;
+      dock = h('div', { class: ['lv-dock', `is-${call.corner}`], style: { width: `${store.get('architect.call.dockW', 300)}px` } }, callHead(k), videoGrid(), callCtl(), h('i', { class: 'lv-resize', title: 'Resize' }));
+      dockDrag(dock);
       document.body.append(dock);
     }
     const joinable = [...known.values()].filter((c) => c.mode === 'dock' && call?.id !== c.id);
@@ -336,8 +402,37 @@ export function mountLive({ editor, page, getCollab, me, boardId, menuItems, onI
     if (joinable.length && !call) {
       if (!pill) { pill = h('div', { class: 'lv-joinpill' }); page.append(pill); }
       const c = joinable[0];
-      pill.replaceChildren(svgIcon(IC.camera, 16), h('span', {}, `${c.host || 'Someone'} started a call`), h('button', { type: 'button', class: 'btn btn-primary sm', onclick: () => joinCall(c) }, 'Join'));
+      pill.replaceChildren(h('span', { class: 'lv-livedot' }), h('span', {}, `${c.host || 'Someone'}’s live call · ${count(c)} in it`), h('button', { type: 'button', class: 'btn btn-primary sm', onclick: () => joinCall(c) }, 'Join call'));
     } else pill?.remove();
+  }
+  function dockDrag(d) {
+    // Drag the dock by its header: it snaps to the bottom-left or bottom-right corner, whichever is nearer.
+    // Drag its corner to resize it.
+    d.addEventListener('pointerdown', (e) => {
+      const grip = e.target.closest('.lv-callhead, .lv-resize');
+      if (!grip || e.target.closest('button')) return;
+      e.preventDefault();
+      const resizing = grip.classList.contains('lv-resize');
+      const r = d.getBoundingClientRect(), x0 = e.clientX, y0 = e.clientY;
+      d.setPointerCapture(e.pointerId); d.classList.add('is-dragging');
+      const mv = (ev) => {
+        if (resizing) {
+          const dw = call.corner === 'left' ? ev.clientX - x0 : x0 - ev.clientX;
+          d.style.width = `${Math.round(Math.max(220, Math.min(640, r.width + dw)))}px`;
+        } else {
+          d.style.left = `${r.left + ev.clientX - x0}px`; d.style.right = 'auto';
+          d.style.bottom = `${Math.max(8, innerHeight - r.bottom - (ev.clientY - y0))}px`;
+        }
+      };
+      const up = (ev) => {
+        d.removeEventListener('pointermove', mv); d.removeEventListener('pointerup', up); d.classList.remove('is-dragging');
+        if (resizing) { store.set('architect.call.dockW', parseInt(d.style.width, 10) || 300); return; }
+        call.corner = ev.clientX < innerWidth / 2 ? 'left' : 'right';
+        store.set('architect.call.corner', call.corner);
+        paintCalls();
+      };
+      d.addEventListener('pointermove', mv); d.addEventListener('pointerup', up);
+    });
   }
   function videoGrid() {
     const tile = (stream, name, mine) => {
@@ -350,18 +445,20 @@ export function mountLive({ editor, page, getCollab, me, boardId, menuItems, onI
   }
   function callCtl() {
     const a = call.local.getAudioTracks()[0], v = call.local.getVideoTracks()[0];
+    const pill = (on, ic, label, fn, cls = '') => h('button', { type: 'button', class: ['lv-cbtn', cls, on === false && 'is-off'], onclick: fn }, ic, h('span', {}, label));
     return h('div', { class: 'lv-callctl' },
-      h('button', { type: 'button', class: ['lv-sbtn', a && !a.enabled && 'is-off'], 'aria-label': a?.enabled ? 'Mute microphone' : 'Unmute microphone', title: 'Microphone', onclick: () => { if (a) a.enabled = !a.enabled; paintCalls(); } }, icon(a?.enabled ? 'mic' : 'micOff', 14)),
-      h('button', { type: 'button', class: ['lv-sbtn', v && !v.enabled && 'is-off'], 'aria-label': v?.enabled ? 'Turn camera off' : 'Turn camera on', title: 'Camera', onclick: () => { if (v) v.enabled = !v.enabled; paintCalls(); } }, svgIcon(IC.camera, 14)),
-      call.mode === 'dock' ? h('button', { type: 'button', class: 'lv-sbtn', 'aria-label': 'Move to the other corner', title: 'Other corner', onclick: () => { call.corner = call.corner === 'left' ? 'right' : 'left'; store.set('architect.call.corner', call.corner); paintCalls(); } }, icon('collapse', 14)) : null,
-      h('button', { type: 'button', class: 'lv-sbtn is-danger', 'aria-label': 'Leave the call', title: 'Leave', onclick: () => leaveCall() }, icon('close', 14)),
-      call.host === me.username ? h('button', { type: 'button', class: 'btn sm lv-end', onclick: () => endCall() }, 'End for all') : null);
+      pill(a ? a.enabled : false, icon(a?.enabled ? 'mic' : 'micOff', 14), 'Mic', () => { if (a) a.enabled = !a.enabled; paintCalls(); }),
+      pill(v ? v.enabled : false, svgIcon(IC.camera, 14), 'Camera', () => { if (v) v.enabled = !v.enabled; paintCalls(); }),
+      pill(null, icon('close', 14), 'Leave call', () => leaveCall(), 'is-leave'),
+      pill(null, h('i', { class: 'lv-stopsq' }), 'End for all', () => endCall(), 'is-end'));
   }
   async function askMode() {
+    const opt = (title, text) => h('div', { class: 'lv-mode' }, h('b', {}, title), h('p', {}, text));
     return dialog({
-      title: 'Start a call', width: 420,
+      title: 'Start a call', width: 460, className: 'lv-dlg lv-calldlg',
       body: h('div', { class: 'stack' },
-        h('p', { class: 'dlg-text' }, 'Attach to Space puts a joinable video tile on the shared board: it moves with the board and disappears for everyone when the call ends. Dock on Screen keeps the video in a corner of your screen, with nothing added to the board.')),
+        opt('Attach to Space', 'Puts a joinable video tile on the shared board. Anyone can move or resize it, and it disappears for everyone when the call ends.'),
+        opt('Dock on Screen', 'Keeps the video in a corner of your screen — drag it to the other corner or resize it. Nothing is added to the board; others get a Join call pill.')),
       actions: [{ label: 'Cancel', value: null }, { label: 'Dock on Screen', value: 'dock' }, { label: 'Attach to Space', primary: true, value: 'attach' }],
     });
   }
@@ -376,7 +473,7 @@ export function mountLive({ editor, page, getCollab, me, boardId, menuItems, onI
     if (!mode) return;
     let local;
     try { local = await localStream(); } catch (e) { toast(`Camera and microphone are blocked — ${e?.message || e}`, { tone: 'error', ms: 4000 }); return; }
-    const c = { id: uid(), mode, at: (() => { const p = editor.viewCenter(); return { x: Math.round(p.x), y: Math.round(p.y) }; })(), host: me.username, members: new Set() };
+    const c = { id: uid(), mode, at: (() => { const p = editor.viewCenter(); return { x: Math.round(p.x), y: Math.round(p.y) }; })(), host: me.username, members: new Set([myId()]) };
     known.set(c.id, c);
     call = { ...c, local, pcs: new Map(), corner: store.get('architect.call.corner', 'right') };
     send('call', { op: 'start', call: { id: c.id, mode, at: c.at, host: c.host } });
@@ -387,6 +484,7 @@ export function mountLive({ editor, page, getCollab, me, boardId, menuItems, onI
     let local;
     try { local = await localStream(); } catch (e) { toast(`Camera and microphone are blocked — ${e?.message || e}`, { tone: 'error', ms: 4000 }); return; }
     call = { ...c, local, pcs: new Map(), corner: store.get('architect.call.corner', 'right') };
+    c.members?.add(myId());
     send('call', { op: 'join', id: c.id, name: me.username });
     paintCalls();
   }
@@ -408,8 +506,9 @@ export function mountLive({ editor, page, getCollab, me, boardId, menuItems, onI
     for (const x of c.pcs.values()) { try { x.pc.close(); } catch {} }
     c.local.getTracks().forEach((t) => t.stop());
     if (!silent) send('call', { op: 'leave', id: c.id });
-    const k = known.get(c.id);
-    if (k && c.host === me.username && !c.pcs.size) { known.delete(c.id); send('call', { op: 'end', id: c.id }); }
+    // Leaving never ends the call for the others — only End for all does. A call left with nobody in it stays
+    // joinable (its tile / pill) until someone ends it.
+    known.get(c.id)?.members?.delete?.(myId());
     paintCalls();
   }
   function endCall() {
@@ -439,9 +538,12 @@ export function mountLive({ editor, page, getCollab, me, boardId, menuItems, onI
       return;
     }
     if (p.kind === 'call') {
-      if (p.op === 'start') { known.set(p.call.id, { ...p.call, members: new Set([p.from]) }); paintCalls(); return; }
+      if (p.op === 'start') { const old = known.get(p.call.id); known.set(p.call.id, { ...old, ...p.call, members: new Set([...(old?.members || []), p.from]) }); paintCalls(); return; }
+      if (p.op === 'move') { const k = known.get(p.id); if (k) { if (p.at) k.at = p.at; if (p.w) k.w = p.w; if (call?.id === p.id) { call.at = k.at; call.w = k.w; } paintCalls(); } return; }
+      if (p.op === 'leave' && known.has(p.id)) { known.get(p.id).members?.delete(p.from); if (!call || call.id !== p.id) { paintCalls(); return; } }
       if (p.op === 'end') { if (call?.id === p.id) { leaveCall(true); toast('The call ended.', { ms: 1600 }); } known.delete(p.id); paintCalls(); return; }
-      if (!call || p.id !== call.id) { if (p.op === 'join' && known.has(p.id)) known.get(p.id).members.add(p.from); return; }
+      if (p.op === 'join' && known.has(p.id)) known.get(p.id).members.add(p.from);
+      if (!call || p.id !== call.id) { if (p.op === 'join') paintCalls(); return; }
       if (p.op === 'join') {
         // Everyone already in the call calls the newcomer.
         const x = pcFor(p.from, p.name);
@@ -471,7 +573,7 @@ export function mountLive({ editor, page, getCollab, me, boardId, menuItems, onI
     const to = p.from;
     if (timer) send('timer', { t: timer, to });
     if (presenting) send('present', { on: true, name: me.username, cam: camNow(), to });
-    if (call && call.host === me.username) send('call', { op: 'start', call: { id: call.id, mode: call.mode, at: call.at, host: call.host }, to });
+    for (const c of known.values()) if (call?.id === c.id || c.host === me.username) send('call', { op: 'start', call: { id: c.id, mode: c.mode, at: c.at, w: c.w, host: c.host }, to });
   }));
 
   /* ---------------- the top-bar controls ---------------- */

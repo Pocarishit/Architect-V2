@@ -524,7 +524,6 @@ export function mountSpace(root) {
   let side = null;
   function mountSide(ed) {
     if (!ed) return;
-    if (getPref('sidebar', true) === false) { unmountSidebar(); return; }
     if (side) { side.rebind(ed); return; }
     side = mountSidebar({
       page, me,
@@ -535,7 +534,7 @@ export function mountSpace(root) {
       addWidget: (kind) => addWidget(kind, editor()?.viewCenter()),
       openSettings: (tab) => settings(tab),
       sharedSpaceId: () => ids.shared,
-      openBlueprints: () => openBlueprintsCanvas({ openBoard: (id) => openBoard(id) }),
+      openBlueprints: () => openBlueprintsCanvas({ openBoard: (id) => openBoard(id), host: page }),
       toggleSidebar: () => toggleSidebar(),
       signOut: () => api.auth.signOut(),
       changePassword: () => changePassword(),
@@ -546,7 +545,7 @@ export function mountSpace(root) {
   // toggle stays in the corner; showing it again restores the view it was on.
   function paintSidebarReveal() {
     page.querySelector('.sb-reveal')?.remove();
-    if (phone() || getPref('sidebar', true) !== false) return;
+    if (page) return; // Nov 28: the edge reveals the sidebar now
     const k = appKey('sidebar');
     page.append(h('button', { type: 'button', class: 'sb-reveal', title: `Show sidebar${k ? ` (${k})` : ''}`, 'aria-label': 'Show sidebar', onclick: () => toggleSidebar() }, sideIcon()));
   }
@@ -560,10 +559,10 @@ export function mountSpace(root) {
   }
   async function toggleSidebar() {
     if (phone()) return;
-    const on = getPref('sidebar', true) !== false;
-    await setPref('sidebar', !on).catch(() => {});
-    mountDock();
-    paintSidebarReveal();
+    // Nov 28: the sidebar hides itself by default; this pins it open (or lets it auto-hide again).
+    const on = getPref('sbPinned', false) === true;
+    await setPref('sbPinned', !on).catch(() => {});
+    side?.applyPin?.();
     requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
   }
   offs.push(() => unmountSidebar());

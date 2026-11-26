@@ -149,6 +149,12 @@ export function createContextBar(page, editor, { sendToPaths, present, openLink,
     if (lines.length) {
       const route = common(lines, 'route', 'straight') || 'straight';
       items.push(btn({ straight: 'line', curve: 'curve', elbow: 'elbow' }[route], 'Connector style', (a) => popover(a, linePanel(lines))));
+      // Nov 28: right on the bar — connectors go around other objects unless this is on (off by default).
+      const through = lines.every((l) => l.through);
+      items.push(h('button', {
+        type: 'button', class: ['ctx-toggle', through && 'is-on'], role: 'switch', 'aria-checked': String(through), title: 'Let this connector pass through other objects',
+        onclick: () => set({ through: !through }, ['line']),
+      }, h('span', {}, 'Allow intersections'), h('i', { class: 'ctx-switch', 'aria-hidden': 'true' })));
       const sc = common(lines, 'startCap', 'none');
       const ec = common(lines, 'endCap', 'none');
       items.push(btn(capIcon(sc, true), 'Start of line', (a) => popover(a, capPicker('startCap', sc))));

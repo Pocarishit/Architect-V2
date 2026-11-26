@@ -14,7 +14,7 @@ import { uid } from '../core/util.js';
 // so it can be given to Toggle Sidebar instead.
 export const APP_ACTIONS = [
   { id: 'personal', label: 'Switch to Personal Space', hint: 'Flip between your personal space and the shared one', def: 'Tab' },
-  { id: 'sidebar', label: 'Toggle Sidebar', hint: 'Hide or show the sidebar', def: null },
+  { id: 'sidebar', label: 'Toggle Sidebar', hint: 'Pin the sidebar open, or let it hide until you point at the left edge', def: null },
 ];
 export function appKeys() {
   const saved = getPref('appKeys', null) || {};
@@ -113,18 +113,20 @@ export async function confirmByName({ title, name, message, ok = 'Delete' }) {
 // card. No header bar: the canvas reaches the top edge; only Fit and Close sit in the top-right corner.
 // Drag the canvas to pan, Ctrl/⌘ + wheel to zoom, drag a card to arrange it (saved on your account),
 // click a card to open it.
-export function openBlueprintsCanvas({ openBoard }) {
+export function openBlueprintsCanvas({ openBoard, host = null }) {
   document.querySelector('.bpc-layer')?.remove();
-  const layer = h('div', { class: 'bpc-layer', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Blueprints' });
+  // Nov 28: inside the Architect workspace (the sidebar still slides in over it), not a separate full screen.
+  const layer = h('div', { class: ['bpc-layer', host && 'is-inline'], role: 'dialog', 'aria-label': 'Blueprints' });
   const world = h('div', { class: 'bpc-world' });
   const vp = h('div', { class: 'bpc-vp' }, world);
   const corner = h('div', { class: 'bpc-corner' },
     h('button', { type: 'button', class: 'bpc-btn', 'aria-label': 'Fit', title: 'Fit', onclick: () => fit() }, icon('fit', 16)),
     h('button', { type: 'button', class: 'bpc-btn', 'aria-label': 'Close', title: 'Close (Esc)', onclick: () => close() }, icon('close', 16)));
   layer.append(vp, corner);
-  document.body.append(layer);
+  (host || document.body).append(layer);
   const onKey = (e) => { if (e.key === 'Escape' && !document.querySelector('.menu, .dlg, .pop')) { e.preventDefault(); e.stopImmediatePropagation(); close(); } };
   window.addEventListener('keydown', onKey, true);
+  layer.addEventListener('bpc-close', () => close());
   function close() { window.removeEventListener('keydown', onKey, true); window.removeEventListener('architect:blueprints-changed', load); layer.remove(); }
 
   const CW = 240, CH = 190, GAP = 28;

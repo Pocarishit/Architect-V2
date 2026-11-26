@@ -15,6 +15,7 @@ import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { menu, toast, promptDialog, confirmDialog, closeFloating } from '../core/ui.js';
 import { store, uid } from '../core/util.js';
+import { openSpaceLibrary } from './zones.js';
 import { api, friendlyError } from '../data/api.js';
 import { getPref, setPref } from '../data/prefs.js';
 import { setSurface } from '../board/editor.js';
@@ -98,6 +99,30 @@ export function mountSidebar(ctx) {
   const root = h('div', { class: 'sb' }, rail, stage);
   page.append(root);
   page.classList.add('has-sb');
+  // Nov 28 — hidden by default. Pointing at the left edge brings the rail in over the workspace (nothing
+  // shifts); it stays while the pointer is on it (or one of its menus is open) and slides away when the
+  // pointer leaves. Pinning (the panel button, or Toggle Sidebar in Settings → Shortcuts) keeps it out.
+  const hot = h('div', { class: 'sb-hot', 'aria-hidden': 'true' });
+  root.append(hot);
+  let peekT = 0;
+  const pinned = () => getPref('sbPinned', false) === true;
+  const applyPin = () => { page.classList.toggle('sb-auto', !pinned()); if (pinned()) page.classList.remove('sb-peek'); };
+  const peek = () => { clearTimeout(peekT); if (!pinned()) page.classList.add('sb-peek'); };
+  const unpeek = () => {
+    clearTimeout(peekT);
+    peekT = setTimeout(() => {
+      if (pinned()) return;
+      if (rail.matches(':hover') || hot.matches(':hover') || document.querySelector('.menu, .popover')) { unpeek(); return; }
+      page.classList.remove('sb-peek');
+    }, 320);
+  };
+  hot.addEventListener('pointerenter', peek);
+  rail.addEventListener('pointerenter', peek);
+  rail.addEventListener('pointerleave', unpeek);
+  hot.addEventListener('pointerleave', unpeek);
+  rail.addEventListener('focusin', peek);
+  rail.addEventListener('focusout', unpeek);
+  applyPin();
 
   /* ---------------- custom views (saved on your account) ---------------- */
   const views = () => (Array.isArray(getPref('sbViews', null)) ? getPref('sbViews', []) : []);
@@ -121,13 +146,12 @@ export function mountSidebar(ctx) {
       // Nov 27 — Blueprints opens the Blueprint view (a library-style canvas); Personal Space switches to your
       // personal space (it replaces the action removed from the canvas menu).
       item('blueprints', 'hash', 'Blueprints', () => ctx.openBlueprints?.(), { 'aria-current': 'false', class: 'sb-item' }),
-      item('personal', 'home', personalLabel(), () => goPersonal(), { 'aria-current': 'false', class: 'sb-item' }),
       ...views().map((v) => item(`custom:${v.id}`, 'square', v.name || 'My view', () => show(`custom:${v.id}`), {
         oncontextmenu: (e) => { e.preventDefault(); viewMenu({ x: e.clientX, y: e.clientY }, v); },
       })),
       // More sits at the very bottom of the rail (Nov 25).
       h('span', { class: 'sb-push', 'aria-hidden': 'true' }),
-      item('hide', 'panel', `Hide sidebar${keyHint('sidebar')}`, () => ctx.toggleSidebar?.(), { 'aria-current': 'false', class: 'sb-item sb-toggle' }),
+      item('hide', 'panel', `${pinned() ? 'Unpin' : 'Pin'} sidebar${keyHint('sidebar')}`, () => ctx.toggleSidebar?.(), { 'aria-current': 'false', class: ['sb-item sb-toggle', pinned() && 'is-pinned'] }),
       item('more', 'dots', 'More', (b) => moreMenu(b), { class: 'sb-item sb-more' }));
     ctx.onRail?.(railSpec());
   }
@@ -138,7 +162,6 @@ export function mountSidebar(ctx) {
     { id: 'variables', svg: railIcon('atom'), label: 'Variables' },
     { id: 'path', svg: railIcon('compass'), label: 'Path' },
     { id: 'blueprints', svg: railIcon('hash'), label: 'Blueprints', run: () => ctx.openBlueprints?.() },
-    { id: 'personal', svg: railIcon('home'), label: personalLabel(), run: () => goPersonal() },
     ...views().map((v) => ({ id: `custom:${v.id}`, svg: railIcon('square'), label: v.name || 'My view' })),
     { id: 'more', svg: railIcon('dots'), label: 'More', bottom: true },
   ];
@@ -161,6 +184,7 @@ export function mountSidebar(ctx) {
       { label: 'Custom', icon: 'layers', onSelect: () => newView() },
       ...(views().length ? ['-', { header: 'Your views' }, ...views().map((v) => ({ label: v.name, icon: 'board', onSelect: () => show(`custom:${v.id}`) }))] : []),
       '-',
+      { label: personalLabel(), icon: 'home', onSelect: () => goPersonal() },
       ctx.changePassword ? { label: 'Change password', icon: 'key', onSelect: () => ctx.changePassword() } : null,
       ctx.signOut ? { label: 'Sign out', icon: 'logout', onSelect: () => ctx.signOut() } : null,
     ].filter(Boolean));
@@ -192,6 +216,7 @@ export function mountSidebar(ctx) {
     ctx.onView?.(id);
     // Nov 27: shared presence knows which view you're in (your cursor is only drawn on the canvas you share).
     document.body.dataset.archView = id;
+    document.querySelector('.bpc-layer')?.dispatchEvent(new CustomEvent('bpc-close'));
     window.dispatchEvent(new CustomEvent('architect:view', { detail: { id } }));
     requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
   }
@@ -582,7 +607,9 @@ export function mountSidebar(ctx) {
         oncontextmenu: (e) => { if (!sp) return; e.preventDefault(); catMenu({ x: e.clientX, y: e.clientY }, sp); },
       }, h('span', {}, name), icon('chevronDown', 14));
       list = h('div', { class: 'sbv-list', role: 'list' });
-      side.replaceChildren(h('header', { class: 'sbv-spacebar' }, h('span', { class: 'wg-grip sbv-dothandle', 'aria-hidden': 'true' }), pick, sideToggle()), list, mapCard(), sizer);
+      // Nov 28: the space's Library — every chat's Zone Cubes on one zoomable map (shared spaces share it).
+      const libBtn = rootId() && !isOrgans() ? h('button', { type: 'button', class: 'icon-btn sm sbv-libbtn', 'aria-label': 'Library — Zone Cubes', 'data-tip': 'Library', 'data-tip-pos': 'bottom', onclick: () => openSpaceLib() }, icon('layers', 16)) : null;
+      side.replaceChildren(h('header', { class: 'sbv-spacebar' }, h('span', { class: 'wg-grip sbv-dothandle', 'aria-hidden': 'true' }), pick, libBtn, sideToggle()), list, mapCard(), sizer);
       paintList();
     }
     let list = null;
@@ -627,11 +654,11 @@ export function mountSidebar(ctx) {
       const row = (x, depth = 0) => renaming?.kind === 'entry' && renaming.id === x.id
         ? h('div', { class: 'sbv-row is-renaming', style: { '--d': depth } }, inline('Chat name', (n) => { renaming = null; if (n) setV({ entries: entries().map((e) => (e.id === x.id ? { ...e, name: n.slice(0, 120) } : e)) }); paintList(true); }, x.name))
         : h('button', {
-          type: 'button', role: 'listitem', class: ['sbv-row', open === x.id && 'is-on', x.color && 'has-color'], style: { '--d': depth, ...(x.color ? { '--vc': x.color } : {}) }, 'data-eid': x.id,
+          type: 'button', role: 'listitem', class: ['sbv-row', open === x.id && 'is-on', x.color && 'has-color', x.bold && 'is-bold', depth > 0 && 'is-nested'], style: { '--d': depth, ...(x.color ? { '--vc': x.color } : {}) }, 'data-eid': x.id,
           onclick: () => { if (v._dragged) return; open = x.id; remember(); paintList(); paintMain(); },
           ondblclick: () => { renaming = { kind: 'entry', id: x.id }; paintList(); },
           oncontextmenu: (e) => { e.preventDefault(); entryMenu({ x: e.clientX, y: e.clientY }, x); },
-        }, thumb(x.photo), h('span', { class: 'sbv-row-name' }, (x.name || 'Untitled').toUpperCase()), (x.notes || []).length ? h('em', {}, String((x.notes || []).length)) : null);
+        }, thumb(x.photo), h('span', { class: 'sbv-row-name' }, x.name || 'Untitled'), (x.notes || []).length ? h('em', {}, String((x.notes || []).length)) : null);
       const groupRow = (s, depth) => renaming?.kind === 'sec' && renaming.id === s.id
         ? h('div', { class: 'sbv-group is-renaming', style: { '--d': depth } }, inline('Subsection name', (n) => { renaming = null; if (n) setV({ sections: sections().map((y) => (y.id === s.id ? { ...y, name: n.slice(0, 120) } : y)) }); paintList(true); }, s.name))
         : h('div', {
@@ -644,7 +671,7 @@ export function mountSidebar(ctx) {
           onclick: (e) => { e.stopPropagation(); toggleFold(s.id); },
         }, icon(folded.has(s.id) ? 'chevronRight' : 'chevronDown', 12)),
           thumb(s.img),
-          h('span', { class: 'sbv-group-name' }, s.name.toUpperCase()),
+          h('span', { class: 'sbv-group-name' }, s.name),
           h('button', { type: 'button', class: 'sbv-group-add', title: `New chat in ${s.name}`, 'aria-label': `New chat in ${s.name}`, onclick: () => { adding = { parent: s.id }; paintList(); } }, icon('plus', 12)));
       const addField = (parent, depth) => h('div', { class: 'sbv-row is-adding', style: { '--d': depth } },
         inline('New chat name', (n) => { adding = null; if (n) createChat(parent, n); else paintList(true); }));
@@ -655,6 +682,7 @@ export function mountSidebar(ctx) {
         const walk = (id, depth) => {
           for (const x of entriesIn(id)) out.push(row(x, depth));
           for (const s of kids(id)) {
+            if (out.length && out[out.length - 1].classList?.contains('is-nested')) out.push(h('div', { class: 'sbv-div', 'aria-hidden': 'true' }));
             out.push(groupRow(s, depth));
             if (adding?.parent === s.id) { folded.delete(s.id); out.push(addField(s.id, depth + 1)); }
             if (!folded.has(s.id)) walk(s.id, depth + 1);
@@ -743,6 +771,18 @@ export function mountSidebar(ctx) {
     // Nov 26 — the square is the map itself, shrunk: the same Variables map the expand button opens (its
     // nodes where they sit, their connections), drawn straight on the card — no badges, no inner frame.
     let mini = null; // { key, node, ctl, ro }
+    function openSpaceLib() {
+      const root = rootId();
+      if (!root) return;
+      const key = `architect.zl.${cat}`;
+      openSpaceLibrary({
+        name: secById(root)?.name || curSpace()?.name || 'Space', root,
+        sections: () => [...subtree(root)].map((id) => secById(id)).filter(Boolean),
+        entries: () => { const ids = subtree(root); return entries().filter((e) => ids.has(e.section)); },
+        patchEntry: (id, fn) => setV({ entries: entries().map((e) => (e.id === id ? { ...e, ...fn(e) } : e)) }),
+        store: (k, v) => { const all = store.get(key, {}); if (v === undefined) return all[k]; store.set(key, { ...all, [k]: v }); return v; },
+      });
+    }
     function mapCard() {
       if (!rootId() || isOrgans()) return h('span');
       const key = `${cat}`;
@@ -942,6 +982,8 @@ export function mountSidebar(ctx) {
         { header: x.name },
         { label: 'Rename', icon: 'edit', kbd: 'Dbl-click', onSelect: () => { renaming = { kind: 'entry', id: x.id }; paintList(); } },
         { label: 'Color…', icon: 'textColor', onSelect: () => pickColor(anchor, x.color).then((c) => { if (c !== undefined) setV({ entries: entries().map((e) => (e.id === x.id ? { ...e, color: c } : e)) }); }) },
+        // Nov 28: chat names keep their own style — bold only when you make them bold.
+        { label: 'Bold', icon: 'bold', checked: !!x.bold, onSelect: () => setV({ entries: entries().map((e) => (e.id === x.id ? { ...e, bold: !x.bold } : e)) }) },
         dests.length ? { header: 'Move to' } : null,
         ...dests.map((s2) => ({ label: s2.name, icon: 'folderMove', onSelect: () => setV({ entries: entries().map((e) => (e.id === x.id ? { ...e, section: s2.id } : e)) }) })),
         '-',
@@ -1206,6 +1248,7 @@ export function mountSidebar(ctx) {
     current: () => cur,
     show,
     // The Space switched (Tab) or reloaded its canvas: borrowed objects must come from the new board.
+    applyPin() { applyPin(); paintRail(); },
     rebind(next) {
       ed = next;
       paintRail();
@@ -1216,7 +1259,7 @@ export function mountSidebar(ctx) {
       active?.destroy(); active = null;
       offs.forEach((f) => { try { f(); } catch {} });
       setSurface(null);
-      page.classList.remove('has-sb', 'sb-open');
+      page.classList.remove('has-sb', 'sb-open', 'sb-auto', 'sb-peek');
       root.remove();
     },
   };

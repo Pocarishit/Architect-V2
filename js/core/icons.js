@@ -2,6 +2,8 @@ import { s } from './dom.js';
 
 // 24×24 line icons, 1.6 stroke. Kept in one place so the set stays consistent.
 const P = {
+  pointerFill: '<path d="M5.2 3.6 19 10.4l-6 1.9-2.1 6.1z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/>',
+  shapesGroup: '<rect x="3.6" y="3.6" width="6.8" height="6.8" rx="1.2"/><circle cx="17" cy="7" r="3.4"/><path d="M7 13.6 10.5 20H3.5z"/><path d="M14 20l6-6M15.5 14H20v4.5"/>',
   select: '<path d="M5.5 3.5 18.5 10l-5.8 1.9-2 5.8z"/>',
   hand: '<path d="M8 12.5V6a1.5 1.5 0 0 1 3 0v5.5M11 11V4.5a1.5 1.5 0 0 1 3 0V11M14 11V6a1.5 1.5 0 0 1 3 0v7.5c0 4-2.6 7-6.5 7-2.6 0-4.2-1.2-5.6-3.4L3.4 14a1.5 1.5 0 0 1 2.5-1.7L8 15"/>',
   sticky: '<path d="M4.5 4.5h15v9l-6 6h-9z"/><path d="M13.5 19.5v-6h6"/>',

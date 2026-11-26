@@ -102,7 +102,9 @@ export function mountFreeView(o) {
     items.clear(); cardEls.clear();
     // The column holds every message in order; the ones you've moved out stay as invisible
     // placeholders, so nothing slides up and new messages always arrive at the bottom.
-    flow = h('div', { class: 'vr-fv-flow' }, o.flowRows(notes));
+    // Nov 28: with a chat dock (o.dock) the conversation lives beside the canvas, not in it — the canvas holds
+    // only the messages you've placed on it.
+    flow = o.dock ? h('div', { class: 'vr-fv-flow is-docked' }) : h('div', { class: 'vr-fv-flow' }, o.flowRows(notes));
     for (const row of [...flow.querySelectorAll(`${ITEM}[data-id]`)]) {
       if (f.pos[row.dataset.id]) ghost(row);
       else { items.set(row.dataset.id, row); row.classList.add('is-fv-obj'); }
@@ -548,9 +550,7 @@ export function mountFreeView(o) {
     // Nov 27 — the Architect Space toolbar layout: tools in one rail, Undo / Redo in their own pill below.
     tools.classList.add('is-split');
     const mainTools = [
-      btn(null, 'chevronLeft', 'Hide tools', () => setRail(false)),
-      sep(),
-      btn('move', 'select', 'Select (V)', () => setTool('move')),
+      btn('move', 'pointerFill', 'Select (V)', () => setTool('move')),
       btn('hand', 'hand', 'Hand (H · hold Space)', () => setTool('hand')),
       sep(),
       // Nov 26 — the Blueprint's tools, names, icons and order; Zone (Z) is the Variables-only addition.
@@ -568,7 +568,7 @@ export function mountFreeView(o) {
       sep(),
       btn(null, 'home', 'Back to the start', () => scroller.scrollTo({ left: L * zoom, top: 0, behavior: 'smooth' })),
       resetB].filter(Boolean);
-    tools.replaceChildren(h('div', { class: 'vr-fv-pill' }, ...mainTools), h('div', { class: 'vr-fv-pill is-hist' }, undoB, redoB));
+    tools.replaceChildren(h('div', { class: 'vr-fv-pill' }, ...mainTools), h('div', { class: 'vr-fv-pill is-hist' }, undoB, redoB, btn(null, 'chevronLeft', 'Hide tools', () => setRail(false))));
     paintSelbar();
   }
   function paintSelbar() {
@@ -607,10 +607,17 @@ export function mountFreeView(o) {
       h('div', { class: 'seg seg-sm' }, opt('pen', 'pen', 'Pen'), opt('eraser', 'eraser', 'Eraser')),
       h('p', { class: 'pop-note' }, lastPen === 'eraser' ? 'Drag over drawings, links, shapes and notes to erase them.' : 'Draw anywhere on the canvas.')), flyOpts());
   }
+  // Nov 28: while drawing Show alongside links, a banner says so — Done leaves linking mode (links stay; they
+  // aren't drawn outside it).
+  const sideBanner = h('div', { class: 'vr-fv-sidebanner', role: 'status', hidden: true },
+    icon('layers', 15), h('span', {}, h('b', {}, 'Linking mode'), ' — click a message, then what Present should show alongside it.'),
+    h('button', { type: 'button', class: 'btn btn-primary sm', onclick: () => setTool('move') }, 'Done'));
+  stage.append(sideBanner);
   function setTool(t) {
     tool = lastTool = t;
     board.dataset.tool = t === 'pen' && lastPen === 'eraser' ? 'erase' : t;
     scroller.dataset.tool = t;
+    sideBanner.hidden = !(t === 'link' && lastLink === 'side');
     paintTools();
     if (flow) { try { draw(); } catch {} } // Show alongside links appear only while linking
   }
@@ -1491,6 +1498,12 @@ export function mountFreeView(o) {
       scroller.scrollLeft = 0; scroller.scrollTop = 0;
     },
     openLibrary: () => openLib(),
+    // Nov 28: a message dragged in from the chat dock lands where it was dropped (the bubble itself moves).
+    over: (cx, cy) => { const r = scroller.getBoundingClientRect(); return cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom; },
+    placeAt(id, cx, cy, grab = { x: 0, y: 0 }) {
+      const p = local({ clientX: cx, clientY: cy }), k = scaleOf();
+      save({ pos: { ...free().pos, [id]: { x: Math.round(p.x - grab.x / k), y: Math.round(p.y - grab.y / k) } } });
+    },
     update(next) {
       const atEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
       x = next;

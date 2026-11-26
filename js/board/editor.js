@@ -437,7 +437,7 @@ export class Editor {
       const el = sel[0];
       if (el.type === 'line') {
         const lg = lineGeom(el, this.byId);
-        if (el.locked) { o.append(lockBadge(lg.bbox)); return; }
+        if (el.locked) return;
         const pt = (which, p) => h('div', { class: ['ov-pt', (which === 'a' ? el.a : el.b)?.id && 'is-bound'], 'data-handle': which, style: { left: `${p.x}px`, top: `${p.y}px` } });
         o.append(pt('a', lg.a), pt('b', lg.b));
         return;
@@ -452,6 +452,9 @@ export class Editor {
         o.append(wrap);
         o = wrap;
       }
+      // Nov 28: a locked object gets no outline and no lock badge — its own border stays as it is (also while
+      // its menu is open). Being locked shows in its menu (Unlock) and in the context bar.
+      if (el.locked && !live) return;
       o.append(box(r, `ov-sel${el.locked ? ' is-locked' : ''}`));
       if (live) {
         o.append(h('div', { class: 'ov-rot-tag', style: { left: `${r.x + r.w / 2}px`, top: `${r.y - 46 / z}px`, transform: `translate(-50%, -50%) rotate(${-rot}deg)` } }, `${Math.round(((rot % 360) + 360) % 360)}°`));

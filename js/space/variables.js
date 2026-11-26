@@ -905,6 +905,51 @@ export function mountVariables(root, el0, w) {
     });
   }
 
+  // Nov 28 — Free View's chat dock: the conversation and its composer sit in a side dock outside the canvas
+  // (panning and zooming move only the canvas). No header, outline or divider. Drag a message from the dock
+  // onto the canvas to place that bubble there; placed messages show only on the canvas, the rest stay here.
+  // The toggle on the dock's edge hides it (the canvas takes the full width) and brings it back as it was.
+  let dockScroll = null;
+  function fvDock(x, fv, editingHere, compose) {
+    const shown = store.get('architect.vr.dock', true);
+    const pos = x.free?.pos || {};
+    const list = h('div', { class: 'vr-msgs sc-list vr-dock-list', role: 'log' }, msgRows(x, (x.notes || []).filter((m) => !pos[m.id])));
+    const dock = h('div', { class: 'vr-dock', hidden: !shown }, list, editingHere ? editBar(x) : null, compose);
+    const tab = h('button', {
+      type: 'button', class: ['vr-dock-tab', shown && 'is-open'], 'aria-pressed': String(shown),
+      'aria-label': shown ? 'Hide the chat' : 'Show the chat', 'data-tip': shown ? 'Hide the chat' : 'Show the chat',
+      onclick: () => { dockScroll = list.scrollTop; store.set('architect.vr.dock', !shown); render(); },
+    }, icon(shown ? 'chevronRight' : 'chevronLeft', 15));
+    list.addEventListener('scroll', () => { dockScroll = list.scrollTop; }, { passive: true });
+    requestAnimationFrame(() => { list.scrollTop = dockScroll ?? list.scrollHeight; });
+    // drag a bubble out of the dock and onto the canvas
+    list.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || e.target.closest('button, a, video, input, textarea, [contenteditable="true"]')) return;
+      const row = e.target.closest('.sc-msg[data-id]');
+      if (!row) return;
+      const id = row.dataset.id, x0 = e.clientX, y0 = e.clientY, r = row.getBoundingClientRect();
+      let ghost = null;
+      const mv = (ev) => {
+        if (!ghost) {
+          if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return;
+          ghost = row.cloneNode(true); ghost.classList.add('vr-dock-ghost');
+          Object.assign(ghost.style, { width: `${r.width}px`, left: `${r.left}px`, top: `${r.top}px` });
+          document.body.append(ghost); row.classList.add('is-lifting');
+        }
+        ghost.style.transform = `translate(${ev.clientX - x0}px, ${ev.clientY - y0}px)`;
+        ghost.classList.toggle('is-over', fv.over(ev.clientX, ev.clientY));
+      };
+      const up = (ev) => {
+        window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up);
+        if (!ghost) return;
+        ghost.remove(); row.classList.remove('is-lifting');
+        if (fv.over(ev.clientX, ev.clientY)) fv.placeAt(id, ev.clientX, ev.clientY, { x: x0 - r.left, y: y0 - r.top });
+      };
+      window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+    });
+    return h('div', { class: ['vr-fv-split', !shown && 'is-dock-off'] }, fv.el, tab, dock);
+  }
+
   function chat(x) {
     if (editing && (editing.entry !== x.id || !(x.notes || []).some((m) => m.id === editing.id))) editing = null;
     const editingHere = !!editing;
@@ -960,6 +1005,7 @@ export function mountVariables(root, el0, w) {
         },
         paste: async (notes, fp) => patchEntry(x.id, (e) => ({ notes: [...(e.notes || []), ...notes].slice(-MAX_NOTES), free: { ...(e.free || {}), ...fp, on: true } })),
         library: libraryOf(x),
+        dock: true,
       });
     }
     const toggle = h('button', {
@@ -980,14 +1026,15 @@ export function mountVariables(root, el0, w) {
       h('span', { class: 'vr-chat-name' }, x.name),
       h('span', { class: 'vr-chat-sec' }, pathOf(x.section)),
       ...tools);
-    const wrap = h('div', { class: ['vr-chat is-sc', fvOn && 'is-free'] }, head,
+    const compose = h('div', { class: ['vr-compose sc-compose', editingHere && 'is-editing'] },
+      h('button', { class: ['sc-plus', sending && 'is-busy'], type: 'button', 'aria-label': 'Add a photo', disabled: sending, onclick: async () => { const fs = await pickMedia({ accept: 'image/*,video/*' }); if (fs.length) sendFiles(x.id, fs); } },
+        sending ? h('span', { class: 'dots-loader sm' }, h('i'), h('i'), h('i')) : icon('plus', 18)),
+      ta);
+    const wrap = h('div', { class: ['vr-chat is-sc', fvOn && 'is-free', free && 'has-dock'] }, head,
       finding ? findBar() : null,
-      free ? free.el : h('div', { class: 'vr-msgs sc-list', role: 'log' }, orderRows(x)),
-      editingHere ? editBar(x) : null,
-      h('div', { class: ['vr-compose sc-compose', editingHere && 'is-editing'] },
-        h('button', { class: ['sc-plus', sending && 'is-busy'], type: 'button', 'aria-label': 'Add a photo', disabled: sending, onclick: async () => { const fs = await pickMedia({ accept: 'image/*,video/*' }); if (fs.length) sendFiles(x.id, fs); } },
-          sending ? h('span', { class: 'dots-loader sm' }, h('i'), h('i'), h('i')) : icon('plus', 18)),
-        ta));
+      free ? fvDock(x, free, editingHere, compose) : h('div', { class: 'vr-msgs sc-list', role: 'log' }, orderRows(x)),
+      free ? null : editingHere ? editBar(x) : null,
+      free ? null : compose);
     wrap.addEventListener('paste', (e) => { const fs = mediaFiles(e.clipboardData); if (fs.length) { e.preventDefault(); sendFiles(x.id, fs); } });
     wrap.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); wrap.classList.add('is-drop'); } });
     wrap.addEventListener('dragleave', (e) => { if (!wrap.contains(e.relatedTarget)) wrap.classList.remove('is-drop'); });

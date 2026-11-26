@@ -194,12 +194,11 @@ export function mountBoard(root, boardId, opts = {}) {
         h('span', { class: 'bp-mark', 'aria-hidden': 'true' }, 'Blueprint'),
         title,
         status),
+      // Nov 28: one compact pill — Timer + Reactions, camera, monitor, your avatar ⌄. Collaborators show as small
+      // overlapping faces on the avatar (never a wide badge), and only when someone else is here.
       space ? h('div', { class: 'bp-pill bp-pill-live' },
-        topUndo, topRedo,
-        h('span', { class: 'bp-psep show-sm', 'aria-hidden': 'true' }),
-        peoplePill,
         live.reactBtn, live.camBtn, live.presentBtn,
-        h('span', { class: 'bp-psep', 'aria-hidden': 'true' }),
+        h('span', { class: 'lv-peers-wrap' }, peoplePill),
         live.profileBtn) : h('div', { class: 'bp-pill' },
         topUndo, topRedo,
         h('span', { class: 'bp-psep show-sm', 'aria-hidden': 'true' }),
@@ -367,11 +366,11 @@ export function mountBoard(root, boardId, opts = {}) {
     // Sticky Note, Text, Arrow, Pen, dashed Area, Shapes, + Insert (Image, Video, Objects). Undo / Redo sit in
     // their own pill below. Every canvas uses this layout; each keeps its own tools.
     const insertBtn = tbtn(null, 'plus', 'Insert', (a) => insertFly(a), { flyout: true });
-    const arrowBtn = space ? tbtn('line', 'arrow', 'Arrow (L)', () => { editor.setOpt('line', 'arrow'); editor.setTool('line'); }) : null;
+    const arrowBtn = space ? tbtn('line', 'arrow', 'Arrow (L)', (a) => { editor.setTool('line'); lineFly(a); }, { flyout: true }) : null;
     const areaBtn = space ? tbtn('border', 'borderBox', 'Area (B)', () => { editor.setOpt('border', 'box'); editor.setTool('border'); }) : null;
     const history = h('div', { class: 'bp-tools bp-history', role: 'toolbar', 'aria-label': 'Undo and redo' }, undoBtn, redoBtn);
     if (space) toolbar.append(
-      tbtn('select', 'select', 'Select (V)', () => editor.setTool('select')),
+      tbtn('select', 'pointerFill', 'Select (V)', () => editor.setTool('select')),
       stickyBtn,
       tbtn('text', 'text', 'Text (T)', () => editor.setTool('text')),
       arrowBtn,
@@ -380,7 +379,7 @@ export function mountBoard(root, boardId, opts = {}) {
       shapeBtn,
       insertBtn);
     else toolbar.append(
-      tbtn('select', 'select', 'Select (V)', () => editor.setTool('select')),
+      tbtn('select', 'pointerFill', 'Select (V)', () => editor.setTool('select')),
       tbtn('hand', 'hand', 'Hand (H · hold Space)', () => editor.setTool('hand')),
       sep(),
       stickyBtn,
@@ -417,7 +416,7 @@ export function mountBoard(root, boardId, opts = {}) {
         b.classList.toggle('is-on', k === active);
         b.setAttribute('aria-pressed', String(k === active));
       }
-      shapeBtn.replaceChildren(icon(editor.opts.shape || 'rect', 20));
+      shapeBtn.replaceChildren(icon(space ? 'shapesGroup' : editor.opts.shape || 'rect', 20));
       if (!space) lineBtn.replaceChildren(icon(editor.opts.line === 'line' ? 'line' : 'arrow', 20));
       penBtn.replaceChildren(icon(editor.tool === 'eraser' ? 'eraser' : editor.opts.pen === 'highlighter' ? 'highlighter' : 'pen', 20));
       stickyBtn.querySelector('.ic')?.style.setProperty('color', editor.tool === 'sticky' ? '' : '');

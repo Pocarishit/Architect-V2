@@ -484,3 +484,205 @@ export function colorPicker(anchor, current, onPick) {
   popover(anchor, h('div', { class: 'pop' }, h('div', { class: 'pop-label' }, 'Zone color'), grid, custom), { side: 'bottom', align: 'start', gap: 8 });
 }
 export { uid };
+
+/* ---------------- Nov 28: the space's Library as one zoomable map ----------------
+ * Every chat in the space is a folder holding the Zone Cubes captured from it; chats sit inside their
+ * subsection. Zoom out to see a subsection's chats, out again to see the space's subsections; double-click a
+ * chat or subsection to zoom into it. Cubes are arranged inside their own chat (they never move between chats
+ * here). It reads and writes the space's own source, so a shared space's Library is the same for both members,
+ * and only this space's chats appear (nothing from personal spaces).
+ * spec: { name, root, sections(), entries(), patchEntry(id, fn), store(key, val?) }
+ */
+export function openSpaceLibrary(spec) {
+  const { layer, close } = overlay('is-library is-spacelib', () => { offAuto(); });
+  const world = h('div', { class: 'zn-lib-world zl-world' });
+  const vp = h('div', { class: 'zn-lib-vp has-grid' }, world);
+  const crumb = h('div', { class: 'zl-crumb' });
+  const bar = h('div', { class: 'zn-corner' },
+    h('button', { type: 'button', class: 'bpc-btn', 'aria-label': 'Zoom out a level', title: 'Zoom out a level', onclick: () => up() }, icon('collapse', 16)),
+    h('button', { type: 'button', class: 'bpc-btn', 'aria-label': 'Fit everything', title: 'Fit', onclick: () => fitAll() }, icon('fit', 16)),
+    h('button', { type: 'button', class: 'bpc-btn', 'aria-label': 'Close', title: 'Close (Esc)', onclick: close }, icon('close', 16)));
+  layer.setAttribute('aria-label', `${spec.name || 'Space'} · Library`);
+  layer.append(vp, crumb, bar);
+  const CW = 220, CH = 190, PAD = 28, FH = 54, GAP = 56, SH = 86, SGAP = 160;
+  let cam = { x: 40, y: 40, z: 1, ...(spec.store('cam') || {}) };
+  let focus = []; // breadcrumb: [{ kind, id, name, rect }]
+  let rects = new Map(); // 'c:<entryId>' / 's:<sectionId>' → world rect
+  const apply = () => {
+    world.style.transform = `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})`;
+    world.style.setProperty('--iz', String(1 / Math.min(1, cam.z)));
+    vp.style.backgroundPosition = `${cam.x}px ${cam.y}px`; vp.style.backgroundSize = `${22 * cam.z}px ${22 * cam.z}px`;
+    layer.classList.toggle('is-far', cam.z < 0.32);
+  };
+  let camT = 0;
+  const saveCam = () => { clearTimeout(camT); camT = setTimeout(() => spec.store('cam', { x: Math.round(cam.x), y: Math.round(cam.y), z: Math.round(cam.z * 1000) / 1000 }), 400); };
+  const zoomTo = (r, pad = 60, maxZ = 1.4) => {
+    const z = Math.max(0.05, Math.min(maxZ, (vp.clientWidth - pad * 2) / r.w, (vp.clientHeight - pad * 2) / r.h));
+    cam = { z, x: vp.clientWidth / 2 - (r.x + r.w / 2) * z, y: vp.clientHeight / 2 - (r.y + r.h / 2) * z };
+    world.classList.add('is-gliding'); apply(); saveCam(); setTimeout(() => world.classList.remove('is-gliding'), 320);
+  };
+  function zoomBy(k, cx = vp.clientWidth / 2, cy = vp.clientHeight / 2) {
+    const z1 = Math.min(3, Math.max(0.05, cam.z * k));
+    cam = { z: z1, x: cx - (cx - cam.x) * (z1 / cam.z), y: cy - (cy - cam.y) * (z1 / cam.z) };
+    apply(); saveCam();
+  }
+  // the hierarchy: subsections (any depth under the root, flattened in order) → their chats; chats right in
+  // the root go under the space's own name.
+  function groups() {
+    const secs = spec.sections();
+    const chatsIn = (id) => spec.entries().filter((e) => e.section === id && !e.kind);
+    const root = spec.root;
+    const list = [{ id: root, name: spec.name || 'General', depth: 0 }];
+    const walk = (pid, depth) => {
+      for (const q of secs.filter((x) => x.parent === pid)) { list.push({ id: q.id, name: q.name, depth }); walk(q.id, depth + 1); }
+    };
+    walk(root, 0);
+    return list.map((g) => ({ ...g, chats: chatsIn(g.id) })).filter((g) => g.chats.length);
+  }
+  const folderSize = (cubes) => {
+    const mx = Math.max(0, ...cubes.map((c) => (c.x || 0) + CW)), my = Math.max(0, ...cubes.map((c) => (c.y || 0) + CH));
+    return { w: Math.max(360, mx + PAD * 2), h: Math.max(220, my + PAD * 2) + FH };
+  };
+  function paint() {
+    rects = new Map();
+    const gs = groups();
+    const nodes = [];
+    let gx = 0, gy = 0, rowH = 0;
+    const maxRowW = 2600;
+    for (const g of gs) {
+      // lay the group's chats out in rows
+      let cx = 40, cy = SH, cRowH = 0, gw = 0;
+      const folders = [];
+      for (const e of g.chats) {
+        const cubes = e.library?.cubes || [];
+        const fs = folderSize(cubes);
+        if (cx > 40 && cx + fs.w > 1500) { cx = 40; cy += cRowH + GAP; cRowH = 0; }
+        folders.push({ e, cubes, x: cx, y: cy, ...fs });
+        cx += fs.w + GAP; cRowH = Math.max(cRowH, fs.h); gw = Math.max(gw, cx);
+      }
+      const gh = cy + cRowH + 40;
+      gw = Math.max(gw - GAP + 40, 480);
+      if (gx > 0 && gx + gw > maxRowW) { gx = 0; gy += rowH + SGAP; rowH = 0; }
+      const gr = { x: gx, y: gy, w: gw, h: gh };
+      rects.set(`s:${g.id}`, gr);
+      const region = h('div', { class: 'zl-sec', 'data-sec': g.id, style: { left: `${gr.x}px`, top: `${gr.y}px`, width: `${gr.w}px`, height: `${gr.h}px` } },
+        h('div', { class: 'zl-sec-name' }, g.name), h('div', { class: 'zl-sec-count' }, `${g.chats.length} chat${g.chats.length === 1 ? '' : 's'}`));
+      for (const f of folders) {
+        const fr = { x: gr.x + f.x, y: gr.y + f.y, w: f.w, h: f.h };
+        rects.set(`c:${f.e.id}`, fr);
+        region.append(folderEl(f, g));
+      }
+      nodes.push(region);
+      gx += gw + SGAP; rowH = Math.max(rowH, gh);
+    }
+    if (!gs.length) nodes.push(h('div', { class: 'zl-empty' }, 'No Zone Cubes in this space yet — capture a zone in a chat’s Free View and it lands here, in that chat’s folder.'));
+    world.replaceChildren(...nodes);
+    paintCrumb();
+  }
+  function folderEl(f, g) {
+    const n = h('div', { class: 'zl-folder', 'data-entry': f.e.id, style: { left: `${f.x}px`, top: `${f.y}px`, width: `${f.w}px`, height: `${f.h}px` } },
+      h('div', { class: 'zl-folder-head' }, icon('folder', 16), h('b', {}, f.e.name), h('span', {}, `${f.cubes.length} zone${f.cubes.length === 1 ? '' : 's'}`)),
+      h('div', { class: 'zl-folder-body' }, ...f.cubes.map((c) => cubeEl(c, f.e))));
+    n.dataset.sec = g.id; n.dataset.secName = g.name;
+    return n;
+  }
+  function cubeEl(cube, e) {
+    const n = h('div', { class: 'zn-cube', tabindex: 0, 'data-cube': cube.id, style: { left: `${PAD + (cube.x || 0)}px`, top: `${PAD + (cube.y || 0)}px`, '--zc': cube.color } },
+      h('div', { class: 'zn-cube-face' }, miniPreview(cube)),
+      h('div', { class: 'zn-cube-foot' }, h('i'), h('span', {}, cube.name)));
+    const openIt = () => openHere(cube, { onPresent: () => present(cube, { onSaveSeq: (seq) => patchCube(e.id, cube.id, { seq }) }) });
+    n.addEventListener('dblclick', (ev) => { ev.stopPropagation(); openIt(); });
+    n.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); openIt(); } });
+    n.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      menu({ x: ev.clientX, y: ev.clientY }, [
+        { header: cube.name },
+        { label: 'Open here', icon: 'eye', kbd: 'Dbl-click', onSelect: openIt },
+        { label: 'Present', icon: 'play', onSelect: () => present(cube, { onSaveSeq: (seq) => patchCube(e.id, cube.id, { seq }) }) },
+        { label: 'Copy (then paste on a canvas)', icon: 'copy', onSelect: () => setClip(cube) },
+        { label: 'Rename…', icon: 'edit', onSelect: async () => { const nm = await promptDialog('Rename cube', { value: cube.name, maxLength: 80 }); if (nm?.trim()) patchCube(e.id, cube.id, { name: nm.trim() }); } },
+      ]);
+    });
+    // arrange inside its own chat (it stays in that folder)
+    n.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return;
+      ev.stopPropagation();
+      const sx = ev.clientX, sy = ev.clientY, x0 = cube.x || 0, y0 = cube.y || 0;
+      let moved = false;
+      n.setPointerCapture(ev.pointerId);
+      const mv = (m) => {
+        if (!moved && Math.hypot(m.clientX - sx, m.clientY - sy) < 4) return;
+        moved = true; n.classList.add('is-held');
+        n.style.left = `${PAD + Math.max(0, x0 + (m.clientX - sx) / cam.z)}px`; n.style.top = `${PAD + Math.max(0, y0 + (m.clientY - sy) / cam.z)}px`;
+      };
+      const upP = (m) => {
+        n.removeEventListener('pointermove', mv); n.removeEventListener('pointerup', upP); n.classList.remove('is-held');
+        if (moved) patchCube(e.id, cube.id, { x: Math.round(Math.max(0, x0 + (m.clientX - sx) / cam.z)), y: Math.round(Math.max(0, y0 + (m.clientY - sy) / cam.z)) });
+      };
+      n.addEventListener('pointermove', mv); n.addEventListener('pointerup', upP);
+    });
+    return n;
+  }
+  function patchCube(entryId, cubeId, p) {
+    spec.patchEntry(entryId, (e) => ({ library: { ...(e.library || {}), cubes: (e.library?.cubes || []).map((c) => (c.id === cubeId ? { ...c, ...p } : c)) } }));
+    paint();
+  }
+  function dive(step, go = true) {
+    const key = `${step.kind}:${step.id}`;
+    if (step.kind === 's') focus = [step]; else focus = [...focus.filter((f) => f.kind === 's'), step];
+    paintCrumb();
+    if (go && rects.has(key)) zoomTo(rects.get(key), 60, step.kind === 'c' ? 1.3 : 1);
+  }
+  function up() {
+    focus.pop();
+    const last = focus[focus.length - 1];
+    if (last && rects.has(`${last.kind}:${last.id}`)) zoomTo(rects.get(`${last.kind}:${last.id}`)); else fitAll();
+    paintCrumb();
+  }
+  function fitAll() {
+    focus = []; paintCrumb();
+    const all = [...rects.entries()].filter(([k]) => k.startsWith('s:')).map(([, r]) => r);
+    if (!all.length) { cam = { x: 40, y: 40, z: 1 }; apply(); return; }
+    const x0 = Math.min(...all.map((r) => r.x)), y0 = Math.min(...all.map((r) => r.y));
+    const x1 = Math.max(...all.map((r) => r.x + r.w)), y1 = Math.max(...all.map((r) => r.y + r.h));
+    zoomTo({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, 60, 1);
+  }
+  function paintCrumb() {
+    crumb.replaceChildren(
+      h('button', { type: 'button', class: 'zl-crumb-btn', onclick: () => fitAll() }, `${spec.name || 'Space'} · Library`),
+      ...focus.flatMap((f, i) => [h('span', { class: 'zl-crumb-sep' }, '›'), h('button', { type: 'button', class: 'zl-crumb-btn', onclick: () => { focus = focus.slice(0, i + 1); zoomTo(rects.get(`${f.kind}:${f.id}`) || { x: 0, y: 0, w: 800, h: 600 }); paintCrumb(); } }, f.name)]));
+  }
+  // pan / zoom (Ctrl/⌘ + wheel or pinch zooms; wheel pans)
+  vp.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.zn-cube')) return;
+    const sx = e.clientX, sy = e.clientY, c0 = { ...cam };
+    vp.setPointerCapture(e.pointerId); vp.classList.add('is-panning');
+    const mv = (ev) => { cam = { ...c0, x: c0.x + ev.clientX - sx, y: c0.y + ev.clientY - sy }; apply(); };
+    const upP = () => { vp.removeEventListener('pointermove', mv); vp.removeEventListener('pointerup', upP); vp.classList.remove('is-panning'); saveCam(); };
+    vp.addEventListener('pointermove', mv); vp.addEventListener('pointerup', upP);
+  });
+  vp.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const r = vp.getBoundingClientRect();
+    if (e.ctrlKey || e.metaKey) zoomBy(Math.exp(-e.deltaY * 0.0025), e.clientX - r.left, e.clientY - r.top);
+    else { cam = { ...cam, x: cam.x - e.deltaX, y: cam.y - e.deltaY }; apply(); saveCam(); }
+  }, { passive: false });
+  vp.addEventListener('contextmenu', (e) => e.preventDefault());
+  // double-click a chat folder or a subsection to zoom into it (found under the pointer: the pan captures it)
+  vp.addEventListener('dblclick', (e) => {
+    const t = document.elementFromPoint(e.clientX, e.clientY);
+    if (!t || t.closest('.zn-cube')) return;
+    const f = t.closest('.zl-folder'), sc = t.closest('.zl-sec');
+    if (f) { const e0 = spec.entries().find((q) => q.id === f.dataset.entry); dive({ kind: 's', id: f.dataset.sec, name: f.dataset.secName }, false); dive({ kind: 'c', id: f.dataset.entry, name: e0?.name || 'Chat' }); }
+    else if (sc) dive({ kind: 's', id: sc.dataset.sec, name: sc.querySelector('.zl-sec-name')?.textContent || '' });
+  });
+  // the other member's changes show up while it's open
+  let sig = '';
+  const sigOf = () => JSON.stringify(spec.entries().map((e) => [e.id, e.name, e.section, (e.library?.cubes || []).map((c) => [c.id, c.x, c.y, c.name])]));
+  const auto = setInterval(() => { if (layer.querySelector('.is-held')) return; const s2 = sigOf(); if (s2 !== sig) { sig = s2; paint(); } }, 1500);
+  const offAuto = () => clearInterval(auto);
+  sig = sigOf();
+  paint(); apply();
+  if (!spec.store('cam')) requestAnimationFrame(fitAll);
+  return { close, refresh: paint };
+}

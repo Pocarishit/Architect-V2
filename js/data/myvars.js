@@ -20,6 +20,11 @@ let row = null;        // remote row { id, ... }
 let remote = true;
 let loading = null;
 let timer = 0, poller = 0, dirty = false, saving = Promise.resolve();
+// Nov 27 — 'loading' | 'ok' | 'error' (couldn't reach your account yet: retrying) | 'local' (no table).
+// While it isn't 'ok', nothing is saved, so a failed load on one device can never overwrite (or duplicate)
+// what your account already has.
+let status = 'loading', retryT = 0, retryN = 0;
+export const myVarsStatus = () => status;
 const subs = new Set();
 
 const me = () => api.auth.current()?.user || null;
@@ -31,6 +36,24 @@ function reset() {
   past.length = 0; future.length = 0;
   clearTimeout(timer); clearInterval(poller);
   data = null; row = null; remote = true; loading = null; dirty = false; poller = 0;
+  status = 'loading'; clearTimeout(retryT); retryN = 0;
+}
+
+// The newest row wins if an account ever ended up with more than one.
+const pickRow = (rows) => (rows || []).slice().sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))[0] || null;
+function scheduleRetry() {
+  clearTimeout(retryT);
+  const wait = [1500, 4000, 10_000, 20_000][Math.min(retryN++, 3)];
+  retryT = setTimeout(async () => {
+    if (!uidKey) return;
+    try {
+      const rows = await api.db.select(TABLE, { filters: { user_id: uidKey } });
+      row = pickRow(rows);
+      status = 'ok'; retryN = 0;
+      if (row?.data) { data = normal(row.data); store.set(localKey(), data); dirty = false; }
+      emit();
+    } catch { scheduleRetry(); emit(); }
+  }, wait);
 }
 
 /** Load (once per account). Resolves to { data, fresh } — fresh: this account has never saved Variables. */
@@ -43,14 +66,15 @@ export function loadMyVars() {
     let fresh = false;
     try {
       const rows = await api.db.select(TABLE, id ? { filters: { user_id: id } } : {});
-      row = rows[0] || null;
+      row = pickRow(rows);
       if (row?.data) data = normal(row.data);
       else if (local) data = normal(local);
       else fresh = true;
+      status = 'ok';
     } catch (e) {
-      remote = false;
-      if (configured && !missing(e)) console.warn('Variables: falling back to this browser', e);
-      if (local) data = normal(local); else fresh = true;
+      if (!configured || missing(e)) { remote = false; status = 'local'; }
+      else { status = 'error'; console.warn('Variables: your account couldn’t be reached yet — retrying', e); scheduleRetry(); }
+      if (local) data = normal(local); else fresh = status === 'local';
     }
     data ||= { sections: null, entries: [], ideas: null, vfree: false, gone: [], rev: 0 };
     if (remote && !poller) {
@@ -146,11 +170,18 @@ export function flushMyVars() { clearTimeout(timer); return flush(); }
 
 function flush() {
   if (!remote || !dirty) return saving;
+  if (status !== 'ok') { clearTimeout(timer); timer = setTimeout(flush, 3000); return saving; }
   const snapshot = data;
   dirty = false;
   saving = saving.then(async () => {
     try {
-      if (row) await api.db.update(TABLE, row.id, { data: snapshot, updated_at: new Date().toISOString() });
+      if (!row) {
+        // Never a second row for the same account: look again right before creating one.
+        const again = await api.db.select(TABLE, { filters: { user_id: uidKey } }).catch(() => null);
+        if (again === null) throw new Error('offline');
+        row = pickRow(again);
+      }
+      if (row) { const ts = new Date().toISOString(); await api.db.update(TABLE, row.id, { data: snapshot, updated_at: ts }); row = { ...row, updated_at: ts }; }
       else row = await api.db.insert(TABLE, { data: snapshot });
     } catch (e) {
       if (missing(e)) remote = false; else { dirty = true; clearTimeout(timer); timer = setTimeout(flush, 4000); }
@@ -159,7 +190,7 @@ function flush() {
   return saving;
 }
 function flushNow() {
-  if (!remote || !dirty || !row) return;
+  if (!remote || !dirty || !row || status !== 'ok') return;
   dirty = false;
   try { api.db.update(TABLE, row.id, { data, updated_at: new Date().toISOString() }, { keepalive: true }); } catch {}
 }
@@ -174,7 +205,7 @@ async function pull() {
       if (st[0]?.updated_at === row.updated_at) return;
     }
     const rows = await api.db.select(TABLE, { filters: { user_id: uidKey } });
-    const r = rows[0];
+    const r = pickRow(rows);
     if (!r?.data || dirty) return;
     row = r;
     const next = normal(r.data);

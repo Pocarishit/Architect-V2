@@ -147,11 +147,14 @@ const KINDS = {
 
   fleeting(body, el, w) {
     w.setTitle('FLEETING MOMENTS');
+    // Nov 27: the four-corner expand control (Story full screen) replaces the pop-out icon; ··· stays last.
+    let ctl = null;
     w.tools.append(h('button', {
-      class: 'wg-btn', type: 'button', title: 'Fill the screen', 'aria-label': 'Fill the screen',
-      onclick: () => { const ed = w.host.editor(); if (ed) { ed.select([el.id]); ed.fitRect(w.current(), { maxZ: 2.5, pad: innerWidth < 720 ? 6 : 24 }); } },
-    }, icon('external', 14)));
-    return mountFleeting(body, el, w);
+      class: 'wg-btn fi-expand', type: 'button', title: 'Expand — full screen', 'aria-label': 'Expand to full screen',
+      onclick: () => { if (ctl?.toggleFull) ctl.toggleFull(); else { const ed = w.host.editor(); if (ed) { ed.select([el.id]); ed.fitRect(w.current(), { maxZ: 2.5, pad: innerWidth < 720 ? 6 : 24 }); } } },
+    }, icon('fullscreen', 14)));
+    ctl = mountFleeting(body, el, w);
+    return ctl;
   },
 
   timer(body, el, w) {

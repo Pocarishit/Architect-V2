@@ -17,6 +17,7 @@ import { SHAPES, rectOf } from './geometry.js';
 import { pdfInfo, openPdfViewer, PDF_HEAD } from './pdf.js';
 import { startCollab, colorFor, initials } from './collab.js';
 import { myAvatar } from '../data/profile.js';
+import { mountLive } from './live27.js';
 import { getPref, setPref, loadPrefs } from '../data/prefs.js';
 import { benchOnReady } from './bench.js';
 import { pickTask } from './taskcard.js';
@@ -176,13 +177,30 @@ export function mountBoard(root, boardId, opts = {}) {
     // Phones: undo / redo live up here, within thumb reach and never scrolled out of the dock.
     const topUndo = topBtn('undo', 'Undo · two-finger tap', () => editor.undo(), { class: 'bp-icon show-sm' });
     const topRedo = topBtn('redo', 'Redo · three-finger tap', () => editor.redo(), { class: 'bp-icon show-sm' });
-    const top = h('div', { class: 'bp-top' },
-      h('div', { class: 'bp-pill' },
+    // Nov 27 — the Architect Space's top bar: Reactions + Timer, Record / Call, Present Board, then your profile
+    // picture (with a chevron) for the More menu — Invite People included. No Back/Saved pill while the toolbar is
+    // open, no Search, Frames or standalone Invite icon. Blueprints keep their own bar.
+    const live = space ? mountLive({
+      editor, page, me: me || {}, boardId,
+      getCollab: () => collab,
+      menuItems: () => boardMenuItems(),
+      onInvite: opts.onInvite || (() => openShare()),
+      addFiles: (files, at) => addFiles(files, at),
+    }) : null;
+    if (live) cleanups.push(() => live.destroy());
+    const top = h('div', { class: ['bp-top', space && 'is-space-top'] },
+      h('div', { class: 'bp-pill bp-pill-home' },
         win ? null : h('a', { class: 'bp-icon', href: '#/', 'aria-label': 'Back to the Space', 'data-tip': kbd('Space (Ctrl+Esc)'), 'data-tip-pos': 'bottom' }, icon('back', 18)),
         h('span', { class: 'bp-mark', 'aria-hidden': 'true' }, 'Blueprint'),
         title,
         status),
-      h('div', { class: 'bp-pill' },
+      space ? h('div', { class: 'bp-pill bp-pill-live' },
+        topUndo, topRedo,
+        h('span', { class: 'bp-psep show-sm', 'aria-hidden': 'true' }),
+        peoplePill,
+        live.reactBtn, live.camBtn, live.presentBtn,
+        h('span', { class: 'bp-psep', 'aria-hidden': 'true' }),
+        live.profileBtn) : h('div', { class: 'bp-pill' },
         topUndo, topRedo,
         h('span', { class: 'bp-psep show-sm', 'aria-hidden': 'true' }),
         peoplePill,
@@ -202,6 +220,7 @@ export function mountBoard(root, boardId, opts = {}) {
       // Your face rides along with your cursor.
       me.avatar = await Promise.race([myAvatar().catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]);
       if (destroyed) return;
+      live?.setAvatar(me.avatar);
       let warned = false;
       collab = startCollab({
         editor, boardId, me, live: api.live,
@@ -344,7 +363,23 @@ export function mountBoard(root, boardId, opts = {}) {
     const lineBtn = tbtn('line', () => icon(editor.opts.line === 'line' ? 'line' : 'arrow', 20), 'Connector (L)', (a) => { editor.setTool('line'); lineFly(a); }, { flyout: true });
     const penBtn = tbtn('pen', () => icon(editor.tool === 'eraser' ? 'eraser' : editor.opts.pen === 'highlighter' ? 'highlighter' : 'pen', 20), 'Draw (P)', (a) => { if (editor.tool !== 'eraser') editor.setTool('pen'); penFly(a); }, { flyout: true });
     const stickyBtn = tbtn('sticky', 'sticky', 'Sticky note (N)', (a) => { editor.setTool('sticky'); stickyFly(a); }, { flyout: true });
-    toolbar.append(
+    // Nov 27 — the Architect Space toolbar (Architect's own dark colors; Miro for the layout only): Select,
+    // Sticky Note, Text, Arrow, Pen, dashed Area, Shapes, + Insert (Image, Video, Objects). Undo / Redo sit in
+    // their own pill below. Every canvas uses this layout; each keeps its own tools.
+    const insertBtn = tbtn(null, 'plus', 'Insert', (a) => insertFly(a), { flyout: true });
+    const arrowBtn = space ? tbtn('line', 'arrow', 'Arrow (L)', () => { editor.setOpt('line', 'arrow'); editor.setTool('line'); }) : null;
+    const areaBtn = space ? tbtn('border', 'borderBox', 'Area (B)', () => { editor.setOpt('border', 'box'); editor.setTool('border'); }) : null;
+    const history = h('div', { class: 'bp-tools bp-history', role: 'toolbar', 'aria-label': 'Undo and redo' }, undoBtn, redoBtn);
+    if (space) toolbar.append(
+      tbtn('select', 'select', 'Select (V)', () => editor.setTool('select')),
+      stickyBtn,
+      tbtn('text', 'text', 'Text (T)', () => editor.setTool('text')),
+      arrowBtn,
+      penBtn,
+      areaBtn,
+      shapeBtn,
+      insertBtn);
+    else toolbar.append(
       tbtn('select', 'select', 'Select (V)', () => editor.setTool('select')),
       tbtn('hand', 'hand', 'Hand (H · hold Space)', () => editor.setTool('hand')),
       sep(),
@@ -358,19 +393,26 @@ export function mountBoard(root, boardId, opts = {}) {
       sep(),
       tbtn(null, 'image', 'Upload image, video or PDF (U)', () => pickFiles()),
       tbtn(null, 'video', 'Add video or embed (K)', () => openEmbed()),
-      tbtn(null, 'templates', 'Templates', (a) => templateFly(a)),
-      h('span', { class: 'bp-tspace' }),
-      undoBtn, redoBtn);
-    page.append(toolbar);
+      tbtn(null, 'templates', 'Templates', (a) => templateFly(a)));
+    const rail = h('div', { class: 'bp-rail' }, toolbar, history);
+    page.append(rail);
+    function insertFly(anchor) {
+      const row = (ic, label, fn) => h('button', { type: 'button', class: 'tool-opt wide', onclick: () => { closeFloating(); fn(); } }, icon(ic, 18), h('span', {}, label));
+      popover(anchor, h('div', { class: 'pop' }, h('div', { class: 'opt-col' },
+        row('image', 'Image', () => pickFiles()),
+        row('video', 'Video', () => openEmbed()),
+        opts.objects ? row('widget', 'Objects', () => opts.objects(editor.viewCenter())) : null)), flyOpts);
+    }
 
     function syncTools() {
       const active = editor.tool === 'eraser' ? 'pen' : editor.tool;
+      if (space) arrowBtn.replaceChildren(icon(editor.opts.line === 'line' ? 'line' : 'arrow', 20));
       for (const [k, b] of toolBtns) {
         b.classList.toggle('is-on', k === active);
         b.setAttribute('aria-pressed', String(k === active));
       }
       shapeBtn.replaceChildren(icon(editor.opts.shape || 'rect', 20));
-      lineBtn.replaceChildren(icon(editor.opts.line === 'line' ? 'line' : 'arrow', 20));
+      if (!space) lineBtn.replaceChildren(icon(editor.opts.line === 'line' ? 'line' : 'arrow', 20));
       penBtn.replaceChildren(icon(editor.tool === 'eraser' ? 'eraser' : editor.opts.pen === 'highlighter' ? 'highlighter' : 'pen', 20));
       stickyBtn.querySelector('.ic')?.style.setProperty('color', editor.tool === 'sticky' ? '' : '');
     }
@@ -765,8 +807,9 @@ export function mountBoard(root, boardId, opts = {}) {
     });
 
     /* ---------- menus ---------- */
-    function boardMenu(anchor) {
-      menu(anchor, [
+    function boardMenu(anchor) { menu(anchor, boardMenuItems(), { align: 'end' }); }
+    function boardMenuItems() {
+      return [
         { label: 'Share board', icon: 'share', onSelect: openShare },
         { label: 'Present frames', icon: 'present', onSelect: () => startPresent() },
         '-',
@@ -786,7 +829,7 @@ export function mountBoard(root, boardId, opts = {}) {
           : { label: 'Open as a window', icon: 'collapse', onSelect: () => { setPref('bpCompact', true).catch(() => {}); try { sessionStorage.setItem('architect.openWin', boardId); } catch {} go(''); } },
         win ? { label: 'Close window', icon: 'close', kbd: 'Ctrl+Esc', onSelect: () => win.onClose() } : null,
         { label: 'Blueprints open as a window', icon: 'layers', checked: getPref('bpCompact', true) !== false, onSelect: () => setPref('bpCompact', getPref('bpCompact', true) === false).catch(() => {}) },
-      ].filter(Boolean), { align: 'end' });
+      ].filter(Boolean);
     }
 
     // Play in sequence + voice notes on notes (Nov 22).

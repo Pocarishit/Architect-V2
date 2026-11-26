@@ -371,7 +371,7 @@ export function mountFreeView(o) {
     const content = {
       w: Math.round(maxX - minX + pad * 2), h: Math.round(maxY - minY + pad * 2),
       items: raw.map((q) => ({ ...q, x: Math.round(q.x - minX + pad), y: Math.round(q.y - minY + pad), w: Math.round(q.w), h: Math.round(q.h) })),
-      links: (f.links || []).filter((l) => ids.has(l.a) && ids.has(l.b)).map((l) => ({ a: l.a, b: l.b, arrow: l.arrow !== false })),
+      links: (f.links || []).filter((l) => ids.has(l.a) && ids.has(l.b)).map((l) => ({ a: l.a, b: l.b, arrow: l.arrow !== false, ...(l.side ? { side: true } : {}) })),
     };
     return { id: uid(), name: z.name, color: z.color, at: Date.now(), content, from: { zone: z.id } };
   }
@@ -461,7 +461,7 @@ export function mountFreeView(o) {
       } else cards.push({ ...(it.raw || { kind: it.kind, text: it.text, path: it.path }), id: nid, x: ox + it.x, y: oy + it.y, w: it.w, ...(it.kind === 'img' ? { h: it.h } : {}) });
     }
     const f = free();
-    const links = (c.links || []).map((l) => ({ id: uid(), a: map.get(l.a), b: map.get(l.b), arrow: l.arrow !== false })).filter((l) => l.a && l.b);
+    const links = (c.links || []).map((l) => ({ id: uid(), a: map.get(l.a), b: map.get(l.b), arrow: l.arrow !== false, ...(l.side ? { side: true } : {}) })).filter((l) => l.a && l.b);
     const zone = { id: uid(), name: cube.name, color: cube.color, x: ox, y: oy, w: c.w, h: c.h };
     await o.paste(notes, { pos: { ...f.pos, ...pos }, size: { ...f.size, ...size }, cards: [...f.cards, ...cards], links: [...f.links, ...links], zones: [...(f.zones || []), zone] });
     toast(`“${cube.name}” pasted.`, { ms: 1800 });
@@ -545,7 +545,9 @@ export function mountFreeView(o) {
     const undoB = btn(null, 'undo', 'Undo (Ctrl+Z)', () => history(true)); undoB.disabled = !hist.undo.length;
     const redoB = btn(null, 'redo', 'Redo (Ctrl+Shift+Z)', () => history(false)); redoB.disabled = !hist.redo.length;
     const resetB = btn(null, 'list', `Everything back to ${home}`, () => resetAll()); resetB.disabled = !laidOut;
-    tools.replaceChildren(...[
+    // Nov 27 — the Architect Space toolbar layout: tools in one rail, Undo / Redo in their own pill below.
+    tools.classList.add('is-split');
+    const mainTools = [
       btn(null, 'chevronLeft', 'Hide tools', () => setRail(false)),
       sep(),
       btn('move', 'select', 'Select (V)', () => setTool('move')),
@@ -563,11 +565,10 @@ export function mountFreeView(o) {
       o.media ? btn(null, 'image', 'Upload image (U)', () => addImage()) : null,
       zonesOn && o.library ? btn(null, 'layers', 'Library — Zone Cubes (B)', () => openLib()) : null,
       btn(null, 'grid', 'Dot grid (G)', () => setGrid(!gridOn), { on: gridOn }),
-      h('span', { class: 'bp-tspace' }),
-      undoB, redoB,
       sep(),
       btn(null, 'home', 'Back to the start', () => scroller.scrollTo({ left: L * zoom, top: 0, behavior: 'smooth' })),
-      resetB].filter(Boolean));
+      resetB].filter(Boolean);
+    tools.replaceChildren(h('div', { class: 'vr-fv-pill' }, ...mainTools), h('div', { class: 'vr-fv-pill is-hist' }, undoB, redoB));
     paintSelbar();
   }
   function paintSelbar() {
@@ -598,7 +599,7 @@ export function mountFreeView(o) {
     const opt = (v, ic, label) => h('button', { type: 'button', class: ['tool-opt wide', lastLink === v && 'is-on'], onclick: () => { lastLink = v; setTool('link'); closeFloating(); } }, icon(ic, 18), h('span', {}, label));
     popover(anchor, h('div', { class: 'pop' },
       h('div', { class: 'pop-label' }, `Drag from one ${noun} to another to connect`),
-      h('div', { class: 'opt-col' }, opt('arrow', 'arrow', 'Arrow'), opt('line', 'line', 'Line'))), flyOpts());
+      h('div', { class: 'opt-col' }, opt('arrow', 'arrow', 'Arrow'), opt('line', 'line', 'Line'), opt('side', 'layers', 'Show alongside (Present)'))), flyOpts());
   }
   function penFly(anchor) {
     const opt = (v, ic, label) => h('button', { type: 'button', class: lastPen === v ? 'is-on' : null, 'aria-label': label, title: label, onclick: () => { lastPen = v; setTool('pen'); closeFloating(); } }, icon(ic, 16), h('span', {}, label));
@@ -611,6 +612,7 @@ export function mountFreeView(o) {
     board.dataset.tool = t === 'pen' && lastPen === 'eraser' ? 'erase' : t;
     scroller.dataset.tool = t;
     paintTools();
+    if (flow) { try { draw(); } catch {} } // Show alongside links appear only while linking
   }
   function selectAll() {
     const f = free();
@@ -791,6 +793,7 @@ export function mountFreeView(o) {
       out.push(s('g', { class: ['vr-fv-shape', sel.shapes.has(sh.id) && 'is-picked'].filter(Boolean).join(' '), 'data-shape': sh.id }, shapeSvg(sh, 'hit'), shapeSvg(sh, '')));
     }
     for (const l of f.links) {
+      if (l.side && tool !== 'link') continue; // Show alongside: hidden once you're done linking
       const a = rectOf(l.a), b = rectOf(l.b);
       if (!a || !b) continue;
       const c = curve(a, b);
@@ -1260,6 +1263,16 @@ export function mountFreeView(o) {
       if (last) mark(last, false);
       const b = how === 'up' ? objAt(ev) : null;
       const links = free().links;
+      // Nov 27 — "Show alongside": links that decide what Present shows next to a message (not what's read
+      // next). Several selected messages link to the same object in one drag. Their lines show only while
+      // you're linking; the links stay.
+      if (lastLink === 'side' && b) {
+        const from = sel.msgs.has(a) && sel.msgs.size > 1 ? [...sel.msgs] : [a];
+        const add = from.filter((m) => m !== b && !links.some((l) => l.side && l.a === m && l.b === b)).map((m) => ({ id: uid(), a: m, b, arrow: false, side: true }));
+        if (add.length) { save({ links: [...links, ...add] }); toast(add.length > 1 ? `${add.length} messages will show ${b === a ? 'it' : 'this'} alongside in Present.` : 'Shown alongside in Present.', { ms: 1800 }); }
+        else draw();
+        return;
+      }
       if (b && b !== a && !links.some((l) => (l.a === a && l.b === b) || (l.a === b && l.b === a))) { save({ links: [...links, { id: uid(), a, b, arrow: lastLink !== 'line' }] }); setTool('move'); }
       else draw();
     });
@@ -1469,6 +1482,14 @@ export function mountFreeView(o) {
     tools,
     busy: () => busy,
     zoned: () => zonedMap(),
+    // Nov 27: fit everything into the view by changing the zoom only — nothing moves, nothing is saved.
+    fit() {
+      const bw = board.offsetWidth, bh = board.offsetHeight;
+      if (!bw || !bh || !scroller.clientWidth || !scroller.clientHeight) return;
+      zoom = Math.max(0.04, Math.min(1, Math.min(scroller.clientWidth / bw, scroller.clientHeight / bh) * 0.98));
+      fitSizer(); size(); draw();
+      scroller.scrollLeft = 0; scroller.scrollTop = 0;
+    },
     openLibrary: () => openLib(),
     update(next) {
       const atEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;

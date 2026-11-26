@@ -16,7 +16,7 @@
 //     deleted (a tombstone), so it doesn't come back from someone else's copy.
 // Side Chat and anything outside the shared category are never part of the payload.
 import { api } from './api.js';
-import { listShared, createShared, addMember, removeShared, meId } from './shared.js';
+import { listShared, createShared, addMember, removeShared, meId, mutate } from './shared.js';
 import { myVars, setMyVars, loadMyVars, onMyVars, nextGone } from './myvars.js';
 import { store } from '../core/util.js';
 
@@ -30,7 +30,7 @@ const emit = () => { for (const fn of subs) { try { fn(items); } catch {} } };
 const syncedKey = (id) => `architect.varshare.synced.${id}`;
 
 export const sharedCats = () => items;
-export const foreignCats = () => items.filter((it) => it.user_id !== meId());
+export const foreignCats = () => items.filter((it) => it.user_id !== meId() && !it.data?.deleted);
 export function onShared(fn) { subs.add(fn); return () => subs.delete(fn); }
 export const setSharedSpace = (id) => { sharedSpaceId = id; };
 
@@ -222,6 +222,23 @@ async function syncMine(it) {
   store.set(baseKey(it.id), baseOf(merged));
 }
 
+function dropMineFor(it) {
+  const v = myVars();
+  const sec = (v?.sections || []).find((x) => x.share?.item === it.id);
+  if (!sec) return;
+  const gone = subtree(v.sections || [], sec.id);
+  setMyVars({ sections: (v.sections || []).filter((x) => !gone.has(x.id)), entries: (v.entries || []).filter((e) => !gone.has(e.section)) });
+}
+/** Nov 27: either member deletes a shared space. The row is marked deleted (any member may edit it) and, where
+ *  the database allows it, removed outright; the owner's devices finish the job on their next sync. */
+export async function deleteSharedCat(it) {
+  const who = api.auth.current()?.user?.username || '';
+  await mutate(it, (d) => { d.deleted = true; d.deletedBy = who; d.deletedAt = Date.now(); });
+  try { await removeShared(it); } catch { /* not the creator: the owner's sync removes it */ }
+  items = items.filter((x) => x.id !== it.id);
+  emit();
+}
+
 /** One sync round: read every varcat you can see; merge yours both ways. */
 export async function syncShared() {
   if (running) return;
@@ -230,6 +247,12 @@ export async function syncShared() {
     await loadMyVars();
     let rows = [];
     try { rows = await listShared(KIND); } catch { return; }
+    // Nov 27 — a member deleted one of your shared spaces (it's marked deleted): it goes from your account
+    // too, then the shared row itself, so it's gone for both of you and stays gone after a reload.
+    for (const it of rows.filter((x) => x.user_id === meId() && x.data?.deleted)) {
+      try { dropMineFor(it); await removeShared(it); } catch (e) { console.warn('Shared category delete', e); }
+    }
+    rows = rows.filter((x) => !x.data?.deleted);
     items = rows;
     for (const src of sources.values()) src._reapply?.();
     for (const it of rows) if (it.user_id === meId()) { try { await syncMine(it); } catch (e) { console.warn('Shared category sync', e); } }

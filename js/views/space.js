@@ -24,6 +24,7 @@ import { labelOf } from '../space/chat.js';
 import { openEmergencyRoom, comboWatcher } from '../space/er.js';
 import { mountMobile } from '../space/mobile.js';
 import { mountSidebar } from '../space/sidebar.js';
+import { openBlueprintsCanvas, watchJoins, actionFor, appKey, comboOf as comboKey } from '../space/nov27.js';
 import { startBench } from '../board/bench.js';
 import { pickTask, taskEl } from '../board/taskcard.js';
 import { myTasks } from '../data/tasks.js';
@@ -102,6 +103,8 @@ export function mountSpace(root) {
       space: true,
       mountWidget: createWidgetHost(slot.host),
       extendMenu,
+      onInvite: () => settings('members'),
+      objects: (at) => widgetPicker(at),
       onReady: (tools) => onReady(tools, slot, m),
     });
     slot.el = page.lastElementChild !== before ? page.lastElementChild : null;
@@ -147,7 +150,7 @@ export function mountSpace(root) {
 
   function flash(text) {
     page.querySelector('.space-flash')?.remove();
-    const tag = h('div', { class: 'space-flash', role: 'status' }, h('span', {}, text), h('small', {}, 'Tab to switch'));
+    const tag = h('div', { class: 'space-flash', role: 'status' }, h('span', {}, text), appKey('personal') ? h('small', {}, `${appKey('personal')} to switch`) : null);
     page.append(tag);
     setTimeout(() => tag.classList.add('out'), 1100);
     setTimeout(() => tag.remove(), 1600);
@@ -178,7 +181,28 @@ export function mountSpace(root) {
     // Once someone invites you, their Space wins over the solo one you may have started.
     const savedRow = rows.find((r) => r.id === saved);
     const invited = rows.find((r) => r.user_id !== me.id);
-    const pick = (savedRow && savedRow.user_id !== me.id ? savedRow : invited) || savedRow || rows[0];
+    let pick = (savedRow && savedRow.user_id !== me.id ? savedRow : invited) || savedRow || rows[0];
+    // Nov 27 — two people who invited each other end up with two Spaces with the same members. Everyone picks
+    // the same one: the oldest Space with exactly the same people. Spaces with different people stay separate,
+    // and nothing is merged or deleted.
+    if (rows.length > 1 && api.mode !== 'local') {
+      try {
+        const sig = new Map();
+        await Promise.all(rows.map(async (r) => {
+          const ppl = await Promise.race([api.rpc('board_people', { b: r.id }), new Promise((res) => setTimeout(() => res(null), 2500))]).catch(() => null);
+          if (Array.isArray(ppl)) sig.set(r.id, ppl.map((x) => x.user_id).filter(Boolean).sort().join(','));
+        }));
+        const mine = pick && sig.get(pick.id);
+        if (mine && mine.includes(',')) {
+          const twins = rows.filter((r) => sig.get(r.id) === mine).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || String(a.id).localeCompare(String(b.id)));
+          if (twins[0] && twins[0].id !== pick.id) pick = twins[0];
+        } else if (!mine || !mine.includes(',')) {
+          // You're alone in the one you'd open, but you share another: open the shared one (the oldest).
+          const shared = rows.filter((r) => (sig.get(r.id) || '').includes(',')).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || String(a.id).localeCompare(String(b.id)));
+          if (shared[0]) pick = shared[0];
+        }
+      } catch { /* offline: the usual choice */ }
+    }
     if (pick && savedRow && pick.id !== savedRow.id) setTimeout(() => toast('You joined a shared Space.', { ms: 3500 }), 1200);
     if (pick) { if (pick.id !== saved) setPref('spaceId', pick.id).catch(() => {}); return pick.id; }
     const id = uid();
@@ -296,6 +320,7 @@ export function mountSpace(root) {
     // Ticket cards come and go (dragged out, deleted, undone): keep the board's faded copies in step.
     let lastPop = [...poppedTickets()].sort().join();
     slot.offs.push(ed.on('change', () => { const sig = [...poppedTickets()].sort().join(); if (sig !== lastPop) { lastPop = sig; ticketsMoved(); } }));
+    slot.offs.push(watchJoins(ed));
     if (mode === m) mountDock();
     sweepDeadKeys();
     // An old Paths / Ticket board link brought you here: fly to your Path.
@@ -469,8 +494,9 @@ export function mountSpace(root) {
     page.querySelector('.space-dock')?.remove();
     const ed = editor();
     ed?.setViewOnly?.(viewMode);
-    if (phone()) { unmountSidebar(); mountPhone(ed); return; }
+    if (phone()) { unmountSidebar(); page.querySelector('.sb-reveal')?.remove(); mountPhone(ed); return; }
     mountSide(ed);
+    paintSidebarReveal();
     const cat = dockCatalog(ed);
     let suppress = false; // a long-press opened the customizer: the release isn't a tap
     const item = (ic, label, fn, extra = {}) => h('button', { class: 'sd-btn', type: 'button', 'aria-label': label, onclick: (e) => { if (suppress) { suppress = false; return; } fn(e.currentTarget); }, ...extra }, icon(ic, 20), h('span', {}, label));
@@ -509,9 +535,37 @@ export function mountSpace(root) {
       addWidget: (kind) => addWidget(kind, editor()?.viewCenter()),
       openSettings: (tab) => settings(tab),
       sharedSpaceId: () => ids.shared,
+      openBlueprints: () => openBlueprintsCanvas({ openBoard: (id) => openBoard(id) }),
+      toggleSidebar: () => toggleSidebar(),
+      signOut: () => api.auth.signOut(),
+      changePassword: () => changePassword(),
     });
   }
   function unmountSidebar() { side?.destroy(); side = null; }
+  // Nov 27 — hide / show the sidebar. Hidden, it collapses completely (the canvas takes the space) and a small
+  // toggle stays in the corner; showing it again restores the view it was on.
+  function paintSidebarReveal() {
+    page.querySelector('.sb-reveal')?.remove();
+    if (phone() || getPref('sidebar', true) !== false) return;
+    const k = appKey('sidebar');
+    page.append(h('button', { type: 'button', class: 'sb-reveal', title: `Show sidebar${k ? ` (${k})` : ''}`, 'aria-label': 'Show sidebar', onclick: () => toggleSidebar() }, sideIcon()));
+  }
+  function sideIcon() {
+    const sv = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    sv.setAttribute('viewBox', '0 0 24 24'); sv.setAttribute('width', '20'); sv.setAttribute('height', '20');
+    sv.setAttribute('fill', 'none'); sv.setAttribute('stroke', 'currentColor'); sv.setAttribute('stroke-width', '1.4');
+    sv.setAttribute('stroke-linecap', 'round'); sv.setAttribute('stroke-linejoin', 'round'); sv.setAttribute('aria-hidden', 'true');
+    sv.innerHTML = '<rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M9.5 5v14"/>';
+    return sv;
+  }
+  async function toggleSidebar() {
+    if (phone()) return;
+    const on = getPref('sidebar', true) !== false;
+    await setPref('sidebar', !on).catch(() => {});
+    mountDock();
+    paintSidebarReveal();
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+  }
   offs.push(() => unmountSidebar());
 
   /* ================= Mobile (Nov 22) =================
@@ -825,12 +879,14 @@ export function mountSpace(root) {
     const ed = editor();
     const at = world || ed?.viewCenter();
     const tool = (name, opt) => () => { if (opt) ed.setOpt(...opt); ed.setTool(name); toast('Drag on the canvas', { ms: 1200 }); };
-    const chrome = t?.page.classList.contains('show-chrome');
     // Nov 23b: a shorter menu that fits on a desktop screen — no "Add" heading (and no fold), one Border
     // tool, the standalone objects under Widget…, no "Move around" section; Theme, Performance test and
     // Keyboard shortcuts live in Settings.
+    // Nov 27: Paste here (added by the board) stays on top, then the creation tools, then your Blueprints,
+    // then Settings… alone. Switching to your personal space lives on the sidebar (and its shortcut); Invite
+    // is in the top bar's More menu; the toolbar and sidebar have their own toggles.
+    const bps = shortcutItems().filter((x) => x !== '-');
     return [
-      ...shortcutItems(),
       { label: 'Sticky note', icon: 'sticky', kbd: 'N', onSelect: () => ed.addEls([ed.makeEl('sticky', null, at)], { edit: true }) },
       { label: 'Text', icon: 'text', kbd: 'T', onSelect: () => ed.addEls([ed.makeEl('text', null, at)], { edit: true }) },
       { label: 'Shape', icon: 'rect', kbd: 'S', onSelect: tool('shape') },
@@ -841,17 +897,9 @@ export function mountSpace(root) {
       { label: 'Image or video', icon: 'image', kbd: 'U', onSelect: () => t.pickFiles() },
       { label: 'Video or link', icon: 'video', kbd: 'K', onSelect: () => t.openEmbed() },
       { label: 'Widget…', icon: 'widget', onSelect: () => widgetPicker(at) },
+      ...(bps.length ? ['-', ...bps] : []),
       '-',
-      { header: mode === 'personal' ? 'Personal space' : 'Shared space' },
-      { label: mode === 'personal' ? 'Switch to shared space' : 'Switch to personal space', icon: 'home', kbd: 'Tab', onSelect: toggleSpace },
-      { label: 'Invite…', icon: 'share', onSelect: () => settings('members') },
       { label: 'Settings…', icon: 'settings', onSelect: () => settings() },
-      // Independent of the sidebar: it always reflects (and flips) the toolbar alone.
-      { label: 'Show toolbar', icon: 'layers', checked: chrome, onSelect: () => setChrome(!chrome) },
-      innerWidth >= 720 ? { label: 'Show sidebar', icon: 'list', checked: getPref('sidebar', true) !== false, onSelect: async () => { await setPref('sidebar', getPref('sidebar', true) === false).catch(() => {}); mountDock(); } } : null,
-      '-',
-      { label: 'Change password', icon: 'key', onSelect: changePassword },
-      { label: 'Sign out', icon: 'logout', onSelect: () => api.auth.signOut() },
     ];
   }
 
@@ -1209,10 +1257,14 @@ export function mountSpace(root) {
   offs.push(() => window.removeEventListener('pointermove', onPointer));
 
   const onKeyDown = (e) => {
+    // Toggle Sidebar works from every view, not only the canvas (but never while typing or in a dialog).
+    if (!isTypingTarget(e.target) && !document.querySelector('.dlg') && actionFor(comboKey(e)) === 'sidebar') { e.preventDefault(); e.stopPropagation(); toggleSidebar(); return; }
     const ed = editor();
     if (!ed || getSurface() || isTypingTarget(e.target) || document.querySelector('.dlg') || ed.editingId) return;
     if (e.target instanceof Element && e.target.closest('.wg-body')) return;
-    if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); toggleSpace(); return; }
+    // Nov 27: Personal Space and Toggle Sidebar use the keys chosen in Settings → Shortcuts (Tab is only the default).
+    const act = actionFor(comboKey(e));
+    if (act === 'personal') { e.preventDefault(); e.stopPropagation(); toggleSpace(); return; }
     // E then R (or both together): walk into the Emergency Room.
     if (erCombo.test(e)) { e.preventDefault(); e.stopPropagation(); openER(); return; }
     const combo = comboOf(e);

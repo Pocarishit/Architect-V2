@@ -1,5 +1,6 @@
 // Settings: your face, the look of your Space, who's in it, integrations, personal API tokens, and the
 // Updates Catalogue (with custom CSS / JS tucked under it).
+import { shortcutsPane } from '../space/nov27.js';
 import { h } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { dialog, toast, confirmDialog } from '../core/ui.js';
@@ -17,7 +18,7 @@ import { PATTERNS, bgOf, setBg, paintBg } from '../space/backgrounds.js';
 import { updatesCanvas } from './updates.js';
 import { urlOf } from '../space/media.js';
 
-const TABS = [['profile', 'Profile'], ['general', 'General'], ['personalize', 'Personalize'], ['members', 'Members'], ['integrations', 'Integrations'], ['api', 'API'], ['custom', 'Updates & Fixes']];
+const TABS = [['profile', 'Profile'], ['general', 'General'], ['personalize', 'Personalize'], ['members', 'Members'], ['shortcuts', 'Shortcuts'], ['integrations', 'Integrations'], ['api', 'API'], ['custom', 'Updates & Fixes']];
 
 /** actions: hooks into the Space (shortcuts, bench, camera points, toolbar, snap, personal background). */
 export async function openSettings({ tab = 'profile', spaceId = null, actions = {} } = {}) {
@@ -30,11 +31,26 @@ export async function openSettings({ tab = 'profile', spaceId = null, actions = 
     nav.replaceChildren(...TABS.map(([id, label]) => h('button', { type: 'button', role: 'tab', class: cur === id ? 'is-on' : null, 'aria-selected': String(cur === id), onclick: () => { cur = id; paint(); } }, label)));
     pane.classList.toggle('is-canvas', cur === 'custom');
     pane.closest('.dlg')?.classList.toggle('is-wide', cur === 'custom');
-    pane.replaceChildren(({ profile, general, personalize, members, integrations, api: apiTab, custom: updatesTab })[cur]({ me, spaceId, actions }));
+    pane.replaceChildren(({ profile, general, personalize, members, shortcuts: (o) => shortcutsPane({ extra: o.actions?.shortcuts ? h('section', { class: 'set-section' }, h('h3', {}, 'Canvas'), h('button', { class: 'btn sm', type: 'button', onclick: () => o.actions.shortcuts() }, icon('keyboard', 14), 'All canvas shortcuts', h('kbd', {}, '?'))) : null }), integrations, api: apiTab, custom: updatesTab })[cur]({ me, spaceId, actions }));
   };
   paint();
   dialog({ title: 'Settings', width: 640, className: 'set-dlg', body: h('div', { class: 'set' }, nav, pane), actions: [{ label: 'Done', primary: true, value: true }] });
   requestAnimationFrame(() => pane.closest('.dlg')?.classList.toggle('is-wide', cur === 'custom'));
+}
+
+/** A Space (other than `except`) that you and `uname` are both in already, or null. */
+async function sharedWith(uname, except) {
+  const who = String(uname || '').replace(/^@/, '').trim().toLowerCase();
+  if (!who || api.mode === 'local') return null;
+  try {
+    const rows = await api.db.select('blueprints', { columns: 'id,kind,created_at', filters: { kind: 'space' }, order: 'created_at.asc' });
+    for (const r of rows) {
+      if (r.id === except) continue;
+      const ppl = await api.rpc('board_people', { b: r.id }).catch(() => []);
+      if ((ppl || []).some((p) => String(p.username || '').toLowerCase() === who)) return r.id;
+    }
+  } catch {}
+  return null;
 }
 
 /* ---------------- Profile ---------------- */
@@ -242,7 +258,18 @@ function members({ me, spaceId }) {
     if (!name) { input.focus(); return; }
     err.hidden = true;
     invite.disabled = true;
-    try { await api.rpc('space_invite', { b: spaceId, uname: name }); input.value = ''; toast(`${name} is in the Space.`); await load(); }
+    try {
+      // Nov 27 — reciprocal invites: if you two already share a Space, go there instead of making another.
+      const together = await sharedWith(name, spaceId);
+      if (together) {
+        input.value = '';
+        await setPref('spaceId', together).catch(() => {});
+        toast(`You and ${name} already share a Space — opening it.`, { ms: 2600 });
+        setTimeout(() => location.reload(), 900);
+        return;
+      }
+      await api.rpc('space_invite', { b: spaceId, uname: name }); input.value = ''; toast(`${name} is in the Space.`); await load();
+    }
     catch (e) { err.textContent = /function|space_invite/i.test(String(e?.message)) ? 'Run supabase/space.sql first.' : friendlyError(e); err.hidden = false; }
     finally { invite.disabled = false; }
   }

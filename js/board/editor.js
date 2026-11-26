@@ -458,7 +458,7 @@ export class Editor {
         return;
       }
       if (el.locked) { o.append(lockBadge(r)); return; }
-      if (this.activeId === el.id && !busy) {
+      if ((this.activeId === el.id || (this._touchUI && matchMedia('(hover: none)').matches)) && !busy) {
         // A playing video/embed takes every click, so it gets its own handle to move it by.
         o.append(h('div', { class: 'ov-grip', 'data-handle': 'grip', title: 'Drag to move', style: { left: `${r.x}px`, top: `${r.y}px` } }, icon('hand', 13), h('span', {}, 'Move')));
       }
@@ -991,6 +991,7 @@ export class Editor {
   }
 
   downSelect(start, handle, el) {
+    if (!start.touch) this._touchUI = false;
     if (handle) {
       const d = handle.dataset.handle;
       if (d.startsWith('qc-')) { this.beginAnchor(start, d.slice(3)); return; }
@@ -1004,6 +1005,44 @@ export class Editor {
       // Phones: a finger that lands on a locked object pans the canvas. Locked stays locked —
       // it isn't selected, dragged or edited, it just doesn't block getting around.
       if (start.touch && (el.locked || (el.group && this.els.some((x) => x.group === el.group && x.locked)))) { this.beginPan(start); return; }
+      // Nov 27 — desktop: pressing a locked object that isn't selected and dragging pans the canvas (no outline
+      // lights up while you pass over it); a still click selects it on release — a deliberate selection, with
+      // the normal selection border. It stays locked either way.
+      // Nov 27 — phones (Canva's touch behaviour): a finger on an object only moves the view. Nothing is selected
+      // when it lands; a tap selects it on release. Once it's a drag (or a pinch) it stays navigation until every
+      // finger lifts. Moving and resizing take a fresh gesture on the object's handles (Move / corners).
+      if (start.touch) {
+        this.beginPan({ ...start, lazy: true });
+        const g = this.g;
+        if (g && g.type === 'pan') {
+          const up0 = g.onUp;
+          g.onUp = (p, e, cancelled) => {
+            up0?.(p, e, cancelled);
+            if (g.panned || cancelled || this._navUntilUp) return;
+            this.quietSel = null;
+            this._touchUI = true;
+            if (!this.sel.has(el.id)) this.select(this.expandGroups([el.id]));
+            else this.renderOverlay();
+          };
+        }
+        return;
+      }
+      const lockedHere = el.locked || (el.group && this.els.some((x) => x.group === el.group && x.locked));
+      if (lockedHere && !start.shift && !this.sel.has(el.id)) {
+        this.beginPan({ ...start, lazy: true });
+        const g = this.g;
+        if (g && g.type === 'pan') {
+          const up0 = g.onUp;
+          g.onUp = (...a) => {
+            up0?.(...a);
+            if (g.panned) return;
+            this.quietSel = null;
+            this.select(this.expandGroups([el.id]));
+            if (start.link) window.open(start.link, '_blank', 'noopener');
+          };
+        }
+        return;
+      }
       start.el = el;
       start.wasSelected = this.sel.size === 1 && this.sel.has(el.id);
       if (start.shift) {
@@ -1079,6 +1118,7 @@ export class Editor {
     this.pointers.delete(e.pointerId);
     this.cancelLongPress();
     this.endTap(e, cancelled);
+    if (!this.pointers.size) setTimeout(() => { if (!this.pointers.size) this._navUntilUp = false; }, 0);
     const g = this.g;
     if (!g) return;
     if (g.type === 'pinch') {
@@ -1633,6 +1673,7 @@ export class Editor {
   }
 
   startPinch() {
+    this._navUntilUp = true; // Nov 27: after a pinch, everything until the last finger lifts is navigation
     if (this.g && this.g.type !== 'pinch') {
       const g = this.g;
       this.g = null;

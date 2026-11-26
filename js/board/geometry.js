@@ -174,7 +174,113 @@ export function lineGeom(line, byId) {
     tanA = sub(a, b);
     tanB = sub(b, a);
   }
+  // Nov 27 — by default a connector between two objects goes around anything in its way (recomputed whenever
+  // either end or another object moves; only the connector changes). "Allow intersections" (line.through)
+  // lets it pass straight through on purpose.
+  if (ra && rb && !line.through && byId) {
+    const detour = routeAround(line, ta, tb, a, sa, b, sb, pts, byId);
+    if (detour) {
+      pts = detour;
+      d = roundedPath(pts, 12);
+      tanA = sub(pts[0], pts[1]);
+      tanB = sub(pts[pts.length - 1], pts[pts.length - 2]);
+    }
+  }
   return { a, b, d, pts, tanA, tanB, bbox: bboxOf(pts) };
+}
+
+/* ---------------- obstacle-avoiding routes ---------------- */
+const ROUTE_CACHE = new Map(); // line id → { key, pts }
+const AVOID = new Set(['sticky', 'shape', 'text', 'image', 'video', 'embed', 'link', 'widget', 'pdf', 'taskcard']);
+const M = 18; // clearance around obstacles
+function segHitsRect(p, q, r) {
+  // Liang–Barsky
+  let t0 = 0, t1 = 1;
+  const dx = q.x - p.x, dy = q.y - p.y;
+  const P = [-dx, dx, -dy, dy], Q = [p.x - r.x, r.x + r.w - p.x, p.y - r.y, r.y + r.h - p.y];
+  for (let i = 0; i < 4; i++) {
+    if (P[i] === 0) { if (Q[i] < 0) return false; continue; }
+    const t = Q[i] / P[i];
+    if (P[i] < 0) { if (t > t1) return false; if (t > t0) t0 = t; } else { if (t < t0) return false; if (t < t1) t1 = t; }
+  }
+  return t1 - t0 > 1e-6;
+}
+const polyHits = (pts, r) => { for (let i = 1; i < pts.length; i++) if (segHitsRect(pts[i - 1], pts[i], r)) return true; return false; };
+function routeAround(line, ta, tb, a, sa, b, sb, pts, byId) {
+  const lo = { x: Math.min(a.x, b.x) - 400, y: Math.min(a.y, b.y) - 400, x2: Math.max(a.x, b.x) + 400, y2: Math.max(a.y, b.y) + 400 };
+  const obs = [];
+  for (const el of byId.values()) {
+    if (el === ta || el === tb || !AVOID.has(el.type) || el.rot) continue;
+    if (el.x > lo.x2 || el.y > lo.y2 || el.x + el.w < lo.x || el.y + el.h < lo.y) continue;
+    const r = { x: el.x, y: el.y, w: el.w, h: el.h };
+    // an object that holds either end (a frame-like container, or overlapping) isn't an obstacle
+    if (inside(a, r) || inside(b, r)) continue;
+    obs.push(r);
+  }
+  if (!obs.length) { ROUTE_CACHE.delete(line.id); return null; }
+  const key = `${a.x},${a.y},${sa},${b.x},${b.y},${sb}|${obs.map((r) => `${r.x},${r.y},${r.w},${r.h}`).join(';')}`;
+  const hit = ROUTE_CACHE.get(line.id);
+  if (hit && hit.key === key) return hit.pts;
+  const grown = obs.map((r) => ({ x: r.x - M, y: r.y - M, w: r.w + 2 * M, h: r.h + 2 * M }));
+  let out = null;
+  if (grown.some((r) => polyHits(pts, { x: r.x + M / 2, y: r.y + M / 2, w: r.w - M, h: r.h - M }))) out = gridRoute(a, sa, b, sb, grown);
+  if (ROUTE_CACHE.size > 800) ROUTE_CACHE.clear();
+  ROUTE_CACHE.set(line.id, { key, pts: out });
+  return out;
+}
+const inside = (p, r) => p.x > r.x && p.x < r.x + r.w && p.y > r.y && p.y < r.y + r.h;
+function gridRoute(a, sa, b, sb, grown) {
+  const s0 = push(a, sa, M + 4), e0 = push(b, sb, M + 4);
+  const xs = [...new Set([s0.x, e0.x, ...grown.flatMap((r) => [r.x, r.x + r.w])].map((v) => Math.round(v)))].sort((p, q) => p - q);
+  const ys = [...new Set([s0.y, e0.y, ...grown.flatMap((r) => [r.y, r.y + r.h])].map((v) => Math.round(v)))].sort((p, q) => p - q);
+  if (xs.length * ys.length > 4000) return null;
+  const blocked = (x, y) => grown.some((r) => x > r.x + 0.5 && x < r.x + r.w - 0.5 && y > r.y + 0.5 && y < r.y + r.h - 0.5);
+  const segFree = (p, q) => !grown.some((r) => segHitsRect(p, q, { x: r.x + 1, y: r.y + 1, w: r.w - 2, h: r.h - 2 }));
+  const sxi = xs.indexOf(Math.round(s0.x)), syi = ys.indexOf(Math.round(s0.y));
+  const exi = xs.indexOf(Math.round(e0.x)), eyi = ys.indexOf(Math.round(e0.y));
+  const id = (i, j) => i * ys.length + j;
+  // A* over grid nodes, cost = length + a penalty per bend
+  const open = [[0, sxi, syi, -1]];
+  const best = new Map([[id(sxi, syi) * 3 + 2, 0]]);
+  const prev = new Map();
+  const H = (i, j) => Math.abs(xs[i] - xs[exi]) + Math.abs(ys[j] - ys[eyi]);
+  let guard = 0, found = null;
+  while (open.length && guard++ < 20000) {
+    let k = 0;
+    for (let n = 1; n < open.length; n++) if (open[n][0] < open[k][0]) k = n;
+    const [f, i, j, dir] = open.splice(k, 1)[0];
+    const g0 = best.get(id(i, j) * 3 + (dir + 1)) ?? 0;
+    if (i === exi && j === eyi) { found = { i, j, dir }; break; }
+    void f;
+    for (const [di, dj, nd] of [[1, 0, 0], [-1, 0, 0], [0, 1, 1], [0, -1, 1]]) {
+      const ni = i + di, nj = j + dj;
+      if (ni < 0 || nj < 0 || ni >= xs.length || nj >= ys.length) continue;
+      if (blocked(xs[ni], ys[nj]) && !(ni === exi && nj === eyi)) continue;
+      if (!segFree({ x: xs[i], y: ys[j] }, { x: xs[ni], y: ys[nj] })) continue;
+      const g1 = g0 + Math.abs(xs[ni] - xs[i]) + Math.abs(ys[nj] - ys[j]) + (dir !== -1 && dir !== nd ? 60 : 0);
+      const key = id(ni, nj) * 3 + (nd + 1);
+      if (g1 >= (best.get(key) ?? Infinity)) continue;
+      best.set(key, g1);
+      prev.set(key, id(i, j) * 3 + (dir + 1));
+      open.push([g1 + H(ni, nj), ni, nj, nd]);
+    }
+  }
+  if (!found) return null;
+  const path = [];
+  let k = id(found.i, found.j) * 3 + (found.dir + 1);
+  while (k != null) {
+    const n = Math.floor(k / 3);
+    path.push({ x: xs[Math.floor(n / ys.length)], y: ys[n % ys.length] });
+    k = prev.get(k);
+  }
+  path.reverse();
+  // drop points that don't turn
+  const simple = [a, ...path, b].filter((p, i, arr) => {
+    if (i === 0 || i === arr.length - 1) return true;
+    const q = arr[i - 1], r = arr[i + 1];
+    return !((q.x === p.x && p.x === r.x) || (q.y === p.y && p.y === r.y));
+  });
+  return simple;
 }
 
 export function capPath(p, tan, size, kind) {

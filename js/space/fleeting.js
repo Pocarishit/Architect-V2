@@ -153,7 +153,9 @@ export function mountFleeting(root, el0, w, opts = {}) {
   const box = h('div', { class: ['fi', only && `is-only-${only}`] }, h('div', { class: 'fi-top' }, w.slot || only ? null : tabsRow, aside), stage, composer);
   root.append(box);
   // Title beside the tabs (like Path): the tab strip rides in the widget header, right after the name.
-  if (w.slot && !only) w.slot.replaceChildren(tabsRow);
+  // Nov 27: the header carries Story's day navigation as one group (‹ TODAY ›); there's no second toolbar row.
+  const navGroup = h('div', { class: 'fi-navgroup', role: 'group', 'aria-label': 'Day' });
+  if (w.slot && !only) w.slot.replaceChildren(tabsRow, navGroup);
 
   // Paste photos/videos straight into Story (or into Ideas → they land in today's story).
   box.addEventListener('paste', (e) => {
@@ -247,7 +249,13 @@ export function mountFleeting(root, el0, w, opts = {}) {
     input.placeholder = tab === 'story' ? (day === storyKey() ? 'narrate this moment…' : `add to ${shortDate(parseKey(day))}…`) : 'type an idea…';
     if (phoneStory()) input.placeholder = '';
     input.setAttribute('aria-label', tab === 'story' ? 'Narrate a moment' : 'Type an idea');
-    aside.replaceChildren(...(tab === 'story' ? [...(cal ? [] : dayNav()), ...(cal ? [] : [mediaBtn(), ...zoomBtns()]), calBtn(), fullBtn()] : tab === 'ideas' ? [viewSwitch()] : []));
+    // Nov 27: ‹ TODAY › lives in the top bar (TODAY opens the calendar); the image, − and + buttons and the
+    // standalone calendar icon are gone, and so is the second row: the timeline starts right under the top bar.
+    // Without a widget header (an embedded copy) the same group sits in the row instead.
+    const inHead = !!(w.slot && !only);
+    navGroup.replaceChildren(...(inHead && tab === 'story' ? dayNav() : []));
+    aside.replaceChildren(...(tab === 'story' ? (inHead ? [] : [...dayNav(), fullBtn()]) : tab === 'ideas' ? [viewSwitch()] : []));
+    box.classList.toggle('no-top', tab === 'story' && inHead);
     if (tab === 'ideas') input.placeholder = ideaView === 'shared' ? 'add to the shared pool…' : 'type an idea…';
     stopIdeas();
     stage.replaceChildren();
@@ -256,6 +264,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     if (v === 'ideas') mountIdeas();
     else if (v === 'story') {
       renderStory();
+      if (zoomT < minZoomT() - 0.001) { zoomT = minZoomT(); applyZoom(); }
       // Today opens around the current moment; other days open at first light.
       if (day === storyKey()) stage.scrollTop = Math.max(0, (PT + (storyMin() / 1440) * Number(tl.dataset.th)) * zoomT - stage.clientHeight * 0.45);
     }
@@ -918,10 +927,10 @@ export function mountFleeting(root, el0, w, opts = {}) {
     const d = parseKey(day);
     const step = (n) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); const k = keyOf(x); if (k <= today) { day = k; paint(); } };
     return [
-      h('button', { class: 'fi-nav', type: 'button', 'aria-label': 'Previous day', onclick: () => step(-1) }, icon('chevronLeft', 15)),
-      h('button', { class: ['fi-day', day === today && 'is-today'], type: 'button', title: 'Back to today', onclick: () => { day = today; paint(); } },
+      h('button', { class: 'fi-nav', type: 'button', 'aria-label': 'Previous day', onclick: () => { cal = false; step(-1); } }, icon('chevronLeft', 15)),
+      h('button', { class: ['fi-day', day === today && 'is-today', cal && 'is-on'], type: 'button', 'aria-pressed': String(cal), title: cal ? 'Back to the story' : 'Open the calendar — jump to a date', onclick: () => { cal = !cal; if (cal) { const dd = parseKey(day); month = new Date(dd.getFullYear(), dd.getMonth(), 1); } remember(); paint(); } },
         day === today ? 'TODAY' : d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase()),
-      h('button', { class: 'fi-nav', type: 'button', 'aria-label': 'Next day', disabled: day >= today, onclick: () => step(1) }, icon('chevronRight', 15)),
+      h('button', { class: 'fi-nav', type: 'button', 'aria-label': 'Next day', disabled: day >= today, onclick: () => { cal = false; step(1); } }, icon('chevronRight', 15)),
     ];
   }
 
@@ -958,7 +967,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     tl.dataset.th = TH;
     tl.dataset.extl = extL;
     if (day === storyKey()) { const now = storyMin(); tl.append(h('span', { class: 'fi-now', style: { top: `${yOf(now)}px`, '--sp': spOf(now).color }, title: `Now · ${clockOf(now)}` }, h('i'), h('b', {}, 'NOW'))); }
-    if (!list.length) tl.append(h('p', { class: 'fi-story-empty' }, day === storyKey() ? 'Nothing told yet today.' : 'An untold day.', h('br'), 'Click anywhere on the line to tell a moment, or drop photos and videos on it.'));
+    // Nov 27: an empty day shows just the timeline (clicking the line and dropping media still work).
     for (const f of list) tl.append(fragment(f, yOf));
     tl.append(guide, dragTime);
     applyZoom();
@@ -1189,8 +1198,16 @@ export function mountFleeting(root, el0, w, opts = {}) {
   }
   // Keep the moment under the pointer (or the middle of the view) where it is while the scale changes.
   function applyZoom() { if (tl) tl.style.zoom = zoomT === 1 ? '' : String(zoomT); }
+  // Nov 27: zooming out stops once the whole day — GM to NEW MORNING — fits the height of the view; more
+  // zoom-out input leaves the scale as it is instead of shrinking the timeline into empty space.
+  function minZoomT() {
+    const TH = tl ? Number(tl.dataset.th) : 0;
+    const full = PT + TH + PB;
+    if (!TH || !stage.clientHeight) return 0.4;
+    return Math.min(1, Math.max(0.05, stage.clientHeight / full));
+  }
   function setZoomT(z, at = null) {
-    z = Math.min(4, Math.max(0.4, z));
+    z = Math.min(4, Math.max(minZoomT(), z));
     if (!tl || Math.abs(z - zoomT) < 0.001) { zoomT = z; remember(); applyZoom(); return; }
     const sr = stage.getBoundingClientRect();
     const k = (sr.width / (stage.offsetWidth || 1)) || 1;       // the board's own zoom around the object
@@ -2040,6 +2057,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
   paint();
 
   return {
+    toggleFull: () => setFull(!full),
     update(next) {
       const changed = next.ideas !== el.ideas || next.story !== el.story || next.weekly !== el.weekly;
       const poolChanged = next.ideas !== el.ideas || next.story !== el.story || next.weekly !== el.weekly;

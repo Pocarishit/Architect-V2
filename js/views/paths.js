@@ -1,6 +1,6 @@
 import { h, delegate, isTypingTarget } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { menu, toast, promptDialog, confirmDialog, dialog } from '../core/ui.js';
+import { menu, toast, promptDialog, confirmDialog, dialog, popover, closeFloating } from '../core/ui.js';
 import { uid, posBetween, fmtDate, plural } from '../core/util.js';
 import { go } from '../core/router.js';
 import { api, friendlyError } from '../data/api.js';
@@ -244,20 +244,67 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
     return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long' });
   };
   const dayFull = (k) => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }); };
+  // Nov 27: Today, then exactly five upcoming days, then a calendar button. The strip rolls forward as Today
+  // changes. Any later date is opened from the calendar (it doesn't add tabs); while one is open, the calendar
+  // button is highlighted and names the date.
+  const STRIP = 5;
   function dayTabs() {
     const today = todayKey();
     const planned = new Map();
     for (const t of tasks) { const k = dayOfTask(t); if (k) planned.set(k, (planned.get(k) || 0) + 1); }
-    const keys = Array.from({ length: 7 }, (_, i) => (i ? addDays(today, i) : null));
-    for (const k of [...planned.keys()].sort()) if (!keys.includes(k)) keys.push(k); // plans further out keep a tab
-    return h('div', { class: 'pdays', role: 'tablist', 'aria-label': 'Day' }, keys.map((k, i) => {
+    const keys = Array.from({ length: STRIP + 1 }, (_, i) => (i ? addDays(today, i) : null));
+    const beyond = viewDay && !keys.includes(viewDay);
+    const pick = (k) => { if (viewDay === k) return; viewDay = k; picked = new Set(); composerFor = null; editing = null; render(); };
+    const calB = h('button', {
+      type: 'button', class: ['pday pday-cal', beyond && 'is-on'], 'aria-haspopup': 'dialog',
+      'aria-label': beyond ? `Calendar — showing ${dayFull(viewDay)}` : 'Open the calendar', title: beyond ? dayFull(viewDay) : 'Calendar — plan any date',
+      onclick: (e) => pathCalendar(e.currentTarget, { selected: viewDay || today, planned, onPick: (k) => pick(k === today ? null : k) }),
+    }, icon('calendar', 15));
+    return h('div', { class: 'pdays', role: 'tablist', 'aria-label': 'Day' }, ...keys.map((k, i) => {
       const n = k ? planned.get(k) || 0 : 0;
       return h('button', {
         type: 'button', role: 'tab', class: ['pday', viewDay === k && 'is-on', n && 'has-plan'], 'aria-selected': String(viewDay === k),
         title: k ? `${n ? `${n} planned` : 'Plan'} for ${dayFull(k)} — it becomes your path when that day starts` : 'Today’s path',
-        onclick: () => { if (viewDay === k) return; viewDay = k; picked = new Set(); composerFor = null; editing = null; render(); },
+        onclick: () => pick(k),
       }, dayLabel(k, i), n ? h('b', {}, String(n)) : null);
-    }));
+    }), calB);
+  }
+  // The full calendar, in Fleeting Moments' design: Doto month and year, month arrows, weekday row, round day
+  // buttons, today and the selected date highlighted. Picking a date opens that day's Path and Set-Points.
+  // Same availability as the tabs: today and any later day.
+  function pathCalendar(anchor, { selected, planned = new Map(), onPick }) {
+    const today = todayKey();
+    const [sy, sm] = selected.split('-').map(Number);
+    let month = new Date(sy, sm - 1, 1);
+    const box = h('div', { class: 'pcal' });
+    let pop = null;
+    const paintCal = () => {
+      const first = new Date(month.getFullYear(), month.getMonth(), 1);
+      const lead = (first.getDay() + 6) % 7; // Monday first
+      const cells = [];
+      for (let i = 0; i < lead; i++) cells.push(h('span', { class: 'fi-cal-gap' }));
+      const last = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+      for (let d = 1; d <= last; d++) {
+        const k = keyOf(new Date(month.getFullYear(), month.getMonth(), d));
+        const past = k < today;
+        const n = planned.get(k) || 0;
+        cells.push(h('button', {
+          type: 'button', disabled: past,
+          class: ['fi-cal-day', k === today && 'is-today', k === selected && 'is-sel', past && 'is-future', n && 'has-plan'],
+          'aria-label': `${dayFull(k)}${n ? `, ${n} planned` : ''}`, 'aria-pressed': String(k === selected),
+          onclick: () => { closeFloating(); onPick(k); },
+        }, String(d)));
+      }
+      box.replaceChildren(h('div', { class: 'fi-cal' },
+        h('div', { class: 'fi-cal-head' },
+          h('button', { class: 'fi-nav', type: 'button', 'aria-label': 'Previous month', onclick: () => { month = new Date(month.getFullYear(), month.getMonth() - 1, 1); paintCal(); } }, icon('chevronLeft', 18)),
+          h('span', { class: 'fi-cal-month' }, month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }).toUpperCase()),
+          h('button', { class: 'fi-nav', type: 'button', 'aria-label': 'Next month', onclick: () => { month = new Date(month.getFullYear(), month.getMonth() + 1, 1); paintCal(); } }, icon('chevronRight', 18))),
+        h('div', { class: 'fi-cal-dow', 'aria-hidden': 'true' }, ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((x) => h('span', {}, x))),
+        h('div', { class: 'fi-cal-grid' }, cells)));
+    };
+    paintCal();
+    popover(anchor, box, { class: 'pcal-pop', align: 'end' });
   }
   // Embedded (on the Space): the tabs live in the widget's header, next to its title.
   function paintSlot() {
@@ -979,6 +1026,15 @@ export function mountPaths(root, initialOpen = null, opts = {}) {
           toast(k ? `Planned for ${dayLabel(k, Math.round((new Date(k) - new Date(today)) / 86_400_000))}.` : 'Back on today’s path.', { ms: 1800 });
         },
       })),
+      '-',
+      { label: 'Pick a date…', icon: 'calendar', onSelect: () => setTimeout(() => pathCalendar(anchor, { selected: cur || todayKey(), onPick: async (k) => {
+        const day = k === todayKey() ? null : k;
+        list.forEach((t) => { t.day = day; });
+        picked = new Set();
+        render();
+        try { await Promise.all(list.map((t) => db.update('path_tasks', t.id, { day }))); } catch (e) { dayFail(e) || fail(e); }
+        toast(day ? `Planned for ${dayFull(day)}.` : 'Back on today’s path.', { ms: 1800 });
+      } }), 0) },
     ], { align: 'end' });
   }
 

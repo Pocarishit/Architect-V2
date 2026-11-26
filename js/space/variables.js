@@ -13,7 +13,7 @@ import { uid, store } from '../core/util.js';
 import { api, friendlyError } from '../data/api.js';
 import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia } from './media.js';
 import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
-import { myVarsSource } from '../data/myvars.js';
+import { myVarsSource, myVarsStatus } from '../data/myvars.js';
 import { registerVarChat } from './saycomposer.js';
 import { mountFreeView } from './freeview.js';
 import { shareCategory, unshareCategory } from '../data/varshare.js';
@@ -262,6 +262,11 @@ export function mountVariables(root, el0, w) {
 
   function render() {
     if (!ready) { box.replaceChildren(h('p', { class: 'vr-hint' }, 'Loading your variables…')); return; }
+    // Nov 27: a load or sync problem is never shown as an empty account (no default tabs, no Add-only view).
+    if (!foreign && !acct().sections && !acct().entries.length && myVarsStatus() !== 'ok' && myVarsStatus() !== 'local') {
+      box.replaceChildren(h('p', { class: 'vr-hint' }, myVarsStatus() === 'error' ? 'Your Variables couldn’t be reached yet — retrying…' : 'Loading your variables…'));
+      return;
+    }
     if (dragging || freeBusy()) { pending = true; return; }
     if (busy) {
       // Typing a note: refresh the messages in place, keep the composer (and your cursor) alone.
@@ -366,19 +371,33 @@ export function mountVariables(root, el0, w) {
   }
 
   function grid(t) {
+    // Nov 27: up to five text-only tabs (no cover thumbnails — the covers stay saved), in their order. More
+    // than five: a ⌄ after the fifth opens the rest as a text list; picking one opens it without reshuffling
+    // the first five, and while it's open the ⌄ is highlighted and the list marks it.
+    const MAXT = 5;
+    const pickSec = (s) => { section = s.id; sub = null; if (w?.slot) open = null; remember(); render(); };
+    const tabBtn = (s) => h('button', {
+      type: 'button', role: 'tab', class: ['vr-tab is-text', s.id === section && 'is-on', s.share?.item && 'is-shared'], 'aria-selected': String(s.id === section), 'data-sec': s.id,
+      onclick: () => pickSec(s),
+      ondblclick: () => renameSection(s),
+      oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, s); },
+    }, s.name.toUpperCase());
+    const head5 = t.slice(0, MAXT), rest = t.slice(MAXT);
+    const restOn = rest.some((s) => s.id === section);
+    const more = rest.length ? h('button', {
+      type: 'button', class: ['vr-tab-more', restOn && 'is-on'], 'aria-haspopup': 'menu', 'aria-label': `More sections (${rest.length})`, title: 'More sections',
+      onclick: (e) => menu(e.currentTarget, rest.map((s) => ({ label: s.name.toUpperCase(), checked: s.id === section, onSelect: () => pickSec(s) })), { align: 'start' }),
+    }, icon('chevronDown', 14)) : null;
     const tabs = h('div', { class: 'vr-tabs', role: 'tablist' },
-      t.map((s) => h('button', {
-        type: 'button', role: 'tab', class: ['vr-tab', s.id === section && 'is-on', s.img && 'has-img', s.share?.item && 'is-shared'], 'aria-selected': String(s.id === section), 'data-sec': s.id,
-        onclick: () => { section = s.id; sub = null; if (w?.slot) open = null; remember(); render(); },
-        ondblclick: () => renameSection(s),
-        oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); sectionMenu({ x: e.clientX, y: e.clientY }, s); },
-      }, secImg(s, 'vr-tab-img'), s.name.toUpperCase())),
+      head5.map(tabBtn), more,
       h('button', { type: 'button', class: 'vr-tab-add', title: 'Add', 'aria-label': 'Add a section or import', onclick: (e) => addMenu(e.currentTarget) }, icon('plus', 14)));
 
     const cur = here();
     // Nov 25: the sidebar's map always shows everything at once (never the Free View layer, which only
     // holds the items you've already pulled onto it — that's what left the map an empty dotted grid).
-    const fvOn = freeOn() && !w?.field;
+    // Nov 27: the sidebar's map shows the same Free View canvas as the Variables object (every node where you
+    // put it, links and arrows included) and fits it to the preview by zooming — the layout isn't touched.
+    const fvOn = freeOn() || (!!w?.field && !!secById(cur)?.free);
     const cats = kids(cur);
     const list = inSec(cur);
 
@@ -442,6 +461,7 @@ export function mountVariables(root, el0, w) {
       });
       gfree.scroller.addEventListener('contextmenu', (e) => { if (e.target.classList?.contains('vr-fv-board') || e.target === gfree.scroller) gridMenu(e); });
       main = gfree.el;
+      if (w?.field) { const g0 = gfree; requestAnimationFrame(() => requestAnimationFrame(() => g0.fit?.())); }
     } else if (w?.field) {
       // The sidebar's map (Nov 24): each subsection opens out in place — its variables and its own
       // subsections are on the map without opening it first.

@@ -199,7 +199,12 @@ export function createContextBar(page, editor, { sendToPaths, present, openLink,
       h('div', { class: 'pop-label' }, 'Connector'),
       optionRow([
         { value: 'straight', label: 'Straight', icon: 'line' }, { value: 'curve', label: 'Curved', icon: 'curve' }, { value: 'elbow', label: 'Elbow', icon: 'elbow' },
-      ], common(lines, 'route', 'straight'), (v) => set({ route: v }, ['line'])));
+      ], common(lines, 'route', 'straight'), (v) => set({ route: v }, ['line'])),
+      // Nov 27 — connectors go around other objects by default; this lets one pass through when you mean it.
+      h('div', { class: 'pop-label' }, 'Other objects'),
+      optionRow([
+        { value: 'around', label: 'Go around', icon: 'elbow' }, { value: 'through', label: 'Allow intersections', icon: 'line' },
+      ], common(lines, 'through', false) ? 'through' : 'around', (v) => set({ through: v === 'through' }, ['line'])));
   }
 
   function shapePicker(cur) {

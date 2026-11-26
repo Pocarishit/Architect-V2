@@ -87,6 +87,16 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
 
   offs.push(editor.on('change', (d) => { if (!d?.remote && !d?.silent) queueOps(); }));
 
+  /* ---------- Nov 27: status and view ---------- */
+  // A custom status you set (or clear) rides with your cursor; so does the view you're in (the canvas, or a
+  // sidebar view), so others can see where you are without your cursor being drawn on the wrong canvas.
+  function myStatus() { try { return localStorage.getItem(`architect.status.${me.id}`) || null; } catch { return null; } }
+  function myView() { return document.body.dataset.archView || 'space'; }
+  const onViewChange = () => { if (ch.live) { lastCur = 0; queueCursor(); } };
+  window.addEventListener('architect:view', onViewChange);
+  window.addEventListener('architect:status', onViewChange);
+  offs.push(() => { window.removeEventListener('architect:view', onViewChange); window.removeEventListener('architect:status', onViewChange); });
+
   /* ---------- outgoing cursor, selection and typing ---------- */
   const mine = { x: null, y: null, sel: [], editing: null, box: null };
   let curTimer = null, lastCur = 0;
@@ -95,7 +105,7 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
     curTimer = setTimeout(() => {
       curTimer = null;
       lastCur = performance.now();
-      if (ch.live) send('cur', { ...mine, uid: me.id, name: me.username, color, avatar: me.avatar || null });
+      if (ch.live) send('cur', { ...mine, uid: me.id, name: me.username, color, avatar: me.avatar || null, status: myStatus(), view: myView() });
     }, Math.max(0, CURSOR_MS - (performance.now() - lastCur)));
   }
   // Nov 25 — your pointer is sent whenever it moves over the board, objects included (listened for at the
@@ -168,6 +178,8 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
       const moved = peer.x !== p.x || peer.y !== p.y;
       // Nov 26: a cursor carries who it is, so it shows at once — it never waits for (or depends on) presence.
       if (p.uid) { peer.uid ||= p.uid; peer.name = p.name || peer.name || 'Someone'; peer.color = p.color || peer.color || colorFor(p.uid); if (p.avatar !== undefined) peer.avatar = p.avatar; }
+      if ('status' in p) peer.status = p.status || null;
+      if (p.view) { const changed = peer.view !== p.view; peer.view = p.view; if (changed) emitPeople(); }
       Object.assign(peer, { x: p.x, y: p.y, sel: p.sel || [], editing: p.editing || null, mbox: p.box || null, seen: Date.now() });
       if (moved) peer.moved = Date.now();
       if (layer.nextSibling) layer.parentNode.append(layer); // always drawn above every object
@@ -188,7 +200,12 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
       receiveState(p);
     } else if (event === 'meta') {
       onMeta?.(p);
+    } else if (event === 'x') {
+      // Nov 27: reactions, the shared timer, Present Board and calls ride on the same channel.
+      const peer = peers.get(p.from);
+      editor.emit('collab-x', { ...p, peer: peer ? { name: peer.name, color: peer.color, x: peer.x, y: peer.y, uid: peer.uid } : null });
     }
+    if (event === 'hello') editor.emit('collab-hello', p);
   }
 
   function remember(up = [], del = [], order = null) {
@@ -266,7 +283,7 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
     // One avatar per person, even with several tabs open.
     const byUser = new Map();
     for (const p of peers.values()) if (!byUser.has(p.uid || p.key)) byUser.set(p.uid || p.key, p);
-    onPeople?.([{ key: clientId, uid: me.id, name: me.username, color, avatar: me.avatar || null, self: true }, ...[...byUser.values()].filter((p) => p.uid !== me.id)]);
+    onPeople?.([{ key: clientId, uid: me.id, name: me.username, color, avatar: me.avatar || null, self: true, view: myView(), status: myStatus() }, ...[...byUser.values()].filter((p) => p.uid !== me.id)]);
   }
 
   /* ---------- drawing peers ---------- */
@@ -291,9 +308,11 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
     }
     const idle = Date.now() - p.moved > IDLE_MS;
     const label = p.cursor.lastChild;
-    const text = p.editing ? `${p.name} · typing` : idle ? `${p.name} · idle` : p.name;
+    const text = `${p.name} · ${p.status || (p.editing ? 'Typing' : idle ? 'Idle' : 'Active')}`;
     if (label.textContent !== text) label.textContent = text;
-    const show = p.x != null && p.y != null && Date.now() - (p.seen || 0) < 120_000; // a silent peer's cursor goes
+    // Nov 27: only on the same view — someone in another view stays in presence but their cursor isn't drawn here.
+    const sameView = (p.view || 'space') === myView();
+    const show = sameView && p.x != null && p.y != null && Date.now() - (p.seen || 0) < 120_000; // a silent peer's cursor goes
     p.cursor.hidden = !show;
     if (show) { p.cursor.style.left = `${p.x}px`; p.cursor.style.top = `${p.y}px`; }
     p.cursor.classList.toggle('is-idle', idle);
@@ -331,6 +350,11 @@ export function startCollab({ editor, boardId, me, live, onPeople, onStatus, onM
       return true;
     },
     sendMeta(m) { if (ch.live) send('meta', m); },
+    // Nov 27: custom live messages (to: one client id, or everyone).
+    x(kind, data = {}) { if (ch.live) send('x', { kind, ...data }); return ch.live; },
+    get live() { return !!ch.live; },
+    peerList: () => [...peers.values()].map((p) => ({ key: p.key, uid: p.uid, name: p.name, color: p.color, avatar: p.avatar, view: p.view || 'space', status: p.status || null, x: p.x, y: p.y })),
+    refreshCursor() { lastCur = 0; queueCursor(); },
     stop() {
       try { if (ch.live) send('bye', {}); } catch {}
       flushOps();

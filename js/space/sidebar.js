@@ -25,17 +25,30 @@ import { WIDGETS } from './widgets.js';
 import { urlOf, pickMedia, uploadMedia } from './media.js';
 import { loadMyVars, myVars, setMyVars, onMyVars, myVarsSource, flushMyVars } from '../data/myvars.js';
 import { removeShared } from '../data/shared.js';
+import { appKey } from './nov27.js';
+import { deleteSharedCat } from '../data/varshare.js';
 import { startVarShare, foreignCats, onShared, shareCategory, unshareCategory, setSharedSpace, syncShared, sharedSource } from '../data/varshare.js';
 
 // The rail's own icons: thin strokes, round caps, drawn on a 24 grid.
 // Nov 25 — Overview is the official dotted Architect mark (its red dot included), Variables an atom, Path
 // the compass from the approved mockup: a round rim, four short directional marks, a diagonal needle with
 // a centre dot.
-const DOT = (x, y, red) => `<circle cx="${x}" cy="${y}" r="${red ? 1.3 : 1.1}" fill="${red ? '#D71921' : 'currentColor'}" stroke="none"${red ? ' class="sb-red"' : ''}/>`;
+// Nov 27 — ghost-white icons that look the same before and after selection. Architect is the original dotted A
+// (the Nov 25 dot size and pattern), Variables a ball-and-stick atom (a larger centre dot, three smaller outer
+// dots, thin bonds), Compass a flat four-point cross inside a thin ring. Below Compass: Blueprints (a frame /
+// hash) and Personal Space (a home).
+const DOT = (x, y) => `<circle cx="${x}" cy="${y}" r="1.45" fill="currentColor" stroke="none"/>`;
+const ATOM = (() => {
+  const pts = [0, 120, 240].map((a) => [12 + 7.4 * Math.cos(a * Math.PI / 180), 12 + 7.4 * Math.sin(a * Math.PI / 180)].map((n) => +n.toFixed(2)));
+  return pts.map(([x, y]) => `<path d="M12 12L${x} ${y}"/>`).join('') + '<circle cx="12" cy="12" r="2.7" fill="currentColor" stroke="none"/>' + pts.map(([x, y]) => `<circle cx="${x}" cy="${y}" r="1.7" fill="currentColor" stroke="none"/>`).join('');
+})();
 const RAIL_ICONS = {
-  logo: [[12.0, 5.25], [9.375, 8.625], [14.625, 8.625], [7.5, 12.0], [16.5, 12.0], [6.0, 15.375], [9.0, 15.375], [12.0, 15.375], [15.0, 15.375], [18.0, 15.375], [4.875, 18.75], [19.125, 18.75]].map(([x, y]) => DOT(x, y)).join('') + DOT(12, 18.75, true),
-  atom: '<circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/><ellipse cx="12" cy="12" rx="8.8" ry="3.3"/><ellipse cx="12" cy="12" rx="8.8" ry="3.3" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="8.8" ry="3.3" transform="rotate(120 12 12)"/>',
-  compass: '<circle cx="12" cy="12" r="8.4"/><path d="M12 2.2v1.9M12 19.9v1.9M2.2 12h1.9M19.9 12h1.9"/><path d="M15.4 8.6 12.8 12.8 8.6 15.4 11.2 11.2Z" fill="currentColor" fill-opacity=".12"/><circle cx="12" cy="12" r=".9" fill="currentColor" stroke="none"/>',
+  logo: [[12.0, 5.25], [9.375, 8.625], [14.625, 8.625], [7.5, 12.0], [16.5, 12.0], [6.0, 15.375], [9.0, 15.375], [12.0, 15.375], [15.0, 15.375], [18.0, 15.375], [4.875, 18.75], [19.125, 18.75], [12.0, 18.75]].map(([x, y]) => DOT(x, y)).join(''),
+  atom: ATOM,
+  compass: '<circle cx="12" cy="12" r="7.4"/><path d="M12 3v18M3 12h18"/>',
+  hash: '<path d="M9.2 4.5v15M14.8 4.5v15M4.5 9.2h15M4.5 14.8h15"/>',
+  home: '<path d="M4.5 11.2 12 4.6l7.5 6.6"/><path d="M6.6 9.6V19.4h10.8V9.6"/><path d="M10.2 19.4v-4.6h3.6v4.6"/>',
+  panel: '<rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M9.5 5v14"/>',
   frame: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
   stack: '<rect x="4" y="4.5" width="11" height="4" rx="2"/><rect x="8" y="10" width="12" height="4" rx="2"/><rect x="4" y="15.5" width="11" height="4" rx="2"/>',
   route: '<circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="5.5" r="2"/><path d="M7.2 17.2C9 14 11 14.5 13 13s3.2-3.8 4-5.8"/>',
@@ -105,11 +118,16 @@ export function mountSidebar(ctx) {
       item('space', 'logo', 'Overview', () => show('space')),
       item('variables', 'atom', 'Variables', () => show('variables')),
       item('path', 'compass', 'Path', () => show('path')),
+      // Nov 27 — Blueprints opens the Blueprint view (a library-style canvas); Personal Space switches to your
+      // personal space (it replaces the action removed from the canvas menu).
+      item('blueprints', 'hash', 'Blueprints', () => ctx.openBlueprints?.(), { 'aria-current': 'false', class: 'sb-item' }),
+      item('personal', 'home', personalLabel(), () => goPersonal(), { 'aria-current': 'false', class: 'sb-item' }),
       ...views().map((v) => item(`custom:${v.id}`, 'square', v.name || 'My view', () => show(`custom:${v.id}`), {
         oncontextmenu: (e) => { e.preventDefault(); viewMenu({ x: e.clientX, y: e.clientY }, v); },
       })),
       // More sits at the very bottom of the rail (Nov 25).
       h('span', { class: 'sb-push', 'aria-hidden': 'true' }),
+      item('hide', 'panel', `Hide sidebar${keyHint('sidebar')}`, () => ctx.toggleSidebar?.(), { 'aria-current': 'false', class: 'sb-item sb-toggle' }),
       item('more', 'dots', 'More', (b) => moreMenu(b), { class: 'sb-item sb-more' }));
     ctx.onRail?.(railSpec());
   }
@@ -119,9 +137,21 @@ export function mountSidebar(ctx) {
     { id: 'space', svg: railIcon('logo'), label: 'Overview' },
     { id: 'variables', svg: railIcon('atom'), label: 'Variables' },
     { id: 'path', svg: railIcon('compass'), label: 'Path' },
+    { id: 'blueprints', svg: railIcon('hash'), label: 'Blueprints', run: () => ctx.openBlueprints?.() },
+    { id: 'personal', svg: railIcon('home'), label: personalLabel(), run: () => goPersonal() },
     ...views().map((v) => ({ id: `custom:${v.id}`, svg: railIcon('square'), label: v.name || 'My view' })),
     { id: 'more', svg: railIcon('dots'), label: 'More', bottom: true },
   ];
+
+  const personalLabel = () => (ctx.mode?.() === 'personal' ? 'Shared Space' : 'Personal Space');
+  const keyHint = (action) => { const k = appKey(action); return k ? ` (${k})` : ''; };
+  // Personal Space: show the canvas, then switch spaces. From your personal space the same button takes you
+  // back to the shared one, so it's never a dead end.
+  function goPersonal() {
+    if (cur !== 'space') show('space');
+    ctx.toggleSpace?.();
+    setTimeout(paintRail, 400);
+  }
 
   function moreMenu(anchor) {
     const r = anchor.getBoundingClientRect();
@@ -130,7 +160,10 @@ export function mountSidebar(ctx) {
       { label: 'Profile', icon: 'user', onSelect: () => ctx.openSettings('profile') },
       { label: 'Custom', icon: 'layers', onSelect: () => newView() },
       ...(views().length ? ['-', { header: 'Your views' }, ...views().map((v) => ({ label: v.name, icon: 'board', onSelect: () => show(`custom:${v.id}`) }))] : []),
-    ]);
+      '-',
+      ctx.changePassword ? { label: 'Change password', icon: 'key', onSelect: () => ctx.changePassword() } : null,
+      ctx.signOut ? { label: 'Sign out', icon: 'logout', onSelect: () => ctx.signOut() } : null,
+    ].filter(Boolean));
   }
 
   /* ---------------- switching ---------------- */
@@ -157,6 +190,9 @@ export function mountSidebar(ctx) {
     }
     paintRail();
     ctx.onView?.(id);
+    // Nov 27: shared presence knows which view you're in (your cursor is only drawn on the canvas you share).
+    document.body.dataset.archView = id;
+    window.dispatchEvent(new CustomEvent('architect:view', { detail: { id } }));
     requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
   }
 
@@ -438,6 +474,36 @@ export function mountSidebar(ctx) {
     const main = h('div', { class: 'sbv-main' }, top, chatHost, organHost);
     const mapLayer = h('div', { class: 'sbv-map', hidden: true });
     v.append(side, main, mapLayer);
+    // Nov 27 — drag the sidebar's right edge to make it wider or narrower (remembered on your account). A wider
+    // sidebar shows more of each name; the hierarchy and layout don't change. The edge never opens a menu.
+    const SW = [180, 520];
+    const applySideW = () => { const w0 = Number(getPref('sbvSideW', 0)) || 0; side.style.width = w0 ? `${Math.min(SW[1], Math.max(SW[0], w0))}px` : ''; };
+    applySideW();
+    const sizer = h('div', { class: 'sbv-side-sizer', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize the chat sidebar', tabindex: 0, title: 'Drag to resize · double-click to reset' });
+    sizer.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
+    sizer.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault(); e.stopPropagation();
+      const x0 = e.clientX, w0 = side.getBoundingClientRect().width;
+      sizer.setPointerCapture(e.pointerId); sizer.classList.add('is-drag');
+      const mv = (ev) => { side.style.width = `${Math.round(Math.min(SW[1], Math.max(SW[0], w0 + ev.clientX - x0)))}px`; };
+      const up = () => { sizer.removeEventListener('pointermove', mv); sizer.removeEventListener('pointerup', up); sizer.classList.remove('is-drag'); setPref('sbvSideW', Math.round(side.getBoundingClientRect().width)).catch(() => {}); window.dispatchEvent(new Event('resize')); };
+      sizer.addEventListener('pointermove', mv); sizer.addEventListener('pointerup', up);
+    });
+    sizer.addEventListener('dblclick', () => { setPref('sbvSideW', 0).catch(() => {}); side.style.width = ''; });
+    sizer.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      const w1 = Math.min(SW[1], Math.max(SW[0], side.getBoundingClientRect().width + (e.key === 'ArrowLeft' ? -16 : 16)));
+      side.style.width = `${w1}px`; setPref('sbvSideW', Math.round(w1)).catch(() => {});
+    });
+    // Right-click on the sidebar's empty background: the current space's own menu (New chat first). Chats and
+    // subsections keep their own menus.
+    side.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.sbv-row, .sbv-group, .sbv-side-sizer, .sbv-mapsq, .sbv-mapcard, .sbv-spacepick, input')) return;
+      e.preventDefault();
+      catMenu({ x: e.clientX, y: e.clientY }, curSpace());
+    });
     let mapCtl = null;
 
     /* ---------- Organs (the Organ chats, moved here from Side Chat) ---------- */
@@ -476,12 +542,12 @@ export function mountSidebar(ctx) {
       const mineTabs = tops().map((s) => h('button', {
         type: 'button', role: 'tab', class: ['sbv-cat', cat === s.id && 'is-on'], 'aria-selected': String(cat === s.id), title: s.organs ? `${s.name} · Organ chats (private)` : s.share?.item ? `${s.name} · shared` : s.name,
         onclick: () => pickCat(s.id), oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); catMenu({ x: e.clientX, y: e.clientY }, s); },
-      }, cover(s)));
+      }, h('span', { class: 'sbv-cat-name' }, s.name || 'Space')));
       const theirs = foreign().map((it) => h('button', {
         type: 'button', role: 'tab', class: ['sbv-cat is-theirs', cat === `s:${it.id}` && 'is-on'], 'aria-selected': String(cat === `s:${it.id}`), title: `${it.data?.name || 'Space'} · shared by ${it.data?.owner || 'a member'}`,
         onclick: () => pickCat(`s:${it.id}`),
         oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); if (cat !== `s:${it.id}`) pickCat(`s:${it.id}`); catMenu({ x: e.clientX, y: e.clientY }, secById(rootId())); },
-      }, cover({ name: it.data?.name || '?', img: it.data?.img, color: (it.data?.sections || []).find((x) => x.id === it.data?.catId)?.color }, { foreignOwner: it.data?.owner || '?' })));
+      }, h('span', { class: 'sbv-cat-name' }, it.data?.name || 'Space')));
       const s = !isForeign() && curSpace();
       const shareBtn = s && !s.organs ? h('button', {
         type: 'button', class: ['sbv-share', s.share?.item && 'is-on'], 'aria-pressed': String(!!s.share?.item),
@@ -516,7 +582,7 @@ export function mountSidebar(ctx) {
         oncontextmenu: (e) => { if (!sp) return; e.preventDefault(); catMenu({ x: e.clientX, y: e.clientY }, sp); },
       }, h('span', {}, name), icon('chevronDown', 14));
       list = h('div', { class: 'sbv-list', role: 'list' });
-      side.replaceChildren(h('header', { class: 'sbv-spacebar' }, pick, sideToggle()), list, mapCard());
+      side.replaceChildren(h('header', { class: 'sbv-spacebar' }, h('span', { class: 'wg-grip sbv-dothandle', 'aria-hidden': 'true' }), pick, sideToggle()), list, mapCard(), sizer);
       paintList();
     }
     let list = null;
@@ -584,7 +650,8 @@ export function mountSidebar(ctx) {
         inline('New chat name', (n) => { adding = null; if (n) createChat(parent, n); else paintList(true); }));
       const r = rootId();
       if (r) {
-        out.push(adding?.parent === r ? addField(r, 0) : h('button', { type: 'button', class: 'sbv-row sbv-new', onclick: () => { adding = { parent: r }; paintList(); } }, icon('plus', 13), h('span', {}, 'NEW CHAT')));
+        // Nov 27: no standalone + New chat row — New chat is first in the space's menu (right-click the sidebar).
+        if (adding?.parent === r) out.push(addField(r, 0));
         const walk = (id, depth) => {
           for (const x of entriesIn(id)) out.push(row(x, depth));
           for (const s of kids(id)) {
@@ -595,7 +662,7 @@ export function mountSidebar(ctx) {
         };
         walk(r, 0);
       }
-      if (out.length <= 1) out.push(h('p', { class: 'sbv-hint' }, r ? 'No chats here yet.' : 'Right-click the top bar to add a space.'));
+      if (!out.length) out.push(h('p', { class: 'sbv-hint' }, r ? 'No chats yet — right-click here for New chat.' : 'Right-click the top bar to add a space.'));
       list.replaceChildren(...out);
     }
 
@@ -822,16 +889,15 @@ export function mountSidebar(ctx) {
       const it = theirs ? foreignItem() : null;
       const shared = theirs || !!s.share?.item;
       const ok = await confirmDialog(`Delete ${s.name}?`, shared
-        ? `${s.name} is shared: deleting it removes it — its chats, messages and pictures — for everyone in your shared Space, not just you. This can't be undone.`
+        ? `${s.name} is shared: it will be deleted for both members — its chats, messages and pictures — not just removed from your sidebar. This can't be undone.`
         : `${s.name} and everything in it — its chats, sub-sections and messages — are deleted from your account. This can't be undone.`,
         { ok: shared ? 'Delete for everyone' : 'Delete space', danger: true });
       if (!ok) return;
       try {
         if (theirs) {
           if (!it) throw new Error('This space is no longer shared with you.');
-          await removeShared(it);           // the database refuses unless you may delete it
-          await syncShared();
-          if (foreignCats().some((x) => x.id === it.id)) throw new Error('permission');
+          // Nov 27: either member may delete it, whoever created it.
+          await deleteSharedCat(it);
         } else {
           if (s.share?.item) { try { await removeShared({ id: s.share.item }); } catch (e) { throw new Error(`Couldn’t delete the shared copy — ${friendlyError(e)}`); } }
           const v = mine();
@@ -1142,6 +1208,7 @@ export function mountSidebar(ctx) {
     // The Space switched (Tab) or reloaded its canvas: borrowed objects must come from the new board.
     rebind(next) {
       ed = next;
+      paintRail();
       const id = cur;
       if (id && id !== 'space') { active?.destroy(); active = null; cur = ''; show(id); }
     },

@@ -17,6 +17,7 @@
 //   cube    { id, name, color, at, x, y, content, seq? }                    (entry.library.cubes)
 //   content { w, h, items: [{ id, kind: 'msg'|'note'|'text'|'img', x, y, w, h, text, files?, path?,
 //             by?, name?, ts? , raw }], links: [{ a, b, arrow }] }
+import { confirmByName } from './nov27.js';
 import { h, s } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { menu, toast, confirmDialog, promptDialog, closeFloating, popover } from '../core/ui.js';
@@ -61,6 +62,7 @@ export function renderSection(content, { color = ZONE_COLORS[0], name = '', outl
   const svg = s('svg', { class: 'zn-links', width: c.w, height: c.h, 'aria-hidden': 'true' });
   const by = new Map(c.items.map((it) => [it.id, it]));
   for (const l of c.links || []) {
+    if (l.side) continue; // Show alongside links aren't drawn
     const a = by.get(l.a), b = by.get(l.b);
     if (!a || !b) continue;
     const cv = curve(a, b);
@@ -97,7 +99,7 @@ export function miniPreview(cube, W = 180, H = 112) {
   const g = s('svg', { class: 'zn-mini', viewBox: `0 0 ${W} ${H}`, width: W, height: H, 'aria-hidden': 'true', style: { '--zc': cube.color } });
   g.append(s('rect', { class: 'zn-mini-zone', x: ox, y: oy, width: c.w * k, height: c.h * k, rx: 4 }));
   const by = new Map(c.items.map((it) => [it.id, { ...it, x: ox + it.x * k, y: oy + it.y * k, w: it.w * k, h: it.h * k }]));
-  for (const l of c.links || []) { const a = by.get(l.a), b = by.get(l.b); if (a && b) g.append(s('path', { class: 'zn-mini-link', d: curve(a, b).d })); }
+  for (const l of c.links || []) { if (l.side) continue; const a = by.get(l.a), b = by.get(l.b); if (a && b) g.append(s('path', { class: 'zn-mini-link', d: curve(a, b).d })); }
   for (const it of by.values()) {
     g.append(s('rect', { class: `zn-mini-it is-${it.kind}`, x: it.x, y: it.y, width: Math.max(2, it.w), height: Math.max(2, it.h), rx: 2 }));
     const line = (it.text || '').split('\n')[0];
@@ -175,7 +177,7 @@ export function suggestSeq(content) {
   const byId = new Map(items.map((it) => [it.id, it]));
   const out = new Map(), inDeg = new Map(items.map((it) => [it.id, 0]));
   for (const l of content.links || []) {
-    if (!byId.has(l.a) || !byId.has(l.b)) continue;
+    if (l.side || !byId.has(l.a) || !byId.has(l.b)) continue; // Show alongside never changes the order
     const [a, b] = l.arrow === false ? (byId.get(l.a).y <= byId.get(l.b).y ? [l.a, l.b] : [l.b, l.a]) : [l.a, l.b];
     (out.get(a) || out.set(a, []).get(a)).push(b);
     inDeg.set(b, (inDeg.get(b) || 0) + 1);
@@ -192,7 +194,13 @@ export function suggestSeq(content) {
   items.slice().sort(reading).forEach((it) => visit(it.id));
   return order.map((id) => ({ id, skip: false }));
 }
-const speakable = (it) => (it.kind === 'img' ? (it.text || 'A picture.') : [it.name ? `${it.name}:` : '', it.text || '', (it.files || []).length ? `(${it.files.length} attachment${it.files.length === 1 ? '' : 's'})` : ''].filter(Boolean).join(' ')) || 'An attachment.';
+// Nov 27: Present reads only the body of a message — never the sender's name or a generated media label
+// ("picture", "photo", "video", "attachment"). A picture is shown silently.
+const MEDIA_LABEL = /^\s*[\[(]?\s*(a\s+)?(picture|photo|image|video|attachment|file|gif|sticker|voice note|audio)s?\s*[\])]?\s*[.:]?\s*$/i;
+const speakable = (it) => {
+  if (it.kind === 'img') return '';
+  return String(it.text || '').split('\n').filter((ln) => !MEDIA_LABEL.test(ln)).join('\n').trim();
+};
 
 /** Present: first the order (preview, reorder, skip), then playback with text-to-speech. The order you set is
  *  saved with the cube (onSaveSeq) — it never changes the captured layout. */
@@ -209,7 +217,11 @@ export function present(cube, { onSaveSeq = null } = {}) {
   layer.append(bar, h('div', { class: 'zn-present' }, view.vp, side));
   requestAnimationFrame(() => view.fit());
 
-  let mode = 'plan', step = -1, paused = false, utter = null;
+  let mode = 'plan', step = -1, paused = false, utter = null, silentT = 0;
+  let rate = Math.min(2, Math.max(0.5, Number(store.get('zn.tts.rate', 1)) || 1));
+  // Show alongside: what each message brings onto the screen with it (it isn't read).
+  const along = new Map();
+  for (const l of content.links || []) { if (!l.side || !byId.has(l.a) || !byId.has(l.b)) continue; (along.get(l.a) || along.set(l.a, []).get(l.a)).push(l.b); }
   const steps = () => seq.filter((q) => !q.skip && byId.has(q.id));
   const saveSeq = () => { cube.seq = seq.map((q) => ({ id: q.id, skip: !!q.skip })); onSaveSeq?.(cube.seq); };
 
@@ -246,7 +258,13 @@ export function present(cube, { onSaveSeq = null } = {}) {
     n.classList.add('is-focus');
     view.sec.classList.add('has-focus');
     const it = byId.get(id);
-    if (zoom && it) view.fit({ x: it.x - 40, y: it.y - 40, w: it.w + 80, h: it.h + 80 }, 60, 1.8);
+    if (!zoom || !it) return;
+    // The active message and whatever it shows alongside, framed together side by side.
+    const group = [it, ...(along.get(id) || []).map((x) => byId.get(x)).filter(Boolean)];
+    group.slice(1).forEach((g) => view.sec.querySelector(`.zn-item[data-zid="${CSS.escape(g.id)}"]`)?.classList.add('is-focus'));
+    const x0 = Math.min(...group.map((g) => g.x)), y0 = Math.min(...group.map((g) => g.y));
+    const x1 = Math.max(...group.map((g) => g.x + g.w)), y1 = Math.max(...group.map((g) => g.y + g.h));
+    view.fit({ x: x0 - 40, y: y0 - 40, w: x1 - x0 + 80, h: y1 - y0 + 80 }, 60, group.length > 1 ? 1.4 : 1.8);
   }
   function paintPlay() {
     const list = steps();
@@ -258,11 +276,33 @@ export function present(cube, { onSaveSeq = null } = {}) {
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': paused ? 'Resume' : 'Pause', title: paused ? 'Resume (Space)' : 'Pause (Space)', onclick: togglePause }, icon(paused ? 'play' : 'pause', 16)),
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Replay this step', title: 'Replay (R)', onclick: () => go(step) }, icon('undo', 16)),
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Next', title: 'Next (→)', disabled: step >= list.length - 1, onclick: () => go(step + 1) }, icon('chevronRight', 16)),
+      speedCtl(),
       h('button', { type: 'button', class: 'btn sm', onclick: () => { stopSpeech(); mode = 'plan'; view.sec.classList.remove('has-focus'); paintPlan(); view.fit(); } }, 'Edit order'),
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close', onclick: close }, icon('close', 16)));
     side.querySelectorAll('.zn-seq-row').forEach((r) => r.classList.remove('is-now'));
   }
-  const stopSpeech = () => { try { speechSynthesis.cancel(); } catch {} utter = null; };
+  const stopSpeech = () => { clearTimeout(silentT); try { speechSynthesis.cancel(); } catch {} utter = null; };
+  // Narration speed: changes apply right away (the current message restarts at the new speed); the
+  // presentation itself carries on where it is.
+  function speedCtl() {
+    const val = h('b', { class: 'zn-rate-val' }, `${rate.toFixed(2).replace(/0$/, '')}×`);
+    const inp = h('input', { type: 'range', min: 0.5, max: 2, step: 0.05, value: rate, 'aria-label': 'Narration speed' });
+    inp.addEventListener('input', () => { rate = Number(inp.value); val.textContent = `${rate.toFixed(2).replace(/0$/, '')}×`; });
+    inp.addEventListener('change', () => { store.set('zn.tts.rate', rate); if (mode === 'play' && !paused && utter) speak(byId.get(steps()[step]?.id)); });
+    return h('label', { class: 'zn-rate', title: 'Narration speed' }, icon('speaker', 14), inp, val);
+  }
+  function speak(it) {
+    stopSpeech();
+    if (!it) return;
+    const text = speakable(it);
+    const next = () => { if (!paused) go(step + 1); };
+    if (!text || !('speechSynthesis' in window)) { silentT = setTimeout(next, it.kind === 'img' ? 2200 : 1400); return; }
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = rate;
+    u.onend = () => { if (utter === u && !paused) setTimeout(() => { if (utter === u && !paused) go(step + 1); }, 450); };
+    utter = u;
+    speechSynthesis.speak(u);
+  }
   function go(i) {
     const list = steps();
     if (i < 0 || i >= list.length) { if (i >= list.length) { stopSpeech(); paintPlay(); toast('End of the walkthrough.', { ms: 1600 }); } return; }
@@ -270,15 +310,11 @@ export function present(cube, { onSaveSeq = null } = {}) {
     const it = byId.get(list[i].id);
     focusItem(it.id, true);
     paintPlay();
-    stopSpeech();
-    if (!('speechSynthesis' in window)) return;
-    const u = new SpeechSynthesisUtterance(speakable(it));
-    u.onend = () => { if (utter === u && !paused) setTimeout(() => { if (utter === u && !paused) go(step + 1); }, 450); };
-    utter = u;
-    speechSynthesis.speak(u);
+    speak(it);
   }
   function togglePause() {
     paused = !paused;
+    clearTimeout(silentT);
     try { if (paused) speechSynthesis.pause(); else if (speechSynthesis.paused) speechSynthesis.resume(); else go(step); } catch {}
     paintPlay();
   }
@@ -300,7 +336,7 @@ export function present(cube, { onSaveSeq = null } = {}) {
 export function exportSection(cube) {
   const c = cube.content;
   const by = new Map(c.items.map((it) => [it.id, it]));
-  const paths = (c.links || []).map((l) => { const a = by.get(l.a), b = by.get(l.b); if (!a || !b) return ''; const cv = curve(a, b); return `<path d="${cv.d}"/>${l.arrow === false ? '' : `<path d="${head(cv.end, cv.from)}"/>`}`; }).join('');
+  const paths = (c.links || []).filter((l) => !l.side).map((l) => { const a = by.get(l.a), b = by.get(l.b); if (!a || !b) return ''; const cv = curve(a, b); return `<path d="${cv.d}"/>${l.arrow === false ? '' : `<path d="${head(cv.end, cv.from)}"/>`}`; }).join('');
   const items = c.items.map((it) => {
     const files = (it.files || []).map((f) => `<div class="f">${esc(f.name || (isImg(f) ? 'Image' : 'Attachment'))}</div>`).join('');
     return `<div class="it ${it.kind}" style="left:${it.x}px;top:${it.y}px;width:${it.w}px;min-height:${it.h}px">${it.name ? `<b>${esc(it.name)}</b>` : ''}${it.text ? `<p>${esc(it.text).replace(/\n/g, '<br>')}</p>` : ''}${it.kind === 'img' ? '<div class="f">Image</div>' : ''}${files}</div>`;
@@ -329,14 +365,12 @@ export function openLibrary(lib) {
   const { layer, close } = overlay('is-library');
   const world = h('div', { class: 'zn-lib-world' });
   const vp = h('div', { class: 'zn-lib-vp has-grid' }, world);
-  const bar = h('div', { class: 'zn-bar' },
-    h('span', { class: 'zn-title' }, `${lib.name || 'Chat'} · Library`),
-    h('span', { class: 'zn-hint' }, 'Drag to pan · Ctrl + wheel to zoom · drag a cube to arrange it'),
-    h('span', { class: 'zn-flex' }),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Zoom out', onclick: () => zoomBy(0.8) }, icon('minus', 15)),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Zoom in', onclick: () => zoomBy(1.25) }, icon('plus', 15)),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Fit everything', title: 'Fit', onclick: () => fit() }, icon('fit', 15)),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close', title: 'Close (Esc)', onclick: close }, icon('close', 16)));
+  // Nov 27 — no header bar, no gesture help, no empty-state text: just the dot grid up to the top edge, with
+  // Fit and Close in the top-right corner over the canvas. Pan / zoom gestures are unchanged.
+  const bar = h('div', { class: 'zn-corner' },
+    h('button', { type: 'button', class: 'bpc-btn', 'aria-label': 'Fit everything', title: 'Fit', onclick: () => fit() }, icon('fit', 16)),
+    h('button', { type: 'button', class: 'bpc-btn', 'aria-label': 'Close', title: 'Close (Esc)', onclick: close }, icon('close', 16)));
+  layer.setAttribute('aria-label', `${lib.name || 'Chat'} · Library`);
   layer.append(bar, vp);
   let cam = { x: 40, y: 40, z: 1, ...(lib.get().cam || {}) };
   const apply = () => { world.style.transform = `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})`; vp.style.backgroundPosition = `${cam.x}px ${cam.y}px`; vp.style.backgroundSize = `${22 * cam.z}px ${22 * cam.z}px`; };
@@ -358,7 +392,7 @@ export function openLibrary(lib) {
   }
   function paint() {
     const cubes = lib.get().cubes || [];
-    world.replaceChildren(...(cubes.length ? cubes.map(cubeCard) : [h('p', { class: 'zn-empty' }, 'No Zone Cubes yet. Draw a zone on the chat canvas (Z), then choose Capture Zone.')]));
+    world.replaceChildren(...cubes.map(cubeCard));
   }
   function cubeCard(cube) {
     const n = h('div', { class: 'zn-cube', tabindex: 0, 'data-cube': cube.id, style: { left: `${cube.x || 0}px`, top: `${cube.y || 0}px`, '--zc': cube.color } },
@@ -407,7 +441,9 @@ export function openLibrary(lib) {
       { label: 'Rename…', icon: 'edit', onSelect: async () => { const n = await promptDialog('Rename cube', { value: cube.name, maxLength: 80 }); if (n?.trim()) patchCube(cube.id, { name: n.trim() }); } },
       '-',
       { label: 'Delete cube', icon: 'trash', danger: true, onSelect: async () => {
-        if (!(await confirmDialog(`Delete “${cube.name}”?`, 'The cube and the messages it holds are deleted. Embedded copies of it in this chat go too.', { ok: 'Delete cube' }))) return;
+        // Nov 27: type the cube's name to enable Delete Zone Cube (you still confirm). Removing an embed from a
+        // chat doesn't ask this — the cube stays in the Library.
+        if (!(await confirmByName({ title: 'Delete Zone Cube', name: cube.name, message: 'The cube and the messages it holds are deleted. Embedded copies of it in this chat go too.', ok: 'Delete Zone Cube' }))) return;
         lib.set({ cubes: (lib.get().cubes || []).filter((c) => c.id !== cube.id) }, { dropEmbeds: cube.id });
         paint();
       } },

@@ -28,6 +28,9 @@ export function createSupabaseRealtime({ base, key, token }) {
       let presence = {};
       const queue = []; // messages sent before the channel is joined
       const status = (s, detail) => onStatus?.(s, detail);
+      // Nov 26: an expired token is fixed by refreshing it, never shown as an error.
+      const isExpired = (r) => /expired|invalid.*token|jwt/i.test(String(r || ''));
+      let forceToken = false;
       const nextRef = () => String(++ref);
       const raw = (msg) => { if (ws?.readyState === 1) ws.send(JSON.stringify(msg)); };
 
@@ -37,7 +40,8 @@ export function createSupabaseRealtime({ base, key, token }) {
         if (closed) return;
         status('connecting');
         let access;
-        try { access = await token(); } catch { access = null; }
+        try { access = await token({ force: forceToken }); } catch { access = null; }
+        forceToken = false;
         if (closed) return;
         if (!access) { status('error', 'signed_out'); return; }
         lastToken = access;
@@ -69,6 +73,7 @@ export function createSupabaseRealtime({ base, key, token }) {
               onMessage?.('__joined', {});
             } else {
               const reason = payload?.response?.reason || 'join_failed';
+              if (isExpired(reason)) { reconnectFresh(); return; }
               status('error', reason);
               // An access rule refusal won't fix itself by retrying quickly.
               ws.onclose = null;
@@ -85,6 +90,7 @@ export function createSupabaseRealtime({ base, key, token }) {
             Object.assign(presence, payload?.joins || {});
             emitPresence();
           } else if (event === 'system' && payload?.status === 'error') {
+            if (isExpired(payload.message)) { reconnectFresh(); return; }
             status('error', payload.message || 'channel_error');
           } else if (event === 'phx_error' || event === 'phx_close') {
             drop();
@@ -108,6 +114,17 @@ export function createSupabaseRealtime({ base, key, token }) {
         scheduleRetry();
       }
 
+      // Refresh the token and rejoin straight away (a quick retry, then normal backoff).
+      function reconnectFresh() {
+        forceToken = true;
+        const was = ws;
+        ws = null; joined = false; clearInterval(hb);
+        try { if (was) { was.onclose = null; was.close(); } } catch {}
+        if (closed) return;
+        status('connecting');
+        scheduleRetry(attempt < 2 ? 300 : null);
+      }
+
       function scheduleRetry(ms) {
         clearTimeout(retry);
         if (closed) return;
@@ -117,13 +134,18 @@ export function createSupabaseRealtime({ base, key, token }) {
       }
 
       // Supabase drops a channel whose token expires, so hand it the fresh one when it rotates.
-      tokenTimer = setInterval(async () => {
+      // Nov 26: checked every 30 s (was 4 min, which let the token lapse between checks — refresh
+      // only kicks in 90 s before expiry), and again whenever the tab comes back or the PC wakes.
+      async function pushToken() {
         if (!joined) return;
         try {
           const t = await token();
           if (t && t !== lastToken) { lastToken = t; raw({ topic, event: 'access_token', ref: nextRef(), join_ref: joinRef, payload: { access_token: t } }); }
         } catch {}
-      }, 4 * 60_000);
+      }
+      tokenTimer = setInterval(pushToken, 30_000);
+      const onVisible = () => { if (document.visibilityState !== 'visible' || closed) return; if (joined) pushToken(); else if (!ws) { attempt = 0; scheduleRetry(0); } };
+      document.addEventListener('visibilitychange', onVisible);
 
       const onOnline = () => { if (!ws && !closed) { attempt = 0; scheduleRetry(0); } };
       window.addEventListener('online', onOnline);
@@ -148,6 +170,7 @@ export function createSupabaseRealtime({ base, key, token }) {
           clearInterval(hb);
           clearInterval(tokenTimer);
           window.removeEventListener('online', onOnline);
+          document.removeEventListener('visibilitychange', onVisible);
           if (ws) {
             raw({ topic, event: 'phx_leave', ref: nextRef(), join_ref: joinRef, payload: {} });
             const w = ws;

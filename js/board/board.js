@@ -213,7 +213,8 @@ export function mountBoard(root, boardId, opts = {}) {
           // one thing that makes everyone's cursors invisible — with the server's own reason.
           if (st === 'error' && !warned && (people > 1 || space)) {
             warned = true;
-            toast(`Live collaboration isn’t connected${detail ? ` (${detail})` : ''}, so cursors can’t show. Run supabase/collab.sql in Supabase, then reload.`, { tone: 'error', ms: 9000 });
+            const setup = /unauthori[sz]ed|policy|denied|permission|not.?found|relation|does not exist/i.test(String(detail || ''));
+            toast(`Live collaboration isn’t connected${detail ? ` (${detail})` : ''}, so cursors can’t show. ${setup ? 'Run supabase/collab.sql in Supabase, then reload.' : 'It keeps retrying on its own.'}`, { tone: 'error', ms: 9000 });
           }
         },
         onMeta: (m) => {

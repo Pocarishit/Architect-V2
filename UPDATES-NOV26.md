@@ -7,6 +7,7 @@ Copy every file in this folder into the repo at the same paths, commit and push.
 - `css/nov26.css`: sidebar icons and look, map card, zones, cubes, Library and Present
 - `js/space/zones.js`: zone sections, Zone Cubes, Library map, Open Here, Present (TTS), Export
 - `js/data/clock.js`: server-time offset for the shared timer
+- `js/data/realtime.js`, `js/data/supabase.js`: changed (item 18) — supabase.js includes the Nov 22 R2 media changes
 
 ## What's in it
 | # | Item | Where |
@@ -28,6 +29,7 @@ Copy every file in this folder into the repo at the same paths, commit and push.
 | 15 | Live cursors carry name and color on every move; they hide when the pointer leaves the canvas without marking the person offline; stale ones are cleared; `bye` on leave | collab.js, board.js |
 | 16 | Free View toolbar follows the Blueprint's order, names and shortcuts, plus Zone (Z) and Library (B) | freeview.js |
 | 17 | Settings → Personalize → Sidebar: color and PNG (choose, replace, remove), saved to your account | settings.js, sidebar.js |
+| 18 | Fix "Token has expired" live-collab error: token pushed to the live channel every 30 s (was 4 min) and on tab focus/wake; an expired token refreshes and rejoins silently; expiry counted on the device clock; the collab.sql hint only shows for real permission errors | realtime.js, supabase.js, board.js |
 
 ## Not done / needs a check on the live site
 - **Copy a cube to a Blueprint, or to another compatible object:** not built yet. You can copy and move cubes between chats, and export them.

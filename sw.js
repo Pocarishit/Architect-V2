@@ -2,7 +2,7 @@
 // Network first (you always get the newest deploy when online), the cached copy when offline or when the
 // network hangs for more than 6 seconds. Supabase, R2 and other APIs are never touched here — your data's
 // offline copy lives in js/data/offline.js.
-const VERSION = 'architect-shell-2026-11-29';
+const VERSION = 'architect-shell-2026-11-29b';
 const SHELL = [
   "./",
   "assets/favicon.svg",

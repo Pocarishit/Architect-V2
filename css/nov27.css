@@ -650,9 +650,10 @@ body.sbv-map-open .sbv-map-card .vr-fv-stage.is-rail-off > .vr-fv-railtab { visi
 .zn-stage-item.is-main { box-shadow: 0 0 0 2px color-mix(in srgb, var(--fg) 55%, transparent), 0 24px 60px -30px rgba(0, 0, 0, .8); }
 .zn-stage-item img { max-width: 100%; height: auto; }
 /* Side Chat: a message that's still saving / didn't save */
-.sc-msg.is-pending .sc-bubble { opacity: .72; }
+.sc-msg.is-pending .sc-bubble { opacity: .85; }
+.sc-msg:has(> .vr-outbox) { flex-wrap: wrap; }
 .sc-msg.is-failed .sc-bubble { box-shadow: 0 0 0 1px color-mix(in srgb, #e5484d 70%, transparent); }
-.vr-outbox { display: flex; justify-content: flex-end; align-items: center; gap: 8px; width: 100%; margin-top: 2px; font: 500 10.5px/1.2 var(--f-mono); color: var(--fg-3); }
+.vr-outbox { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex: 0 0 100%; width: 100%; order: 9; margin-top: 3px; padding-right: 4px; font: 500 10.5px/1.2 var(--f-mono); color: var(--fg-3); }
 .sc-msg.is-failed .vr-outbox { color: #ff8a8a; }
 .vr-retry { border: 0; background: none; padding: 2px 4px; color: var(--fg); font: 700 10.5px/1 var(--f-mono); text-decoration: underline; cursor: pointer; }
 /* Side Chat: hover its edge to open it when collapsed; per-panel background */

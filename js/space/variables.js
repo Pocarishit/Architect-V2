@@ -13,7 +13,7 @@ import { uid, store } from '../core/util.js';
 import { api, friendlyError } from '../data/api.js';
 import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia } from './media.js';
 import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
-import { myVarsSource, myVarsStatus, onMyVarsSaved, flushMyVars } from '../data/myvars.js';
+import { myVarsSource, myVarsStatus, onMyVarsSaved, flushMyVars, myVarsDirty } from '../data/myvars.js';
 import { registerVarChat } from './saycomposer.js';
 import { mountFreeView } from './freeview.js';
 import { zoneOverlay } from './zones.js';
@@ -1285,9 +1285,11 @@ export function mountVariables(root, el0, w) {
   // Nov 29: a sent message shows at once; until it's saved it's marked Sending…, and if saving fails it stays
   // in the thread marked Not sent with Retry. When it saves, the same bubble just loses the mark.
   var outbox = new Map(); // note id → 'pending' / 'failed' (var: render() may run before this line)
+  const outAt = new Map(); // note id → when it was sent
   const pushNote = (id, n) => {
-    outbox.set(n.id, 'pending');
+    outbox.set(n.id, 'pending'); outAt.set(n.id, Date.now());
     patchEntry(id, (e) => ({ notes: [...(e.notes || []), n].slice(-MAX_NOTES) }));
+    // a shared space saves on its own schedule; it shows as sent once it's handed over
     if (src !== myVarsSource) setTimeout(() => { if (outbox.get(n.id) === 'pending') { outbox.delete(n.id); markOutbox(); } }, 1500);
     markOutbox();
   };
@@ -1298,14 +1300,26 @@ export function mountVariables(root, el0, w) {
       row.classList.toggle('is-failed', st === 'failed');
       row.querySelector(':scope > .vr-outbox')?.remove();
       if (st) row.append(h('span', { class: 'vr-outbox', role: 'status' }, st === 'pending' ? 'Sending…' : 'Not sent',
-        st === 'failed' ? h('button', { type: 'button', class: 'vr-retry', onclick: (e) => { e.stopPropagation(); for (const [k, v] of outbox) if (v === 'failed') outbox.set(k, 'pending'); markOutbox(); flushMyVars(); } }, 'Retry') : null));
+        st === 'failed' ? h('button', { type: 'button', class: 'vr-retry', onclick: (e) => { e.stopPropagation(); for (const [k, v] of outbox) if (v === 'failed') { outbox.set(k, 'pending'); outAt.set(k, Date.now()); } markOutbox(); flushMyVars(); } }, 'Retry') : null));
     }
   }
-  const offSaved = onMyVarsSaved((ok) => {
-    if (src !== myVarsSource) return;
-    for (const [k, v] of outbox) { if (ok) outbox.delete(k); else if (v === 'pending') outbox.set(k, 'failed'); }
+  // Every write that lands clears the messages sent before it started (more typing no longer keeps them
+  // waiting); a failed write marks only those as Not sent.
+  // Safety net: nothing left unsaved on this device means everything sent is saved.
+  const outT = setInterval(() => {
+    if (!outbox.size || src !== myVarsSource || myVarsDirty() || myVarsStatus() !== 'ok') return;
+    const cut = Date.now() - 2500; let n = 0;
+    for (const [k, v] of outbox) if (v === 'pending' && (outAt.get(k) || 0) < cut) { outbox.delete(k); outAt.delete(k); n++; }
+    if (n) markOutbox();
+  }, 2000);
+  const offSaved0 = onMyVarsSaved((ok, at) => {
+    for (const [k, v] of outbox) {
+      if ((outAt.get(k) || 0) > at) continue;
+      if (ok) { outbox.delete(k); outAt.delete(k); } else if (v === 'pending') outbox.set(k, 'failed');
+    }
     markOutbox();
   });
+  const offSaved = () => { offSaved0(); clearInterval(outT); };
 
   function send(id, ta) {
     const text = ta.value.trim();

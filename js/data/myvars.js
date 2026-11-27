@@ -165,7 +165,7 @@ export function setMyVars(patch) {
   emit(Object.keys(patch));
   clearTimeout(timer);
   timer = setTimeout(flush, SAVE_MS);
-  if (!remote) setTimeout(() => saved(true), 0); // kept on this device only: nothing is waiting
+  if (!remote) { const at = Date.now(); setTimeout(() => saved(true, at), 0); } // kept on this device only: nothing is waiting
 }
 
 /** Save now (Nov 26: a deletion must survive an immediate reload). */
@@ -174,12 +174,13 @@ export function flushMyVars() { clearTimeout(timer); return flush(); }
 // Nov 29: save results, so an open chat can show a message as sending / not sent (with Retry).
 const saveSubs = new Set();
 export function onMyVarsSaved(fn) { saveSubs.add(fn); return () => saveSubs.delete(fn); }
-const saved = (ok) => { for (const fn of saveSubs) { try { fn(ok); } catch {} } };
+const saved = (ok, at = Date.now()) => { for (const fn of saveSubs) { try { fn(ok, at); } catch {} } };
 export const myVarsDirty = () => dirty;
 function flush() {
   if (!remote || !dirty) return saving;
   if (status !== 'ok') { clearTimeout(timer); timer = setTimeout(flush, 3000); return saving; }
   const snapshot = data;
+  const at = Date.now(); // everything changed up to now is in this write
   dirty = false;
   saving = saving.then(async () => {
     try {
@@ -191,9 +192,9 @@ function flush() {
       }
       if (row) { const ts = new Date().toISOString(); await api.db.update(TABLE, row.id, { data: snapshot, updated_at: ts }); row = { ...row, updated_at: ts }; }
       else row = await api.db.insert(TABLE, { data: snapshot });
-      if (!dirty) saved(true);
+      saved(true, at); // later edits report when their own write lands
     } catch (e) {
-      if (missing(e)) { remote = false; saved(true); } else { dirty = true; clearTimeout(timer); timer = setTimeout(flush, 4000); saved(false); }
+      if (missing(e)) { remote = false; saved(true, at); } else { dirty = true; clearTimeout(timer); timer = setTimeout(flush, 4000); saved(false, at); }
     }
   });
   return saving;
@@ -201,7 +202,8 @@ function flush() {
 function flushNow() {
   if (!remote || !dirty || !row || status !== 'ok') return;
   dirty = false;
-  try { api.db.update(TABLE, row.id, { data, updated_at: new Date().toISOString() }, { keepalive: true }); } catch {}
+  const at = Date.now();
+  try { Promise.resolve(api.db.update(TABLE, row.id, { data, updated_at: new Date().toISOString() }, { keepalive: true })).then(() => saved(true, at), () => { dirty = true; saved(false, at); }); } catch {}
 }
 
 // Pick up edits made on your other devices.

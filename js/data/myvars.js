@@ -41,6 +41,14 @@ function reset() {
 
 // The newest row wins if an account ever ended up with more than one.
 const pickRow = (rows) => (rows || []).slice().sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))[0] || null;
+// Nov 29c: edits kept on this device while your account was unreachable are newer than the account's copy:
+// keep them and upload them, instead of letting the older account copy overwrite them.
+function adopt(r, local) {
+  const remoteD = r?.data ? normal(r.data) : null;
+  const localD = local ? normal(local) : null;
+  if (localD && (!remoteD || localD.rev > remoteD.rev)) { data = localD; dirty = true; return; }
+  if (remoteD) data = remoteD;
+}
 function scheduleRetry() {
   clearTimeout(retryT);
   const wait = [1500, 4000, 10_000, 20_000][Math.min(retryN++, 3)];
@@ -51,13 +59,8 @@ function scheduleRetry() {
       row = pickRow(rows);
       status = 'ok'; retryN = 0;
       // Reached your account: its data wins, unless you changed something meanwhile — then yours is saved.
+      if (!dirty) { adopt(row, store.get(localKey(), null)); store.set(localKey(), data); }
       if (dirty) { clearTimeout(timer); timer = setTimeout(flush, 50); }
-      else if (row?.data) {
-        const r = normal(row.data);
-        const l = data ? normal(data) : null;
-        // Nov 27: keep a newer local copy (rev is Date.now()) instead of overwriting it with the stale row.
-        if (!(l && (l.rev || 0) > (r.rev || 0))) { data = r; store.set(localKey(), r); }
-      }
       emit();
     } catch { scheduleRetry(); emit(); }
   }, wait);
@@ -74,19 +77,10 @@ export function loadMyVars() {
     try {
       const rows = await api.db.select(TABLE, id ? { filters: { user_id: id } } : {});
       row = pickRow(rows);
-      const remoteData = row?.data ? normal(row.data) : null;
-      const localData = local ? normal(local) : null;
-      // Nov 27: rev is a Date.now() stamp. If this device kept working while the account was
-      // unreachable, its copy is the newer one — keep it and push it up rather than lose the edits.
-      if (remoteData && localData && (localData.rev || 0) > (remoteData.rev || 0)) {
-        data = localData;
-        dirty = true;
-        timer = setTimeout(flush, 50);
-      } else {
-        data = remoteData || localData || null;
-        if (!data) fresh = true;
-      }
+      adopt(row, local);
+      if (!data) fresh = true;
       status = 'ok';
+      if (dirty) { clearTimeout(timer); timer = setTimeout(flush, 50); }
     } catch (e) {
       if (!configured || missing(e)) { remote = false; status = 'local'; }
       else { status = 'error'; console.warn('Variables: your account couldn’t be reached yet — retrying', e); scheduleRetry(); }

@@ -52,7 +52,12 @@ function scheduleRetry() {
       status = 'ok'; retryN = 0;
       // Reached your account: its data wins, unless you changed something meanwhile — then yours is saved.
       if (dirty) { clearTimeout(timer); timer = setTimeout(flush, 50); }
-      else if (row?.data) { data = normal(row.data); store.set(localKey(), data); }
+      else if (row?.data) {
+        const r = normal(row.data);
+        const l = data ? normal(data) : null;
+        // Nov 27: keep a newer local copy (rev is Date.now()) instead of overwriting it with the stale row.
+        if (!(l && (l.rev || 0) > (r.rev || 0))) { data = r; store.set(localKey(), r); }
+      }
       emit();
     } catch { scheduleRetry(); emit(); }
   }, wait);
@@ -69,9 +74,18 @@ export function loadMyVars() {
     try {
       const rows = await api.db.select(TABLE, id ? { filters: { user_id: id } } : {});
       row = pickRow(rows);
-      if (row?.data) data = normal(row.data);
-      else if (local) data = normal(local);
-      else fresh = true;
+      const remoteData = row?.data ? normal(row.data) : null;
+      const localData = local ? normal(local) : null;
+      // Nov 27: rev is a Date.now() stamp. If this device kept working while the account was
+      // unreachable, its copy is the newer one — keep it and push it up rather than lose the edits.
+      if (remoteData && localData && (localData.rev || 0) > (remoteData.rev || 0)) {
+        data = localData;
+        dirty = true;
+        timer = setTimeout(flush, 50);
+      } else {
+        data = remoteData || localData || null;
+        if (!data) fresh = true;
+      }
       status = 'ok';
     } catch (e) {
       if (!configured || missing(e)) { remote = false; status = 'local'; }

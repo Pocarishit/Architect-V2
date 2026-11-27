@@ -109,10 +109,12 @@ export function miniPreview(cube, W = 180, H = 112) {
 }
 
 /* ---------------- overlays ---------------- */
+export function zoneOverlay(cls, onClose) { return overlay(cls, onClose); }
 function overlay(cls, onClose) {
   const layer = h('div', { class: ['zn-layer', cls], role: 'dialog', 'aria-modal': 'true' });
   const close = () => { window.removeEventListener('keydown', onKey, true); layer.remove(); onClose?.(); };
-  const onKey = (e) => { if (e.key === 'Escape' && !document.querySelector('.menu, .dlg, .pop')) { e.preventDefault(); e.stopImmediatePropagation(); close(); } };
+  // Esc closes only the topmost layer (an editor or preview opened over the Library closes first)
+  const onKey = (e) => { if (e.key === 'Escape' && !document.querySelector('.menu, .dlg, .pop') && [...document.querySelectorAll('.zn-layer')].pop() === layer) { e.preventDefault(); e.stopImmediatePropagation(); close(); } };
   window.addEventListener('keydown', onKey, true);
   document.body.append(layer);
   return { layer, close };
@@ -155,16 +157,18 @@ function sectionViewport(content, opts) {
 
 /** Open Here: the cube over the current chat. Nothing is posted and the canvas doesn't move; closing returns
  *  you to the same spot. */
-export function openHere(cube, { onEmbed = null, onPresent = null } = {}) {
-  const { layer, close } = overlay('is-open-here');
+export function openHere(cube, { onEmbed = null, onPresent = null, onEdit = null } = {}) {
+  // Nov 29: no top bar — the canvas runs to the top edge and the zone carries its own name. Edit Zone, Present,
+  // Copy and Close sit in a small cluster in the corner. Opening here is a view-only preview.
+  const { layer, close } = overlay('is-open-here is-bare');
   const view = sectionViewport(cube.content, { color: cube.color, name: cube.name });
-  layer.append(h('div', { class: 'zn-bar' },
-    h('span', { class: 'zn-chip', style: { '--zc': cube.color } }, h('i'), cube.name),
-    h('span', { class: 'zn-flex' }),
-    onPresent ? h('button', { type: 'button', class: 'btn sm', onclick: () => { close(); onPresent(); } }, icon('play', 13), 'Present') : null,
-    onEmbed ? h('button', { type: 'button', class: 'btn sm', onclick: () => { close(); onEmbed(); } }, icon('embed', 13), 'Embed in chat') : null,
-    h('button', { type: 'button', class: 'btn sm', onclick: () => { setClip(cube); } }, icon('copy', 13), 'Copy'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close', title: 'Close (Esc)', onclick: close }, icon('close', 16))), view.vp);
+  const cbtn = (ic, label, fn, primary) => h('button', { type: 'button', class: ['zn-cbtn', primary && 'is-primary'], 'aria-label': label, title: label, onclick: fn }, icon(ic, 14), h('span', {}, label));
+  layer.append(view.vp, h('div', { class: 'zn-corner zn-corner-here', role: 'toolbar', 'aria-label': `${cube.name} actions` },
+    onEdit ? cbtn('edit', 'Edit Zone', () => { close(); onEdit(); }, true) : null,
+    onPresent ? cbtn('play', 'Present', () => { close(); onPresent(); }) : null,
+    onEmbed ? cbtn('embed', 'Embed in chat', () => { close(); onEmbed(); }) : null,
+    cbtn('copy', 'Copy', () => setClip(cube)),
+    h('button', { type: 'button', class: 'zn-cbtn is-icon', 'aria-label': 'Close', title: 'Close (Esc)', onclick: close }, icon('close', 15))));
   requestAnimationFrame(() => view.fit());
   return close;
 }
@@ -214,7 +218,8 @@ export function present(cube, { onSaveSeq = null } = {}) {
   const view = sectionViewport(content, { color: cube.color, name: cube.name });
   const side = h('aside', { class: 'zn-seq' });
   const bar = h('div', { class: 'zn-bar' });
-  layer.append(bar, h('div', { class: 'zn-present' }, view.vp, side));
+  const stage = h('div', { class: 'zn-stage', hidden: true, 'aria-live': 'polite' });
+  layer.append(bar, h('div', { class: 'zn-present' }, h('div', { class: 'zn-present-main' }, view.vp, stage), side));
   requestAnimationFrame(() => view.fit());
 
   let mode = 'plan', step = -1, paused = false, utter = null, silentT = 0;
@@ -258,13 +263,30 @@ export function present(cube, { onSaveSeq = null } = {}) {
     n.classList.add('is-focus');
     view.sec.classList.add('has-focus');
     const it = byId.get(id);
+    stage.replaceChildren(); stage.hidden = true;
     if (!zoom || !it) return;
-    // The active message and whatever it shows alongside, framed together side by side.
-    const group = [it, ...(along.get(id) || []).map((x) => byId.get(x)).filter(Boolean)];
-    group.slice(1).forEach((g) => view.sec.querySelector(`.zn-item[data-zid="${CSS.escape(g.id)}"]`)?.classList.add('is-focus'));
-    const x0 = Math.min(...group.map((g) => g.x)), y0 = Math.min(...group.map((g) => g.y));
-    const x1 = Math.max(...group.map((g) => g.x + g.w)), y1 = Math.max(...group.map((g) => g.y + g.h));
-    view.fit({ x: x0 - 40, y: y0 - 40, w: x1 - x0 + 80, h: y1 - y0 + 80 }, 60, group.length > 1 ? 1.4 : 1.8);
+    const extra = (along.get(id) || []).map((x) => byId.get(x)).filter(Boolean);
+    if (!extra.length) { view.fit({ x: it.x - 40, y: it.y - 40, w: it.w + 80, h: it.h + 80 }, 60, 1.8); return; }
+    // Nov 29 — Show alongside: the active message and what it links to appear together, side by side and fully
+    // visible, on a presentation stage over the canvas. They're shown, not moved or copied onto the canvas, so
+    // the same picture can appear beside several messages in turn. The canvas behind stays where it is.
+    view.fit({ x: it.x - 40, y: it.y - 40, w: it.w + 80, h: it.h + 80 }, 60, 1.2);
+    const piece = (g, main) => {
+      const src = view.sec.querySelector(`.zn-item[data-zid="${CSS.escape(g.id)}"]`);
+      const c = src ? src.cloneNode(true) : h('div', { class: 'zn-item' }, g.text || '');
+      c.classList.remove('is-focus'); c.classList.add('zn-stage-item', main ? 'is-main' : 'is-along');
+      c.removeAttribute('data-zid');
+      Object.assign(c.style, { position: 'relative', left: 'auto', top: 'auto', width: `${g.w}px`, minHeight: `${g.h}px`, transform: 'none' });
+      return c;
+    };
+    const row = h('div', { class: 'zn-stage-row' }, piece(it, true), ...extra.map((g) => piece(g, false)));
+    stage.append(row);
+    stage.hidden = false;
+    requestAnimationFrame(() => {
+      const W = stage.clientWidth - 96, H = stage.clientHeight - 96;
+      const k = Math.min(1.6, W / Math.max(1, row.scrollWidth), H / Math.max(1, row.scrollHeight));
+      row.style.transform = `scale(${k})`;
+    });
   }
   function paintPlay() {
     const list = steps();
@@ -277,7 +299,7 @@ export function present(cube, { onSaveSeq = null } = {}) {
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Replay this step', title: 'Replay (R)', onclick: () => go(step) }, icon('undo', 16)),
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Next', title: 'Next (→)', disabled: step >= list.length - 1, onclick: () => go(step + 1) }, icon('chevronRight', 16)),
       speedCtl(),
-      h('button', { type: 'button', class: 'btn sm', onclick: () => { stopSpeech(); mode = 'plan'; view.sec.classList.remove('has-focus'); paintPlan(); view.fit(); } }, 'Edit order'),
+      h('button', { type: 'button', class: 'btn sm', onclick: () => { stopSpeech(); mode = 'plan'; view.sec.classList.remove('has-focus'); stage.replaceChildren(); stage.hidden = true; paintPlan(); view.fit(); } }, 'Edit order'),
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close', onclick: close }, icon('close', 16)));
     side.querySelectorAll('.zn-seq-row').forEach((r) => r.classList.remove('is-now'));
   }
@@ -398,7 +420,7 @@ export function openLibrary(lib) {
     const n = h('div', { class: 'zn-cube', tabindex: 0, 'data-cube': cube.id, style: { left: `${cube.x || 0}px`, top: `${cube.y || 0}px`, '--zc': cube.color } },
       h('div', { class: 'zn-cube-face' }, miniPreview(cube)),
       h('div', { class: 'zn-cube-foot' }, h('i'), h('span', {}, cube.name), h('button', { type: 'button', class: 'icon-btn xs', 'aria-label': 'Cube options', onclick: (e) => { e.stopPropagation(); cubeMenu(e.currentTarget, cube); } }, icon('more', 14))));
-    n.addEventListener('dblclick', () => openHere(cube, { onEmbed: () => { close(); lib.embed(cube); }, onPresent: () => present(cube, { onSaveSeq: (seq) => patchCube(cube.id, { seq }) }) }));
+    n.addEventListener('dblclick', () => openHere(cube, { onEmbed: () => { close(); lib.embed(cube); }, onPresent: () => present(cube, { onSaveSeq: (seq) => patchCube(cube.id, { seq }) }), onEdit: lib.edit ? () => lib.edit(cube, () => paint()) : null }));
     n.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); cubeMenu({ x: e.clientX, y: e.clientY }, cube); });
     n.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); n.dispatchEvent(new MouseEvent('dblclick')); } });
     n.addEventListener('pointerdown', (e) => {
@@ -429,7 +451,8 @@ export function openLibrary(lib) {
     const others = lib.others?.() || [];
     menu(anchor, [
       { header: cube.name },
-      { label: 'Open here', icon: 'eye', kbd: 'Dbl-click', onSelect: () => openHere(cube, { onEmbed: () => { close(); lib.embed(cube); }, onPresent: () => present(cube, { onSaveSeq: (seq) => patchCube(cube.id, { seq }) }) }) },
+      { label: 'Open here', icon: 'eye', kbd: 'Dbl-click', onSelect: () => openHere(cube, { onEmbed: () => { close(); lib.embed(cube); }, onPresent: () => present(cube, { onSaveSeq: (seq) => patchCube(cube.id, { seq }) }), onEdit: lib.edit ? () => lib.edit(cube, () => paint()) : null }) },
+      lib.edit ? { label: 'Edit Zone', icon: 'edit', onSelect: () => lib.edit(cube, () => paint()) } : null,
       { label: 'Embed in chat', icon: 'embed', onSelect: () => { close(); lib.embed(cube); } },
       { label: 'Present', icon: 'play', onSelect: () => present(cube, { onSaveSeq: (seq) => patchCube(cube.id, { seq }) }) },
       '-',

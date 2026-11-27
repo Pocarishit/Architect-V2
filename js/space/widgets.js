@@ -88,7 +88,7 @@ function placeFmBg(ed, id) {
     const minX = Math.min(...others.map((e) => e.x)), minY = Math.min(...others.map((e) => e.y));
     x = minX - W - 120; y = minY - 40;
   }
-  ed.updateEls([id], { x, y, w: W, h: H, fmBg: 1 }, { commit: false });
+  ed.updateEls([id], { x, y, w: W, h: H, fmBg: 1, locked: true }, { commit: false });
   ed.setEls([ed.byId.get(id), ...ed.els.filter((e) => e.id !== id)].filter(Boolean), { commit: false });
 }
 
@@ -172,15 +172,14 @@ const KINDS = {
     // the board's other objects stay to its right. The object itself is kept (not deleted), just placed once
     // and sent to the back so it reads as part of the background.
     const node = body.parentElement;
-    if (node?.classList.contains('el-widget') && typeof w.host?.editor === 'function') {
+    // (Only on the board itself — the Path sidebar's panel keeps the normal Fleeting Moments panel.)
+    if (node?.classList.contains('el-widget') && !node.classList.contains('sb-obj') && typeof w.host?.editor === 'function') {
       node.classList.add('is-fm-bg');
       if (!el.fmBg) { let n = 0; const go = () => { const ed = w.host.editor(); if (ed) placeFmBg(ed, el.id); else if (n++ < 120) setTimeout(go, 100); }; setTimeout(go, 0); }
       ctl = mountFleeting(body, el, w, { bg: true });
-      // The title is its handle: drag "Fleeting Moments" to move the whole timeline (‹ TODAY › stays clickable).
-      const hd = body.querySelector('.fi-bghead');
-      if (hd) { hd.querySelector('.fi-navgroup')?.setAttribute('data-noptr', ''); node.insertBefore(hd, body); }
-      // Earlier copies were locked in place on first load — free them so they can be moved.
-      if (el.fmBg && el.locked) setTimeout(() => w.host.editor()?.updateEls([el.id], { locked: false }, { commit: false }), 0);
+      // Nov 29: anchored — it isn't dragged around like an object. Its place and size are set with the Moment Zone
+      // tool on the toolbar; the rest of the time it's just part of the background (its controls still work).
+      if (el.fmBg && !el.locked) setTimeout(() => w.host.editor()?.updateEls([el.id], { locked: true }, { commit: false }), 0);
       return ctl;
     }
     ctl = mountFleeting(body, el, w);

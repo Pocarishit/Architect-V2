@@ -165,11 +165,17 @@ export function setMyVars(patch) {
   emit(Object.keys(patch));
   clearTimeout(timer);
   timer = setTimeout(flush, SAVE_MS);
+  if (!remote) setTimeout(() => saved(true), 0); // kept on this device only: nothing is waiting
 }
 
 /** Save now (Nov 26: a deletion must survive an immediate reload). */
 export function flushMyVars() { clearTimeout(timer); return flush(); }
 
+// Nov 29: save results, so an open chat can show a message as sending / not sent (with Retry).
+const saveSubs = new Set();
+export function onMyVarsSaved(fn) { saveSubs.add(fn); return () => saveSubs.delete(fn); }
+const saved = (ok) => { for (const fn of saveSubs) { try { fn(ok); } catch {} } };
+export const myVarsDirty = () => dirty;
 function flush() {
   if (!remote || !dirty) return saving;
   if (status !== 'ok') { clearTimeout(timer); timer = setTimeout(flush, 3000); return saving; }
@@ -185,8 +191,9 @@ function flush() {
       }
       if (row) { const ts = new Date().toISOString(); await api.db.update(TABLE, row.id, { data: snapshot, updated_at: ts }); row = { ...row, updated_at: ts }; }
       else row = await api.db.insert(TABLE, { data: snapshot });
+      if (!dirty) saved(true);
     } catch (e) {
-      if (missing(e)) remote = false; else { dirty = true; clearTimeout(timer); timer = setTimeout(flush, 4000); }
+      if (missing(e)) { remote = false; saved(true); } else { dirty = true; clearTimeout(timer); timer = setTimeout(flush, 4000); saved(false); }
     }
   });
   return saving;

@@ -366,33 +366,84 @@ export function mountBoard(root, boardId, opts = {}) {
     // Sticky Note, Text, Arrow, Pen, dashed Area, Shapes, + Insert (Image, Video, Objects). Undo / Redo sit in
     // their own pill below. Every canvas uses this layout; each keeps its own tools.
     const insertBtn = tbtn(null, 'plus', 'Insert', (a) => insertFly(a), { flyout: true });
-    const arrowBtn = space ? tbtn('line', 'arrow', 'Arrow (L)', (a) => { editor.setTool('line'); lineFly(a); }, { flyout: true }) : null;
-    const areaBtn = space ? tbtn('border', 'borderBox', 'Area (B)', () => { editor.setOpt('border', 'box'); editor.setTool('border'); }) : null;
+    // Nov 29: every board — Architect Space and Blueprints — uses the same compact rail: Select, Sticky Note,
+    // Text, Arrow, Pen, dashed Area (Border), grouped Shapes, + Insert. Hand stays on H / hold Space; Frame,
+    // Templates and uploads live in + Insert. Undo / Redo sit in their own pill below.
+    const arrowBtn = tbtn('line', 'arrow', 'Arrow (L)', (a) => { editor.setTool('line'); lineFly(a); }, { flyout: true });
+    const areaBtn = tbtn('border', 'borderBox', 'Border (B)', (a) => {
+      // with borders selected, the menu restyles them; otherwise it sets up the next one you draw
+      if (![...editor.sel].some((id) => editor.byId.get(id)?.type === 'border')) editor.setTool('border');
+      borderFly(a);
+    }, { flyout: true });
     const history = h('div', { class: 'bp-tools bp-history', role: 'toolbar', 'aria-label': 'Undo and redo' }, undoBtn, redoBtn);
-    if (space) toolbar.append(
+    // Nov 29 — Architect Space: the Moment Zone tool sets where Fleeting Moments live on the board.
+    const mzBtn = space ? tbtn(null, 'momentZone', 'Moment Zone — where Fleeting Moments are saved', () => setMZ(!mz)) : null;
+    toolbar.append(
       tbtn('select', 'pointerFill', 'Select (V)', () => editor.setTool('select')),
       stickyBtn,
       tbtn('text', 'text', 'Text (T)', () => editor.setTool('text')),
       arrowBtn,
       penBtn,
       areaBtn,
-      shapeBtn,
-      insertBtn);
-    else toolbar.append(
-      tbtn('select', 'pointerFill', 'Select (V)', () => editor.setTool('select')),
-      tbtn('hand', 'hand', 'Hand (H · hold Space)', () => editor.setTool('hand')),
-      sep(),
-      stickyBtn,
-      tbtn('text', 'text', 'Text (T)', () => editor.setTool('text')),
-      shapeBtn,
-      lineBtn,
-      penBtn,
-      tbtn('frame', 'frame', 'Frame (F)', () => editor.setTool('frame')),
-      tbtn('border', 'borderBox', 'Border (B · ⇧B curve)', () => { editor.setOpt('border', 'box'); editor.setTool('border'); }),
-      sep(),
-      tbtn(null, 'image', 'Upload image, video or PDF (U)', () => pickFiles()),
-      tbtn(null, 'video', 'Add video or embed (K)', () => openEmbed()),
-      tbtn(null, 'templates', 'Templates', (a) => templateFly(a)));
+      ...[shapeBtn, mzBtn, insertBtn].filter(Boolean));
+    /* ---------- Moment Zone: a transparent outline with handles, only while the tool is on ---------- */
+    let mz = null;
+    function fmEl() { return editor.els.find((e) => e.type === 'widget' && e.kind === 'fleeting' && e.fmBg) || editor.els.find((e) => e.type === 'widget' && e.kind === 'fleeting'); }
+    function setMZ(on) {
+      if (!on) {
+        if (!mz) return;
+        cancelAnimationFrame(mz.raf); mz.box.remove(); mz.offs.forEach((f) => f()); mz = null;
+        mzBtn?.classList.remove('is-on'); mzBtn?.setAttribute('aria-pressed', 'false'); toolbar.classList.remove('mz-on');
+        return;
+      }
+      const el = fmEl();
+      if (!el) { toast('Add Fleeting Moments to this space first — then set its zone here.', { ms: 2600 }); return; }
+      if (editor.tool !== 'select') editor.setTool('select');
+      const box = h('div', { class: 'mz-box', role: 'group', 'aria-label': 'Moment Zone — drag to move, corners to resize. Esc when done.' },
+        h('span', { class: 'mz-chip' }, 'Moment Zone'),
+        ...['nw', 'ne', 'sw', 'se'].map((d) => h('i', { class: `mz-h is-${d}`, 'data-d': d })));
+      editor.vp.append(box);
+      const place = () => {
+        const e2 = editor.byId.get(el.id); if (!e2) { setMZ(false); return; }
+        const r = live || e2, z = editor.cam.z;
+        Object.assign(box.style, { left: `${r.x * z + editor.cam.x}px`, top: `${r.y * z + editor.cam.y}px`, width: `${r.w * z}px`, height: `${r.h * z}px` });
+      };
+      let live = null;
+      const loop = () => { place(); mz.raf = requestAnimationFrame(loop); };
+      box.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault(); e.stopPropagation();
+        const d = e.target.dataset?.d || null;
+        const e0 = editor.byId.get(el.id), z = editor.cam.z, sx = e.clientX, sy = e.clientY;
+        const r0 = { x: e0.x, y: e0.y, w: e0.w, h: e0.h };
+        box.setPointerCapture(e.pointerId);
+        const mv = (ev) => {
+          const dx = (ev.clientX - sx) / z, dy = (ev.clientY - sy) / z;
+          const r = { ...r0 };
+          if (!d) { r.x += dx; r.y += dy; }
+          else {
+            if (d.includes('e')) r.w = Math.max(280, r0.w + dx);
+            if (d.includes('s')) r.h = Math.max(600, r0.h + dy);
+            if (d.includes('w')) { r.w = Math.max(280, r0.w - dx); r.x = r0.x + r0.w - r.w; }
+            if (d.includes('n')) { r.h = Math.max(600, r0.h - dy); r.y = r0.y + r0.h - r.h; }
+          }
+          live = { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) };
+        };
+        const up = () => {
+          box.removeEventListener('pointermove', mv); box.removeEventListener('pointerup', up);
+          if (live) editor.updateEls([el.id], live);
+          live = null;
+        };
+        box.addEventListener('pointermove', mv); box.addEventListener('pointerup', up);
+      });
+      const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); setMZ(false); } };
+      window.addEventListener('keydown', onKey, true);
+      mz = { box, raf: 0, offs: [() => window.removeEventListener('keydown', onKey, true), editor.on('tool', () => setMZ(false))] };
+      mzBtn?.classList.add('is-on'); mzBtn?.setAttribute('aria-pressed', 'true'); toolbar.classList.add('mz-on');
+      loop();
+    }
+    cleanups.push(() => setMZ(false));
+    void lineBtn; void sep;
     const rail = h('div', { class: 'bp-rail' }, toolbar, history);
     page.append(rail);
     if (window.ResizeObserver) {
@@ -404,20 +455,58 @@ export function mountBoard(root, boardId, opts = {}) {
     function insertFly(anchor) {
       const row = (ic, label, fn) => h('button', { type: 'button', class: 'tool-opt wide', onclick: () => { closeFloating(); fn(); } }, icon(ic, 18), h('span', {}, label));
       popover(anchor, h('div', { class: 'pop' }, h('div', { class: 'opt-col' },
-        row('image', 'Image', () => pickFiles()),
-        row('video', 'Video', () => openEmbed()),
+        row('image', space ? 'Image' : 'Image, video or PDF', () => pickFiles()),
+        row('video', space ? 'Video' : 'Video or embed', () => openEmbed()),
+        space ? null : row('frame', 'Frame', () => editor.setTool('frame')),
+        space ? null : h('button', { type: 'button', class: 'tool-opt wide', onclick: (e) => { const a = e.currentTarget; templateFly(anchor || a); } }, icon('templates', 18), h('span', {}, 'Templates')),
         opts.objects ? row('widget', 'Objects', () => opts.objects(editor.viewCenter())) : null)), flyOpts);
+    }
+    // Nov 29 — Border: a Line (divide two areas) or a Box (outline one), Standard or Glass, any colour. The
+    // choice previews here before you draw and is saved on each border; with borders selected it restyles them.
+    function borderFly(anchor) {
+      const body = h('div', { class: 'pop bd-pop' });
+      const selBorders = () => [...editor.sel].map((id) => editor.byId.get(id)).filter((e) => e?.type === 'border');
+      const cur = () => { const b = selBorders()[0]; return b ? { shape: b.shape === 'line' ? 'line' : 'box', glass: !!b.glass, color: b.stroke && b.stroke !== 'auto' ? b.stroke : editor.opts.borderColor || '#f8f8ff' } : { shape: editor.opts.border === 'line' ? 'line' : 'box', glass: !!editor.opts.borderGlass, color: editor.opts.borderColor || '#f8f8ff' }; };
+      const apply = (p) => {
+        const bs = selBorders();
+        if (p.shape) editor.setOpt('border', p.shape);
+        if (p.glass != null) editor.setOpt('borderGlass', p.glass);
+        if (p.color) editor.setOpt('borderColor', p.color);
+        if (bs.length && (p.glass != null || p.color)) {
+          const patch = {}; if (p.glass != null) patch.glass = p.glass; if (p.color) patch.stroke = p.color;
+          editor.updateEls(bs.map((b) => b.id), patch);
+        }
+        paint();
+      };
+      const PRESETS = ['#f8f8ff', '#d98a7a', '#e2b46a', '#7fc8a9', '#8fa8e0', '#b79be0', '#e07a9a'];
+      const paint = () => {
+        const c = cur();
+        const seg = (on, ic, label, fn) => h('button', { type: 'button', class: ['bd-seg', on && 'is-on'], 'aria-pressed': String(on), onclick: fn }, icon(ic, 14), h('span', {}, label));
+        const hex = h('input', { class: 'bd-hex', value: c.color.toUpperCase(), maxlength: 7, 'aria-label': 'Hex colour', spellcheck: 'false',
+          onkeydown: (e) => { e.stopPropagation(); if (e.key === 'Enter') { const v = e.target.value.trim(); if (/^#?[0-9a-f]{6}$/i.test(v)) apply({ color: v.startsWith('#') ? v : `#${v}` }); } } });
+        const picker = h('input', { type: 'color', class: 'bd-picker', value: /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : '#f8f8ff', 'aria-label': 'Custom colour', oninput: (e) => apply({ color: e.target.value }) });
+        body.replaceChildren(
+          h('div', { class: 'pop-label' }, 'Border'),
+          h('div', { class: 'bd-row' }, seg(c.shape === 'line', 'line', 'Line', () => { apply({ shape: 'line' }); editor.setTool('border'); }), seg(c.shape === 'box', 'borderBox', 'Box', () => { apply({ shape: 'box' }); editor.setTool('border'); })),
+          h('div', { class: 'pop-label' }, 'Style'),
+          h('div', { class: 'bd-row' }, seg(!c.glass, 'rect', 'Standard', () => apply({ glass: false })), seg(c.glass, 'layers', 'Glass', () => apply({ glass: true }))),
+          h('div', { class: 'bd-colorhead' }, h('span', { class: 'pop-label' }, 'Color'), hex),
+          h('div', { class: 'bd-sw' }, ...PRESETS.map((x) => h('button', { type: 'button', class: ['bd-swb', x.toLowerCase() === c.color.toLowerCase() && 'is-on'], style: { background: x }, 'aria-label': x, title: x, onclick: () => apply({ color: x }) }))),
+          h('label', { class: 'bd-custom' }, picker, h('span', {}, 'Custom color')),
+          h('div', { class: ['bd-preview', c.glass && 'is-glass', `is-${c.shape}`], style: { '--bd': c.color }, 'aria-hidden': 'true' }, h('i')));
+      };
+      paint();
+      popover(anchor, body, flyOpts);
     }
 
     function syncTools() {
       const active = editor.tool === 'eraser' ? 'pen' : editor.tool;
-      if (space) arrowBtn.replaceChildren(icon(editor.opts.line === 'line' ? 'line' : 'arrow', 20));
+      arrowBtn.replaceChildren(icon(editor.opts.line === 'line' ? 'line' : 'arrow', 20));
       for (const [k, b] of toolBtns) {
         b.classList.toggle('is-on', k === active);
         b.setAttribute('aria-pressed', String(k === active));
       }
-      shapeBtn.replaceChildren(icon(space ? 'shapesGroup' : editor.opts.shape || 'rect', 20));
-      if (!space) lineBtn.replaceChildren(icon(editor.opts.line === 'line' ? 'line' : 'arrow', 20));
+      shapeBtn.replaceChildren(icon('shapesGroup', 20));
       penBtn.replaceChildren(icon(editor.tool === 'eraser' ? 'eraser' : editor.opts.pen === 'highlighter' ? 'highlighter' : 'pen', 20));
       stickyBtn.querySelector('.ic')?.style.setProperty('color', editor.tool === 'sticky' ? '' : '');
     }

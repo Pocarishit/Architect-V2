@@ -13,9 +13,10 @@ import { uid, store } from '../core/util.js';
 import { api, friendlyError } from '../data/api.js';
 import { urlOf, uploadMedia, lightbox, mediaFiles, pickMedia } from './media.js';
 import { bubbleRow, dayRow, chatDayLabel, CHAT_GROUP_MS } from './sidechat.js';
-import { myVarsSource, myVarsStatus } from '../data/myvars.js';
+import { myVarsSource, myVarsStatus, onMyVarsSaved, flushMyVars } from '../data/myvars.js';
 import { registerVarChat } from './saycomposer.js';
 import { mountFreeView } from './freeview.js';
+import { zoneOverlay } from './zones.js';
 import { shareCategory, unshareCategory } from '../data/varshare.js';
 
 export const DEFAULT_SECTIONS = ['School', 'Family', 'Business', 'Friends'];
@@ -260,7 +261,8 @@ export function mountVariables(root, el0, w) {
   const patchEntry = (id, fn) => setEntries(entries().map((x) => (x.id === id ? { ...x, ...fn(x) } : x)));
   const here = () => sub || section;
 
-  function render() {
+  function render() { render0(); if (outbox?.size) markOutbox(); }
+  function render0() {
     if (!ready) { box.replaceChildren(h('p', { class: 'vr-hint' }, 'Loading your variables…')); return; }
     // Nov 27: a load or sync problem is never shown as an empty account (no default tabs, no Add-only view).
     if (!foreign && !acct().sections && !acct().entries.length && myVarsStatus() !== 'ok' && myVarsStatus() !== 'local') {
@@ -272,12 +274,23 @@ export function mountVariables(root, el0, w) {
       // Typing a note: refresh the messages in place, keep the composer (and your cursor) alone.
       const x = open && entries().find((e) => e.id === open);
       const list = box.querySelector('.vr-msgs');
-      if (x && free && x.free?.on) { free.update(x); markFind(false); return; }
+      if (x && free && x.free?.on) {
+        free.update(x);
+        // the chat dock beside the canvas: its messages refresh too (a sent one appears right away)
+        const dl = box.querySelector('.vr-dock-list');
+        if (dl) {
+          const atEnd = dl.scrollHeight - dl.scrollTop - dl.clientHeight < 40;
+          const pos = x.free?.pos || {};
+          dl.replaceChildren(...msgRows(x, (x.notes || []).filter((m) => !pos[m.id])));
+          if (atEnd && !query) dl.scrollTop = dl.scrollHeight;
+        }
+        markFind(false); markOutbox(); return;
+      }
       if (x && list && !x.free?.on) {
         const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
         list.replaceChildren(...orderRows(x));
         if (atEnd && !query) list.scrollTop = list.scrollHeight;
-        markFind(false);
+        markFind(false); markOutbox();
       } else pending = true;
       return;
     }
@@ -717,7 +730,7 @@ export function mountVariables(root, el0, w) {
       { label: s.img ? 'Replace image' : 'Add an image', icon: 'image', onSelect: async () => { const [f] = await pickMedia({ multiple: false, accept: 'image/*' }); if (f) setSecImg(s.id, f); } },
       s.img ? { label: 'Remove image', icon: 'eyeOff', onSelect: () => save({ sections: sections().map((x) => (x.id === s.id ? { ...x, img: null } : x)) }) } : null,
       !s.parent && !foreign ? { label: s.share?.item ? 'Make private' : 'Share with your Space', icon: s.share?.item ? 'lock' : 'users', onSelect: () => toggleShare(s) } : null,
-      { label: 'Color…', icon: 'textColor', onSelect: () => pickColor(anchor, s.color).then((c) => { if (c !== undefined) save({ sections: sections().map((x) => (x.id === s.id ? { ...x, color: c } : x)) }); }) },
+      { label: 'Color', icon: 'textColor', onSelect: () => pickColor(anchor, s.color).then((c) => { if (c !== undefined) save({ sections: sections().map((x) => (x.id === s.id ? { ...x, color: c } : x)) }); }) },
       undoItem(),
       { label: prev, icon: 'chevronLeft', disabled: i === 0, onSelect: () => swap(i - 1) },
       { label: next, icon: 'chevronRight', disabled: i === siblings.length - 1, onSelect: () => swap(i + 1) },
@@ -794,7 +807,7 @@ export function mountVariables(root, el0, w) {
       { label: 'Rename', icon: 'edit', kbd: 'F2', onSelect: () => { const n = nameEl(); if (n) renameInline(n, x); else promptDialog('Rename', { value: x.name, maxLength: 120 }).then((v) => { if (v?.trim()) patchEntry(x.id, () => ({ name: v.trim().slice(0, 120) })); }); } },
       { label: x.photo ? 'Replace profile picture' : 'Add a profile picture', icon: 'image', onSelect: async () => { const [f] = await pickMedia({ multiple: false, accept: 'image/*' }); if (f) setPhoto(x.id, f); } },
       x.photo ? { label: 'Remove picture', icon: 'eyeOff', onSelect: () => patchEntry(x.id, () => ({ photo: null })) } : null,
-      { label: 'Color…', icon: 'textColor', onSelect: () => pickColor(anchor, x.color).then((c) => { if (c !== undefined) patchEntry(x.id, () => ({ color: c })); }) },
+      { label: 'Color', icon: 'textColor', onSelect: () => pickColor(anchor, x.color).then((c) => { if (c !== undefined) patchEntry(x.id, () => ({ color: c })); }) },
       { label: 'Duplicate', icon: 'copy', onSelect: () => { const list = entries(); const i = list.findIndex((y) => y.id === x.id); const copy = { ...x, id: uid(), name: `${x.name} copy`, notes: [], at: Date.now() }; setEntries([...list.slice(0, i + 1), copy, ...list.slice(i + 1)]); } },
       others.length ? { header: 'Move to' } : null,
       ...others.map((s) => ({ label: pathOf(s.id), icon: 'folderMove', onSelect: () => patchEntry(x.id, () => ({ section: s.id })) })),
@@ -947,7 +960,63 @@ export function mountVariables(root, el0, w) {
       };
       window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
     });
-    return h('div', { class: ['vr-fv-split', !shown && 'is-dock-off'] }, fv.el, tab, dock);
+    // Nov 29 — collapsed, it opens when you hover along its edge (the arrow still toggles it). It stays open
+    // while the pointer is in it, while you're typing in it, or while one of its menus is open.
+    const split = h('div', { class: ['vr-fv-split', !shown && 'is-dock-off'] }, fv.el, tab, dock);
+    if (!shown) {
+      const hot = h('div', { class: 'vr-dock-hot', 'aria-hidden': 'true' });
+      split.append(hot);
+      let t = 0;
+      const open0 = () => { clearTimeout(t); dock.hidden = false; split.classList.add('is-dock-peek'); requestAnimationFrame(() => { list.scrollTop = dockScroll ?? list.scrollHeight; }); };
+      const shut = () => {
+        clearTimeout(t);
+        t = setTimeout(() => {
+          if (dock.matches(':hover') || hot.matches(':hover') || dock.contains(document.activeElement) || document.querySelector('.menu, .popover')) { shut(); return; }
+          split.classList.remove('is-dock-peek'); dock.hidden = true;
+        }, 380);
+      };
+      hot.addEventListener('pointerenter', open0);
+      hot.addEventListener('pointerleave', shut);
+      dock.addEventListener('pointerenter', open0);
+      dock.addEventListener('pointerleave', shut);
+      dock.addEventListener('focusout', shut);
+    }
+    // Nov 29 — right-click an empty spot in the chat: Customize Background / Reset to Default, for this panel only
+    // (saved for the next time it opens). Messages and the text field keep their own menus.
+    paintDockBg(dock, x.id);
+    list.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.sc-msg, .sc-bubble, a, button, input, textarea, .vr-day, .sc-day')) return;
+      e.preventDefault(); e.stopPropagation();
+      menu({ x: e.clientX, y: e.clientY }, [
+        { label: 'Customize Background', icon: 'image', onSelect: () => dockBgPicker({ x: e.clientX, y: e.clientY }, dock, x.id) },
+        { label: 'Reset to Default', icon: 'undo', disabled: !store.get(`architect.vr.dockbg.${x.id}`, null), onSelect: () => { store.set(`architect.vr.dockbg.${x.id}`, null); paintDockBg(dock, x.id); } },
+      ]);
+    });
+    return split;
+  }
+  function paintDockBg(dock, id) {
+    const bg = store.get(`architect.vr.dockbg.${id}`, null);
+    dock.classList.toggle('has-bg', !!bg);
+    dock.style.removeProperty('--dock-bg'); dock.style.removeProperty('--dock-img');
+    if (!bg) return;
+    if (bg.color) dock.style.setProperty('--dock-bg', bg.color);
+    if (bg.path) dock.style.setProperty('--dock-img', `url("${urlOf(bg.path)}")`);
+  }
+  function dockBgPicker(at, dock, id) {
+    const set = (v) => { store.set(`architect.vr.dockbg.${id}`, v); paintDockBg(dock, id); };
+    const COLORS = ['#101012', '#17171b', '#1b1712', '#121a17', '#12161d', '#1a1320', '#201313', '#e9e6df'];
+    const cur = store.get(`architect.vr.dockbg.${id}`, null) || {};
+    const anchor = h('span', { style: { position: 'fixed', left: `${at.x}px`, top: `${at.y}px`, width: '1px', height: '1px' } });
+    document.body.append(anchor);
+    popover(anchor, h('div', { class: 'pop bd-pop' },
+      h('div', { class: 'pop-label' }, 'Chat background'),
+      h('div', { class: 'bd-sw' }, ...COLORS.map((c) => h('button', { type: 'button', class: ['bd-swb', cur.color === c && !cur.path && 'is-on'], style: { background: c }, 'aria-label': c, title: c, onclick: () => { set({ color: c }); closeFloating(); } }))),
+      h('label', { class: 'bd-custom' }, h('input', { type: 'color', class: 'bd-picker', value: /^#[0-9a-f]{6}$/i.test(cur.color || '') ? cur.color : '#17171b', 'aria-label': 'Custom colour', oninput: (e) => set({ color: e.target.value }) }), h('span', {}, 'Custom color')),
+      h('button', { type: 'button', class: 'tool-opt wide', onclick: async () => {
+        const [f] = await pickMedia({ accept: 'image/*' }); if (!f) return;
+        try { const up = await uploadMedia(f); set({ path: up.path, color: cur.color || null }); closeFloating(); } catch (err) { toast(err?.message || 'That image didn’t upload.', { tone: 'error' }); }
+      } }, icon('image', 16), h('span', {}, 'Use an image…'))), { side: 'bottom', align: 'start', onClose: () => anchor.remove() });
+    setTimeout(() => { if (!document.querySelector('.popover')) anchor.remove(); }, 60000);
   }
 
   function chat(x) {
@@ -1079,6 +1148,92 @@ export function mountVariables(root, el0, w) {
   }
 
   // A chat's Library of Zone Cubes (Nov 26).
+  // Nov 29 — Edit Zone: the saved cube opens on a normal Variables canvas (select, move, edit, connect — the
+  // same rail and controls) over the Library. Changes save back into the same cube as you go, so it reopens as
+  // you left it; nothing is pasted into the chat. Its messages live only in the cube.
+  function openCubeEditor(x, cube0, done) {
+    const c = cube0.content || { w: 800, h: 600, items: [], links: [] };
+    const pad = 80;
+    let scratch = {
+      id: `cube-edit-${cube0.id}`, name: cube0.name,
+      notes: c.items.filter((it) => it.kind === 'msg').map((it) => ({ ...(it.raw || { text: it.text, files: it.files, name: it.name, by: it.by, ts: it.ts }), id: it.id })),
+      free: {
+        on: true, zones: [], embeds: [], ink: c.ink || [], shapes: c.shapes || [],
+        pos: Object.fromEntries(c.items.filter((it) => it.kind === 'msg').map((it) => [it.id, { x: it.x + pad, y: it.y + pad }])),
+        size: Object.fromEntries(c.items.filter((it) => it.kind === 'msg' && it.w).map((it) => [it.id, { w: it.w, h: it.h }])),
+        cards: c.items.filter((it) => it.kind !== 'msg').map((it) => ({ ...(it.raw || { kind: it.kind, text: it.text, path: it.path }), id: it.id, x: it.x + pad, y: it.y + pad, w: it.w, ...(it.kind === 'img' ? { h: it.h } : {}) })),
+        links: (c.links || []).map((l) => ({ id: uid(), a: l.a, b: l.b, arrow: l.arrow !== false, ...(l.side ? { side: true } : {}) })),
+      },
+    };
+    const { layer, close } = zoneOverlay('is-cube-edit', () => { persist(true); fv?.destroy(); done?.(); });
+    const host = h('div', { class: 'zn-edit-host' });
+    const cbtn = (ic, label, fn) => h('button', { type: 'button', class: 'zn-cbtn', 'aria-label': label, title: label, onclick: fn }, icon(ic, 14), h('span', {}, label));
+    layer.append(host, h('div', { class: 'zn-edit-name', style: { '--zc': cube0.color } }, h('i'), cube0.name, h('span', {}, 'Editing')),
+      h('div', { class: 'zn-corner zn-corner-here' }, cbtn('check', 'Done', () => close())));
+    // what's on the canvas now → the cube's content (positions relative to the top-left item)
+    const toContent = () => {
+      const f = scratch.free;
+      const raw = [];
+      for (const m of scratch.notes) {
+        const p0 = f.pos[m.id]; if (!p0) continue;
+        const node = host.querySelector(`.sc-msg[data-id="${CSS.escape(m.id)}"]`);
+        const sz = f.size?.[m.id] || { w: node?.offsetWidth || 260, h: node?.offsetHeight || 60 };
+        raw.push({ id: m.id, kind: 'msg', x: p0.x, y: p0.y, w: sz.w, h: sz.h, text: m.text || '', files: m.files || [], name: m.name || '', by: m.by || null, ts: m.ts, raw: m });
+      }
+      for (const cd of f.cards || []) {
+        const node = host.querySelector(`[data-card="${CSS.escape(cd.id)}"]`);
+        raw.push({ id: cd.id, kind: cd.kind || 'note', x: cd.x, y: cd.y, w: cd.w || node?.offsetWidth || 200, h: cd.h || node?.offsetHeight || 120, text: cd.text || '', path: cd.path || null, raw: cd });
+      }
+      const minX = Math.min(...raw.map((q) => q.x), Infinity), minY = Math.min(...raw.map((q) => q.y), Infinity);
+      const ox = Number.isFinite(minX) ? minX - 16 : 0, oy = Number.isFinite(minY) ? minY - 16 : 0;
+      const ids = new Set(raw.map((q) => q.id));
+      const items = raw.map((q) => ({ ...q, x: Math.round(q.x - ox), y: Math.round(q.y - oy), w: Math.round(q.w), h: Math.round(q.h) }));
+      return {
+        w: Math.max(200, ...items.map((q) => q.x + q.w + 16)), h: Math.max(160, ...items.map((q) => q.y + q.h + 16)),
+        items, links: (f.links || []).filter((l) => ids.has(l.a) && ids.has(l.b)).map((l) => ({ a: l.a, b: l.b, arrow: l.arrow !== false, ...(l.side ? { side: true } : {}) })),
+        ...(f.shapes?.length ? { shapes: f.shapes } : {}), ...(f.ink?.length ? { ink: f.ink } : {}),
+      };
+    };
+    let saveT = 0;
+    function persist(now) {
+      clearTimeout(saveT);
+      const go = () => {
+        const content = toContent();
+        patchEntry(x.id, (e) => ({ library: { ...(e.library || {}), cubes: (e.library?.cubes || []).map((q) => (q.id === cube0.id ? { ...q, content, edited: Date.now() } : q)) } }));
+      };
+      if (now) go(); else saveT = setTimeout(go, 500);
+    }
+    const fv = mountFreeView({
+      entry: () => scratch,
+      flowRows: () => [],
+      one: (m) => bubble(scratch, m),
+      media: { pick: pickMedia, upload: uploadMedia, url: urlOf },
+      save: (f) => { scratch = { ...scratch, free: { ...f, on: true } }; fv.update(scratch); persist(); },
+      remove: (ids) => {
+        const gone = new Set(ids);
+        const f = scratch.free, pos = { ...f.pos }, size = { ...f.size };
+        gone.forEach((id) => { delete pos[id]; delete size[id]; });
+        scratch = { ...scratch, notes: scratch.notes.filter((m) => !gone.has(m.id)), free: { ...f, pos, size, links: f.links.filter((l) => !gone.has(l.a) && !gone.has(l.b)) } };
+        fv.update(scratch); persist();
+      },
+      dock: true,
+    });
+    host.append(fv.el);
+    // a message's words: double-click it to edit them (notes and text edit in place as usual)
+    host.addEventListener('dblclick', async (e) => {
+      const row = e.target.closest('.sc-msg[data-id]');
+      if (!row || e.target.closest('[contenteditable="true"], input, textarea')) return;
+      const m = scratch.notes.find((q) => q.id === row.dataset.id);
+      if (!m || m.files?.length && !m.text) return;
+      e.preventDefault(); e.stopPropagation();
+      const t = await promptDialog('Edit message', { value: m.text || '', multiline: true, maxLength: 4000, ok: 'Save' });
+      if (t == null) return;
+      scratch = { ...scratch, notes: scratch.notes.map((q) => (q.id === m.id ? { ...q, text: t, edited: Date.now() } : q)) };
+      fv.update(scratch); persist();
+    }, true);
+    requestAnimationFrame(() => requestAnimationFrame(() => fv.fit?.()));
+    return close;
+  }
   function libraryOf(x) {
     const cur = () => entries().find((e) => e.id === x.id) || x;
     const get = () => cur().library || { cubes: [] };
@@ -1089,6 +1244,7 @@ export function mountVariables(root, el0, w) {
     });
     return {
       name: cur().name, get, set,
+      edit: (cube, done) => openCubeEditor(x, cube, done),
       patchCube: (id, p) => set({ cubes: (get().cubes || []).map((c) => (c.id === id ? { ...c, ...p } : c)) }),
       others: () => entries().filter((e) => e.id !== x.id && !e.kind).map((e) => ({ id: e.id, name: `${e.name}${e.section ? ` · ${pathOf(e.section)}` : ''}` })),
       // Copy keeps it here too; Move takes it (and its embeds) out of this chat.
@@ -1126,7 +1282,30 @@ export function mountVariables(root, el0, w) {
   }
 
   const note = (p) => ({ id: uid(), by: me?.id || null, name: me?.username || '', ts: Date.now(), text: '', files: [], ...p });
-  const pushNote = (id, n) => patchEntry(id, (e) => ({ notes: [...(e.notes || []), n].slice(-MAX_NOTES) }));
+  // Nov 29: a sent message shows at once; until it's saved it's marked Sending…, and if saving fails it stays
+  // in the thread marked Not sent with Retry. When it saves, the same bubble just loses the mark.
+  var outbox = new Map(); // note id → 'pending' / 'failed' (var: render() may run before this line)
+  const pushNote = (id, n) => {
+    outbox.set(n.id, 'pending');
+    patchEntry(id, (e) => ({ notes: [...(e.notes || []), n].slice(-MAX_NOTES) }));
+    if (src !== myVarsSource) setTimeout(() => { if (outbox.get(n.id) === 'pending') { outbox.delete(n.id); markOutbox(); } }, 1500);
+    markOutbox();
+  };
+  function markOutbox() {
+    for (const row of box.querySelectorAll('.sc-msg[data-id]')) {
+      const st = outbox.get(row.dataset.id);
+      row.classList.toggle('is-pending', st === 'pending');
+      row.classList.toggle('is-failed', st === 'failed');
+      row.querySelector(':scope > .vr-outbox')?.remove();
+      if (st) row.append(h('span', { class: 'vr-outbox', role: 'status' }, st === 'pending' ? 'Sending…' : 'Not sent',
+        st === 'failed' ? h('button', { type: 'button', class: 'vr-retry', onclick: (e) => { e.stopPropagation(); for (const [k, v] of outbox) if (v === 'failed') outbox.set(k, 'pending'); markOutbox(); flushMyVars(); } }, 'Retry') : null));
+    }
+  }
+  const offSaved = onMyVarsSaved((ok) => {
+    if (src !== myVarsSource) return;
+    for (const [k, v] of outbox) { if (ok) outbox.delete(k); else if (v === 'pending') outbox.set(k, 'failed'); }
+    markOutbox();
+  });
 
   function send(id, ta) {
     const text = ta.value.trim();
@@ -1198,6 +1377,6 @@ export function mountVariables(root, el0, w) {
       el = next;
       if (legacyChanged && ready && !open) render();
     },
-    destroy() { off(); offSay(); offUndo(); offRpan(); free?.destroy(); box.remove(); },
+    destroy() { off(); offSay(); offUndo(); offRpan(); offSaved(); free?.destroy(); box.remove(); },
   };
 }

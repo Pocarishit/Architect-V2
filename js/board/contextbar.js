@@ -115,6 +115,15 @@ export function createContextBar(page, editor, { sendToPaths, present, openLink,
         colorGrid(onlySticky ? STICKY_FILLS : FILLS, cur, (c) => set({ fill: c }, ['sticky', 'shape', 'frame', 'text'])))), {}));
     }
 
+    // Nov 29 — a selected border's own style: Standard or Glass (colour is under Stroke, with a custom hex too)
+    const borders = of('border');
+    if (borders.length && borders.length === sel.length) {
+      const glass = borders.every((b) => b.glass);
+      items.push(h('button', {
+        type: 'button', class: ['ctx-toggle', glass && 'is-on'], role: 'switch', 'aria-checked': String(glass), title: 'Glass — a soft translucent edge',
+        onclick: () => set({ glass: !glass }, ['border']),
+      }, h('span', {}, 'Glass'), h('i', { class: 'ctx-switch', 'aria-hidden': 'true' })));
+    }
     const strokables = of('shape', 'line', 'pen', 'border');
     if (strokables.length) {
       const cur = common(strokables, 'stroke', 'auto');
@@ -124,6 +133,7 @@ export function createContextBar(page, editor, { sendToPaths, present, openLink,
       items.push(btn(swatchDot(cur || 'auto', true), 'Line colour and width', (a) => popover(a, h('div', { class: 'pop' },
         h('div', { class: 'pop-label' }, 'Colour'),
         colorGrid(of('shape').length ? [{ id: 'none', name: 'No border' }, ...SWATCHES] : SWATCHES, cur, (c) => set({ stroke: c }, ['shape', 'line', 'pen', 'border'])),
+        borders.length ? h('label', { class: 'bd-custom' }, h('input', { type: 'color', class: 'bd-picker', value: /^#[0-9a-f]{6}$/i.test(cur || '') ? cur : '#f8f8ff', 'aria-label': 'Custom colour', oninput: (e) => set({ stroke: e.target.value }, ['shape', 'line', 'pen', 'border']) }), h('span', {}, 'Custom color')) : null,
         row('Width', optionRow([1, 2, 3, 5, 8, 12].map((w) => ({ value: w, label: String(w) })), curW, (w) => set({ strokeWidth: w }, ['shape', 'line', 'pen', 'border']))),
         hasDash ? row('Style', optionRow([
           { value: 'solid', label: 'Solid', icon: 'solid' }, { value: 'dashed', label: 'Dashed', icon: 'dash' }, { value: 'dotted', label: 'Dotted', icon: 'dotted' },
@@ -149,6 +159,7 @@ export function createContextBar(page, editor, { sendToPaths, present, openLink,
     if (lines.length) {
       const route = common(lines, 'route', 'straight') || 'straight';
       items.push(btn({ straight: 'line', curve: 'curve', elbow: 'elbow' }[route], 'Connector style', (a) => popover(a, linePanel(lines))));
+      // (borders are handled below)
       // Nov 28: right on the bar — connectors go around other objects unless this is on (off by default).
       const through = lines.every((l) => l.through);
       items.push(h('button', {

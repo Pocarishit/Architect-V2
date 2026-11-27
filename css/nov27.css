@@ -589,3 +589,130 @@
 .el-widget.is-fm-bg > .fi-bghead { flex: none; cursor: grab; user-select: none; }
 .el-widget.is-fm-bg > .fi-bghead:active { cursor: grabbing; }
 .el-widget.is-fm-bg > .fi-bghead .fi-navgroup { cursor: default; }
+
+/* ===== Nov 29 ===== */
+/* Border menu: Line / Box, Standard / Glass, Color (presets, hex, custom) with a preview */
+.bd-pop { width: 236px; display: flex; flex-direction: column; gap: 8px; }
+.bd-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.bd-seg { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; border-radius: 8px; border: 1px solid var(--line-2); background: transparent; color: var(--fg-2); font: 500 12px/1 var(--f-sans, inherit); cursor: pointer; }
+.bd-seg:hover { color: var(--fg); background: var(--s3); }
+.bd-seg.is-on { background: var(--s3); color: var(--fg); border-color: var(--fg-3); }
+.bd-colorhead { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
+.bd-hex { width: 84px; height: 24px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--s2, transparent); color: var(--fg-2); font: 600 11px/1 var(--f-mono); text-align: right; }
+.bd-sw { display: flex; flex-wrap: wrap; gap: 6px; }
+.bd-swb { width: 24px; height: 24px; border-radius: 7px; border: 1px solid rgba(255, 255, 255, .14); cursor: pointer; }
+.bd-swb.is-on { outline: 2px solid var(--fg); outline-offset: 2px; }
+.bd-custom { display: inline-flex; align-items: center; gap: 8px; font: 12px/1 var(--f-sans, inherit); color: var(--fg-2); cursor: pointer; }
+.bd-picker { width: 24px; height: 24px; padding: 0; border: 1px solid var(--line-2); border-radius: 7px; background: none; cursor: pointer; }
+.bd-picker::-webkit-color-swatch-wrapper { padding: 2px; } .bd-picker::-webkit-color-swatch { border: 0; border-radius: 5px; }
+.bd-preview { height: 56px; border-radius: 10px; background: var(--bg); display: grid; place-items: center; }
+.bd-preview i { display: block; width: 70%; height: 34px; border-radius: 10px; border: 2px solid var(--bd); }
+.bd-preview.is-glass i { border-width: 1.5px; border-color: color-mix(in srgb, var(--bd) 75%, transparent); background: color-mix(in srgb, var(--bd) 7%, transparent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--bd) 18%, transparent); }
+.bd-preview.is-line i { width: 2px; height: 40px; border-radius: 2px; border: 0; background: var(--bd); }
+.bd-preview.is-line.is-glass i { width: 2px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--bd) 22%, transparent); background: color-mix(in srgb, var(--bd) 75%, transparent); }
+/* the same rail on Blueprints and every Variables canvas */
+.vr-fv-pill .bp-tool[aria-label="Insert"] { margin-top: 10px; }
+.bp-rail .bp-tool[aria-label^="Sticky"]::after, .bp-rail .bp-tool[aria-label^="Shapes"]::after, .bp-rail .bp-tool[aria-label^="Border"]::after,
+.vr-fv-pill .bp-tool[aria-label^="Shapes"]::after { display: none; }
+/* Map: the chat's rail never shows through the open Map, and the inline preview has no rail at all */
+body.sbv-map-open .vr-fv-rail, body.sbv-map-open .vr-fv-railtab { visibility: hidden; pointer-events: none; }
+body.sbv-map-open .sbv-map-card .vr-fv-stage:not(.is-rail-off) > .vr-fv-rail { visibility: visible; pointer-events: auto; }
+body.sbv-map-open .sbv-map-card .vr-fv-stage.is-rail-off > .vr-fv-railtab { visibility: visible; pointer-events: auto; }
+.sbv-mapmini .vr-fv-rail, .sbv-mapmini .vr-fv-railtab, .sbv-mapmini .vr-fv-selbar, .sbv-mapmini .bp-rail { display: none !important; }
+.vr-fv-stage.is-rail-off > .vr-fv-rail { display: none; }
+/* Sidebar icons: ghost white (#F8F8FF), unboxed, identical selected or not */
+.sb-rail .sb-item[data-v="variables"] .sb-ic, .sb-rail .sb-item[data-v="path"] .sb-ic, .sb-rail .sb-item[data-v="blueprints"] .sb-ic { color: #f8f8ff; }
+[data-theme="light"] .sb-rail .sb-item[data-v="variables"] .sb-ic, [data-theme="light"] .sb-rail .sb-item[data-v="path"] .sb-ic, [data-theme="light"] .sb-rail .sb-item[data-v="blueprints"] .sb-ic { color: var(--fg); }
+.sb-rail .sb-item::before, .sb-rail .sb-item::after, .sb-rail .sb-item.is-on::before, .sb-rail .sb-item.is-on::after { display: none !important; }
+.sb-rail .sb-toggle, .sb-reveal { display: none !important; }
+/* Zone Cube opened from the Library: no header bar — canvas to the top edge, actions in the corner */
+.zn-layer.is-bare > .zn-vp { flex: 1; }
+.zn-corner-here { align-items: center; padding: 4px; border-radius: 12px; background: color-mix(in srgb, var(--s1) 92%, transparent); border: 1px solid var(--line-2); box-shadow: 0 16px 40px -24px rgba(0, 0, 0, .8); }
+.zn-cbtn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 11px; border-radius: 9px; border: 0; background: transparent; color: var(--fg-2); font: 600 12px/1 var(--f-sans, inherit); cursor: pointer; white-space: nowrap; }
+.zn-cbtn:hover { background: var(--s3); color: var(--fg); }
+.zn-cbtn.is-primary { background: var(--fg); color: var(--bg); }
+.zn-cbtn.is-icon { width: 32px; padding: 0; justify-content: center; }
+.zn-cbtn:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+/* Edit Zone */
+.zn-layer.is-cube-edit { background: var(--bg); backdrop-filter: none; }
+.zn-edit-host { position: absolute; inset: 0; display: flex; }
+.zn-edit-host > .vr-fv-stage { flex: 1; min-width: 0; }
+.zn-edit-name { position: absolute; z-index: 4; top: 14px; left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--s1); border: 1px solid var(--line-2); font: 600 12.5px/1 var(--f-sans, inherit); color: var(--fg); }
+.zn-edit-name i { width: 9px; height: 9px; border-radius: 3px; background: var(--zc, var(--fg-3)); }
+.zn-edit-name span { color: var(--fg-3); font-weight: 500; }
+/* Present: Show alongside — the message and what it links to, together and fully visible */
+.zn-present-main { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
+.zn-present-main > .zn-vp { flex: 1; }
+.zn-stage { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(3px); pointer-events: none; }
+.zn-stage[hidden] { display: none; }
+.zn-stage-row { display: flex; align-items: center; gap: 40px; transform-origin: center; }
+.zn-stage-item { flex: none; opacity: 1 !important; filter: none !important; }
+.zn-stage-item.is-main { box-shadow: 0 0 0 2px color-mix(in srgb, var(--fg) 55%, transparent), 0 24px 60px -30px rgba(0, 0, 0, .8); }
+.zn-stage-item img { max-width: 100%; height: auto; }
+/* Side Chat: a message that's still saving / didn't save */
+.sc-msg.is-pending .sc-bubble { opacity: .72; }
+.sc-msg.is-failed .sc-bubble { box-shadow: 0 0 0 1px color-mix(in srgb, #e5484d 70%, transparent); }
+.vr-outbox { display: flex; justify-content: flex-end; align-items: center; gap: 8px; width: 100%; margin-top: 2px; font: 500 10.5px/1.2 var(--f-mono); color: var(--fg-3); }
+.sc-msg.is-failed .vr-outbox { color: #ff8a8a; }
+.vr-retry { border: 0; background: none; padding: 2px 4px; color: var(--fg); font: 700 10.5px/1 var(--f-mono); text-decoration: underline; cursor: pointer; }
+/* Side Chat: hover its edge to open it when collapsed; per-panel background */
+.vr-dock-hot { position: absolute; z-index: 24; top: 0; bottom: 0; right: 0; width: 16px; }
+.vr-fv-split.is-dock-peek > .vr-dock { position: absolute; z-index: 26; top: 0; right: 0; bottom: 0; box-shadow: -24px 0 50px -30px rgba(0, 0, 0, .9); }
+.vr-fv-split.is-dock-peek > .vr-dock-tab { right: calc(min(360px, 42%) - 1px); z-index: 27; }
+.vr-dock.has-bg { background-color: var(--dock-bg, var(--bg)); background-image: linear-gradient(rgba(0, 0, 0, .35), rgba(0, 0, 0, .35)), var(--dock-img, none); background-size: cover; background-position: center; }
+.vr-dock.has-bg .sc-day, .vr-dock.has-bg .vr-day { background: color-mix(in srgb, var(--bg) 80%, transparent); }
+/* Variables: one resize box around a multi-selection */
+.vr-fv-gbox { position: absolute; z-index: 40; border: 1.5px solid color-mix(in srgb, var(--fg) 70%, transparent); border-radius: 6px; pointer-events: none; }
+.vr-fv-gh { position: absolute; width: 12px; height: 12px; border-radius: 3px; background: var(--bg); border: 1.5px solid var(--fg); pointer-events: auto; }
+.vr-fv-gh.is-nw { left: -7px; top: -7px; } .vr-fv-gh.is-ne { right: -7px; top: -7px; }
+.vr-fv-gh.is-sw { left: -7px; bottom: -7px; } .vr-fv-gh.is-se { right: -7px; bottom: -7px; }
+.el-widget.is-fm-bg.is-locked.is-selected { border-color: transparent; box-shadow: none; }
+
+/* Fleeting Moments — the refined Story timeline (Path panel and the Architect board) */
+.fi { --fi-line: color-mix(in srgb, var(--fg) 30%, transparent); --fi-mark: color-mix(in srgb, var(--fg) 26%, transparent); --fi-label: color-mix(in srgb, var(--fg) 62%, transparent); --fi-accent: var(--fg); }
+.fi.is-bg { --fi-line: rgba(241, 214, 186, .34); --fi-mark: rgba(241, 214, 186, .3); --fi-label: rgba(246, 228, 208, .72); --fi-accent: #f6e4d0; }
+.fi .fi-spine { border-left: 1px solid var(--fi-line); translate: -.5px 0; }
+.fi .fi-hmark { width: 11px; margin-left: -5.5px; background: var(--fi-mark); opacity: 1; }
+.fi .fi-hmark.is-half { display: none; }
+.fi .fi-qmark { position: absolute; left: 50%; width: 5px; height: 1px; margin-left: -2.5px; background: var(--fi-mark); opacity: .7; pointer-events: none; }
+.fi .fi-hmark em { right: 16px; top: -7px; font: 500 11.5px/1 var(--f-mono); letter-spacing: .02em; color: var(--fi-label); }
+.fi .fi-splabel { font-size: 21px; opacity: 1; color: color-mix(in srgb, var(--sp, var(--fg-3)) 72%, var(--fi-accent)); }
+.fi .fi-mark.fi-splabel { font-size: 22px; }
+.fi .fi-mark.is-bottom { font-size: 15px; color: var(--fi-label); }
+.fi .fi-tick { width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; opacity: .9; }
+/* Now: a ring on the line; Add Moment right beside it */
+.fi .fi-now.is-ring i { left: -6px; top: -6px; width: 12px; height: 12px; background: transparent; border: 2px solid var(--fi-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bg) 85%, transparent); }
+.fi .fi-now.is-ring b { right: 16px; top: -7px; font: 700 11.5px/1 var(--f-sans, inherit); letter-spacing: .02em; color: var(--fi-accent); }
+.fi .fi-addm { left: calc(50% + 18px); transform: translateY(-50%); z-index: 6; }
+.fi .fi-addm:not(.is-now) { top: 0; transform: none; }
+.fi .fi-addm-btn {
+  min-height: 44px; padding: 0 16px 0 12px; border-radius: 12px; gap: 8px; font: 600 13px/1 var(--f-sans, inherit);
+  background: color-mix(in srgb, var(--bg) 70%, transparent); border: 1px solid color-mix(in srgb, var(--fi-accent) 34%, transparent); color: var(--fi-accent);
+}
+.fi .fi-addm-btn:hover { border-color: color-mix(in srgb, var(--fi-accent) 60%, transparent); background: color-mix(in srgb, var(--fi-accent) 8%, var(--bg)); }
+.fi .fi-addm-btn:focus { outline: none; }
+.fi .fi-addm-btn:focus-visible { outline: 2px solid var(--fi-accent); outline-offset: 3px; }
+.fi .fi-addm-input { height: 44px; width: 260px; border-radius: 12px; border-color: color-mix(in srgb, var(--fi-accent) 40%, transparent); background: var(--bg); color: var(--fg); font-size: 14px; }
+.fi .fi-addm-input:focus-visible { outline: 2px solid var(--fi-accent); outline-offset: 2px; }
+.fi .fi-addm-media, .fi .fi-addm-save { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--fi-accent) 30%, transparent); background: var(--bg); color: var(--fi-accent); cursor: pointer; }
+.fi .fi-addm-media:focus-visible, .fi .fi-addm-save:focus-visible { outline: 2px solid var(--fi-accent); outline-offset: 2px; }
+/* moment cards readable on either surface */
+.fi .fi-frag .fi-card, .fi .fi-frag > .fi-text { color: var(--fg); }
+.fi.is-bg .fi-bgtitle { color: var(--fi-accent); font-size: 26px; letter-spacing: .06em; text-transform: none; font-weight: 700; }
+.fi.is-bg .fi-bghead { align-items: flex-start; padding-left: 24px; }
+/* a Moment placed on the board */
+.el.is-moment { border-radius: 10px; border: 1px solid rgba(246, 228, 208, .22); box-shadow: 0 18px 40px -24px rgba(0, 0, 0, .9); padding: 10px 12px; }
+.el.is-moment .el-txt { font: 400 12.5px/1.45 var(--f-sans, inherit); }
+.el.is-moment .el-txt b { font-weight: 700; font-size: 13.5px; }
+/* Moment Zone tool: a transparent outline + handles, only while the tool is on */
+.mz-box { position: absolute; z-index: 40; border: 1.5px dashed rgba(246, 228, 208, .9); border-radius: 6px; background: rgba(246, 228, 208, .07); cursor: move; touch-action: none; }
+.mz-chip { position: absolute; top: 8px; right: 8px; padding: 5px 10px; border-radius: 8px; background: #f6e4d0; color: #2a1f16; font: 700 12px/1 var(--f-sans, inherit); pointer-events: none; }
+.mz-h { position: absolute; width: 14px; height: 14px; border-radius: 3px; background: #f6e4d0; border: 1.5px solid #2a1f16; }
+.mz-h.is-nw { left: -8px; top: -8px; cursor: nwse-resize; } .mz-h.is-ne { right: -8px; top: -8px; cursor: nesw-resize; }
+.mz-h.is-sw { left: -8px; bottom: -8px; cursor: nesw-resize; } .mz-h.is-se { right: -8px; bottom: -8px; cursor: nwse-resize; }
+/* the same Story borrowed into the Path sidebar: a normal panel — muted neutrals, scrolls, no big title */
+.sb-obj .fi.is-bg { --fi-line: color-mix(in srgb, var(--fg) 30%, transparent); --fi-mark: color-mix(in srgb, var(--fg) 26%, transparent); --fi-label: color-mix(in srgb, var(--fg) 62%, transparent); --fi-accent: var(--fg); }
+.sb-obj .fi.is-bg .fi-stage { overflow: auto; }
+.sb-obj .fi.is-bg .fi-bgtitle { display: none; }
+.sb-obj .fi.is-bg .fi-bghead { align-items: center; padding: 10px 0 2px; }
+.bp-rail .bp-tools.mz-on .bp-tool.is-on:not([aria-label^="Moment Zone"]) { background: transparent; color: #d6d6d6; }

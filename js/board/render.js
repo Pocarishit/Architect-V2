@@ -112,8 +112,10 @@ export function updateNode(node, el, ctx) {
       const fill = el.fill || '#FFFFFF';
       node.style.background = css(fill);
       node.style.color = el.color ? css(el.color) : onColor(fill);
-      textBlock(node, el, { align: 'center', size: 0, placeholder: 'Write an idea' });
-      fitText(node, el);
+      // Nov 29: a Moment placed on the board — a dark card (title, then a line), left-aligned like the timeline's
+      node.classList.toggle('is-moment', !!el.moment);
+      textBlock(node, el, { align: el.moment ? 'left' : 'center', size: el.moment ? 13 : 0, placeholder: 'Write an idea' });
+      if (!el.moment) fitText(node, el);
       break;
     }
     case 'text': {
@@ -316,10 +318,26 @@ export function updateNode(node, el, ctx) {
         node.append(node._g);
       }
       node._g.setAttribute('transform', `translate(${el.x} ${el.y})`);
-      const d = el.shape === 'curve' ? closedCurve(el.points || []) : roundRect(el.w, el.h, el.radius ?? 18);
-      if (node._d !== d) { node._d = d; node._hit.setAttribute('d', d); node._vis.setAttribute('d', d); }
-      const sw = el.strokeWidth ?? 2;
-      node._vis.setAttribute('stroke', css(el.stroke || 'auto'));
+      const isLine = el.shape === 'line';
+      const d = el.shape === 'curve' ? closedCurve(el.points || []) : isLine ? (el.dir ? `M0 ${el.h}L${el.w} 0` : `M0 0L${el.w} ${el.h}`) : roundRect(el.w, el.h, el.radius ?? 18);
+      // Nov 29 — Glass: a soft, wide translucent edge (and for a Box a faint wash inside); objects stay visible
+      // and nothing inside is grouped, locked or recoloured.
+      if (el.glass && !node._wash) {
+        node._wash = s('path', { class: 'bd-wash', stroke: 'none' });
+        node._soft = s('path', { class: 'bd-soft', fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+        node._g.insertBefore(node._wash, node._vis); node._g.insertBefore(node._soft, node._vis);
+      }
+      if (node._d !== d) { node._d = d; node._hit.setAttribute('d', d); node._vis.setAttribute('d', d); node._wash?.setAttribute('d', d); node._soft?.setAttribute('d', d); }
+      const sw = el.strokeWidth ?? (el.glass ? 1.5 : 2);
+      const col = css(el.stroke || 'auto');
+      if (node._wash) {
+        node._wash.style.display = el.glass && !isLine ? '' : 'none';
+        node._soft.style.display = el.glass ? '' : 'none';
+        node._wash.setAttribute('fill', col); node._wash.setAttribute('fill-opacity', '0.07');
+        node._soft.setAttribute('stroke', col); node._soft.setAttribute('stroke-opacity', isLine ? '0.28' : '0.22'); node._soft.setAttribute('stroke-width', isLine ? 7 : 9);
+      }
+      node._vis.setAttribute('stroke', col);
+      node._vis.setAttribute('stroke-opacity', el.glass ? '0.75' : '1');
       node._vis.setAttribute('stroke-width', sw);
       node._vis.setAttribute('stroke-dasharray', el.dash === 'dashed' ? `${sw * 4} ${sw * 3}` : el.dash === 'dotted' ? `0 ${sw * 2.4}` : '');
       node._hit.setAttribute('stroke-width', Math.max(14, sw + 12));

@@ -968,10 +968,10 @@ export function mountFleeting(root, el0, w, opts = {}) {
       h('i', { class: 'fi-tick is-end', style: { top: `${PT + TH}px` } }));
     tl.dataset.th = TH;
     tl.dataset.extl = extL;
-    if (day === storyKey()) { const now = storyMin(); tl.append(h('span', { class: 'fi-now', style: { top: `${yOf(now)}px`, '--sp': spOf(now).color }, title: `Now · ${clockOf(now)}` }, h('i'), h('b', {}, 'NOW'))); }
+    if (day === storyKey()) { const now = storyMin(); tl.append(h('span', { class: 'fi-now is-ring', style: { top: `${yOf(now)}px`, '--sp': spOf(now).color }, title: `Now · ${clockOf(now)}`, role: 'img', 'aria-label': `Now, ${clockOf(now)}` }, h('i'), h('b', {}, 'Now'))); }
     // Nov 27: an empty day shows just the timeline (clicking the line and dropping media still work).
     for (const f of list) tl.append(fragment(f, yOf));
-    if (bg) tl.append(addMomentBtn(yOf));
+    tl.append(addMomentBtn(yOf)); // Nov 29: beside Now, on the board and in Path
     tl.append(guide, dragTime);
     applyZoom();
     lookupWho(list.map((f) => f.by), () => { if (tab === 'story') refresh(); });
@@ -990,6 +990,8 @@ export function mountFleeting(root, el0, w, opts = {}) {
       if (SETPOINTS.some((s) => s.from === m)) continue;
       out.push(h('i', { class: ['fi-hmark', m % 60 && 'is-half'], style: { top: `${yOf(m)}px` } }, m % 60 ? null : h('em', {}, clockOf(m))));
     }
+    // Nov 29: shorter quarter-hour ticks between the hour marks
+    for (let m = 15; m < 1440; m += 15) if (m % 60) out.push(h('i', { class: 'fi-qmark', style: { top: `${yOf(m)}px` }, 'aria-hidden': 'true' }));
     return out;
   }
   // Snap to the nearest time mark (and Set-Point); Alt places it freely, between marks.
@@ -1200,7 +1202,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     ];
   }
   // Keep the moment under the pointer (or the middle of the view) where it is while the scale changes.
-  function applyZoom() { if (tl) tl.style.zoom = zoomT === 1 ? '' : String(zoomT); }
+  function applyZoom() { if (bg) zoomT = 1; if (tl) tl.style.zoom = zoomT === 1 ? '' : String(zoomT); }
   // Nov 27: zooming out stops once the whole day — GM to NEW MORNING — fits the height of the view; more
   // zoom-out input leaves the scale as it is instead of shrinking the timeline into empty space.
   function minZoomT() {
@@ -1224,7 +1226,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
     stage.scrollTop = Math.max(0, uy * zoomT - py);
   }
   stage.addEventListener('wheel', (e) => {
-    if (view() !== 'story' || !(e.ctrlKey || e.metaKey)) return;
+    if (bg || view() !== 'story' || !(e.ctrlKey || e.metaKey)) return;
     e.preventDefault(); e.stopPropagation();
     setZoomT(zoomT * Math.exp(-e.deltaY * 0.0022), { x: e.clientX, y: e.clientY });
   }, { passive: false });
@@ -1232,7 +1234,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
   const touches = new Map();
   let pinch = null;
   stage.addEventListener('pointerdown', (e) => {
-    if (e.pointerType !== 'touch' || view() !== 'story') return;
+    if (bg || e.pointerType !== 'touch' || view() !== 'story') return;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.size === 2) {
       const [a, b] = [...touches.values()];
@@ -1417,25 +1419,39 @@ export function mountFleeting(root, el0, w, opts = {}) {
   // Nov 28 (board background): + Add Moment sits on the timeline — at Now today, at the top on another day. It
   // opens a one-line field right there; Enter adds the moment (Esc or leaving it empty cancels).
   function addMomentBtn(yOf) {
-    const m = day === storyKey() ? storyMin() : 0;
-    const wrap = h('div', { class: 'fi-addm', style: { top: `${yOf(m) + (day === storyKey() ? 26 : 8)}px` }, 'data-noptr': '' });
+    const today = day === storyKey();
+    const m = today ? storyMin() : 0;
+    const wrap = h('div', { class: ['fi-addm', today && 'is-now'], style: { top: `${yOf(m)}px` }, 'data-noptr': '' });
+    const btn = h('button', { type: 'button', class: 'fi-addm-btn', 'aria-label': today ? 'Add Moment now' : `Add Moment to ${shortDate(parseKey(day))}`, onclick: () => open0() }, icon('plus', 14), h('span', {}, 'Add Moment'));
     const open0 = () => {
-      const f = h('input', { class: 'fi-addm-input', type: 'text', maxlength: 400, placeholder: day === storyKey() ? 'narrate this moment…' : `add to ${shortDate(parseKey(day))}…`, 'aria-label': 'New moment' });
+      const f = h('input', { class: 'fi-addm-input', type: 'text', maxlength: 400, placeholder: today ? 'Narrate this moment…' : `Add to ${shortDate(parseKey(day))}…`, 'aria-label': 'New moment — Enter saves, Esc cancels' });
       let fin = false;
       const done = (keep) => {
         if (fin) return; fin = true;
         const t = f.value.trim(); hold = Math.max(0, hold - 1);
         f.blur(); // so the timeline can redraw with the new moment
-        if (keep && t) addFragment({ kind: 'text', text: t }); else refresh();
+        if (keep && t) addFragment({ kind: 'text', text: t }); else { refresh(); }
+        // back to Add Moment, so the keyboard flow continues where it was
+        requestAnimationFrame(() => stage.querySelector('.fi-addm-btn')?.focus({ preventScroll: true }));
       };
       f.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); done(true); } else if (e.key === 'Escape') { e.preventDefault(); done(false); } });
-      f.addEventListener('blur', () => { if (f.isConnected) done(!!f.value.trim()); }, { once: true });
+      f.addEventListener('blur', () => { if (f.isConnected && !fin) setTimeout(() => { if (!wrap.contains(document.activeElement)) done(!!f.value.trim()); }, 0); });
+      f.addEventListener('pointerdown', (e) => e.stopPropagation());
       hold++;
-      wrap.replaceChildren(f, h('button', { type: 'button', class: 'fi-addm-media', title: 'Add photos or videos', 'aria-label': 'Add photos or videos', onmousedown: (e) => e.preventDefault(), onclick: () => pickMedia().then((x) => addMediaToStory(x)) }, icon('image', 15)));
+      wrap.replaceChildren(f,
+        h('button', { type: 'button', class: 'fi-addm-media', title: 'Add photos or videos', 'aria-label': 'Add photos or videos', onmousedown: (e) => e.preventDefault(), onclick: () => pickMedia().then((x) => { fin = true; hold = Math.max(0, hold - 1); addMediaToStory(x); }) }, icon('image', 15)),
+        h('button', { type: 'button', class: 'fi-addm-save', 'aria-label': 'Save moment', onmousedown: (e) => e.preventDefault(), onclick: () => done(true) }, icon('check', 15)));
       f.focus();
     };
-    wrap.append(h('button', { type: 'button', class: 'fi-addm-btn', onclick: open0 }, icon('plus', 13), h('span', {}, 'Add Moment')));
+    wrap.append(btn);
     return wrap;
+  }
+  // A Moment made anywhere on the board (space.js "Add Moment here") is saved into today's Story too.
+  let fmOff = null;
+  if (bg) {
+    const onAdd = (e) => { if (e.detail?.text) addFragment({ kind: 'text', text: e.detail.text }, storyKey()); };
+    document.addEventListener('fm-add-moment', onAdd);
+    fmOff = () => document.removeEventListener('fm-add-moment', onAdd);
   }
   function addFragment(f, k = day, at = null) {
     const list = story(k);
@@ -2092,6 +2108,7 @@ export function mountFleeting(root, el0, w, opts = {}) {
       if (changed) refresh();
     },
     destroy() {
+      fmOff?.();
       if (full) setFull(false);
       window.removeEventListener('resize', onWinResize);
       window.removeEventListener('keydown', onUndoKey, true); window.removeEventListener('keydown', onFullEsc, true); document.removeEventListener('pointerdown', offActive, true);

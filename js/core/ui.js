@@ -52,7 +52,7 @@ function place(panel, anchor, { side = 'bottom', align = 'start', gap = 6 } = {}
     x = side === 'right' ? r.right + gap : r.left - pw - gap;
     if (side === 'right' && x + pw > vw - 8) x = r.left - pw - gap;
     if (side === 'left' && x < 8) x = r.right + gap;
-    y = align === 'center' ? r.top + r.height / 2 - ph / 2 : r.top;
+    y = align === 'center' ? r.top + r.height / 2 - ph / 2 : align === 'end' ? r.bottom - ph : r.top;
   } else {
     y = side === 'bottom' ? r.bottom + gap : r.top - ph - gap;
     if (side === 'bottom' && y + ph > vh - 8 && r.top - ph - gap > 8) y = r.top - ph - gap;

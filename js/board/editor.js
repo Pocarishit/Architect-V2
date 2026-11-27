@@ -843,6 +843,12 @@ export class Editor {
     const el = { id: uid(), type, ...base };
     if (type === 'shape') el.kind = this.opts.shape || 'rect';
     if (type === 'sticky') el.fill = this.opts.sticky || base.fill;
+    if (type === 'border') {
+      // Nov 29: each border keeps its own look — Line or Box, Standard or Glass, and its colour.
+      if (this.opts.border === 'line') el.shape = 'line';
+      if (this.opts.borderGlass) el.glass = true;
+      if (this.opts.borderColor) el.stroke = this.opts.borderColor;
+    }
     if (type === 'frame') {
       const n = this.els.filter((e) => e.type === 'frame').length + 1;
       el.title = `Frame ${n}`;
@@ -1545,6 +1551,22 @@ export class Editor {
         // Text: a small wobble while clicking is still a click; only a real sideways drag sets a wrap width.
         if (!made && type === 'text' && Math.abs(e.clientX - start.cx) < 40) return;
         let r = rectFromPoints(start.p, p);
+        if (type === 'border' && this.opts.border === 'line') {
+          // a straight divider from where you pressed to where you are; near-vertical / near-horizontal snaps
+          const dx = p.x - start.p.x, dy = p.y - start.p.y;
+          const vert = Math.abs(dx) < Math.abs(dy) * 0.18 || (e.shiftKey && Math.abs(dx) < Math.abs(dy));
+          const horiz = !vert && (Math.abs(dy) < Math.abs(dx) * 0.18 || e.shiftKey);
+          const q = { x: vert ? start.p.x : p.x, y: horiz ? start.p.y : p.y };
+          r = rectFromPoints(start.p, q);
+          const rise = (q.x - start.p.x) * (q.y - start.p.y) < 0; // runs bottom-left → top-right
+          if (!made) {
+            made = { ...this.makeEl('border', r), dir: rise ? 1 : 0 };
+            Object.assign(made, { x: r.x, y: r.y, w: r.w, h: r.h });
+            this.sel = new Set([made.id]);
+            this.setEls([...this.els, made], { commit: false });
+          } else this.setEls(this.els.map((el) => (el.id === made.id ? { ...el, x: r.x, y: r.y, w: r.w, h: r.h, dir: rise ? 1 : 0 } : el)), { commit: false });
+          return;
+        }
         if (type === 'sticky' || e.shiftKey) {
           const s2 = Math.max(r.w, r.h);
           r = { x: p.x < start.p.x ? start.p.x - s2 : start.p.x, y: p.y < start.p.y ? start.p.y - s2 : start.p.y, w: s2, h: s2 };

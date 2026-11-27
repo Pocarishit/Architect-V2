@@ -2,6 +2,7 @@ import { s } from './dom.js';
 
 // 24×24 line icons, 1.6 stroke. Kept in one place so the set stays consistent.
 const P = {
+  momentZone: '<path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><rect x="8" y="8" width="8" height="8" rx="1.5" stroke-dasharray="2.2 2"/>',
   pointerFill: '<path d="M5.2 3.6 19 10.4l-6 1.9-2.1 6.1z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/>',
   shapesGroup: '<rect x="3.6" y="3.6" width="6.8" height="6.8" rx="1.2"/><circle cx="17" cy="7" r="3.4"/><path d="M7 13.6 10.5 20H3.5z"/><path d="M14 20l6-6M15.5 14H20v4.5"/>',
   select: '<path d="M5.5 3.5 18.5 10l-5.8 1.9-2 5.8z"/>',

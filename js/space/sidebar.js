@@ -43,7 +43,15 @@ const ATOM = (() => {
   const pts = [0, 120, 240].map((a) => [12 + 7.4 * Math.cos(a * Math.PI / 180), 12 + 7.4 * Math.sin(a * Math.PI / 180)].map((n) => +n.toFixed(2)));
   return pts.map(([x, y]) => `<path d="M12 12L${x} ${y}"/>`).join('') + '<circle cx="12" cy="12" r="2.7" fill="currentColor" stroke="none"/>' + pts.map(([x, y]) => `<circle cx="${x}" cy="${y}" r="1.7" fill="currentColor" stroke="none"/>`).join('');
 })();
+// Nov 29 — the revised mockup: Variables three orbital loops around one point; Compass a two-tone diagonal
+// needle (no ring or crosshair); Blueprints a folded plan sheet with room lines. Ghost white, unboxed.
+const ORBIT = [0, 60, 120].map((a) => `<ellipse cx="12" cy="12" rx="8.6" ry="3.3" transform="rotate(${a} 12 12)"/>`).join('') + '<circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/>';
+const NEEDLE = '<path d="M18.6 5.4 13.6 13.6 10.4 10.4z" fill="currentColor"/><path d="M5.4 18.6 10.4 10.4 13.6 13.6z"/>';
+const SHEET = '<path d="M6 3.5h8.5l3.5 3.5v13.5H6z"/><path d="M14.5 3.5V7H18"/><path d="M8.6 10.2h4.6v3.4H10.4v4.2M13.2 13.6h2.4"/>';
 const RAIL_ICONS = {
+  orbit: ORBIT,
+  needle: NEEDLE,
+  sheet: SHEET,
   logo: [[12.0, 5.25], [9.375, 8.625], [14.625, 8.625], [7.5, 12.0], [16.5, 12.0], [6.0, 15.375], [9.0, 15.375], [12.0, 15.375], [15.0, 15.375], [18.0, 15.375], [4.875, 18.75], [19.125, 18.75], [12.0, 18.75]].map(([x, y]) => DOT(x, y)).join(''),
   atom: ATOM,
   compass: '<circle cx="12" cy="12" r="7.4"/><path d="M12 3v18M3 12h18"/>',
@@ -105,6 +113,9 @@ export function mountSidebar(ctx) {
   const hot = h('div', { class: 'sb-hot', 'aria-hidden': 'true' });
   root.append(hot);
   let peekT = 0;
+  // Nov 29: the show/hide button is gone, so a sidebar pinned earlier goes back to hiding (the Toggle Sidebar
+  // shortcut can still pin it).
+  if (!store.get('architect.sb.unpin29', false)) { store.set('architect.sb.unpin29', true); if (getPref('sbPinned', false) === true) setPref('sbPinned', false).catch(() => {}); }
   const pinned = () => getPref('sbPinned', false) === true;
   const applyPin = () => { page.classList.toggle('sb-auto', !pinned()); if (pinned()) page.classList.remove('sb-peek'); };
   const peek = () => { clearTimeout(peekT); if (!pinned()) page.classList.add('sb-peek'); };
@@ -141,17 +152,17 @@ export function mountSidebar(ctx) {
   function paintRail() {
     rail.replaceChildren(
       item('space', 'logo', 'Overview', () => show('space')),
-      item('variables', 'atom', 'Variables', () => show('variables')),
-      item('path', 'compass', 'Path', () => show('path')),
+      item('variables', 'orbit', 'Variables', () => show('variables')),
+      item('path', 'needle', 'Path', () => show('path')),
       // Nov 27 — Blueprints opens the Blueprint view (a library-style canvas); Personal Space switches to your
       // personal space (it replaces the action removed from the canvas menu).
-      item('blueprints', 'hash', 'Blueprints', () => ctx.openBlueprints?.(), { 'aria-current': 'false', class: 'sb-item' }),
+      item('blueprints', 'sheet', 'Blueprints', () => ctx.openBlueprints?.(), { 'aria-current': 'false', class: 'sb-item' }),
       ...views().map((v) => item(`custom:${v.id}`, 'square', v.name || 'My view', () => show(`custom:${v.id}`), {
         oncontextmenu: (e) => { e.preventDefault(); viewMenu({ x: e.clientX, y: e.clientY }, v); },
       })),
       // More sits at the very bottom of the rail (Nov 25).
       h('span', { class: 'sb-push', 'aria-hidden': 'true' }),
-      item('hide', 'panel', `${pinned() ? 'Unpin' : 'Pin'} sidebar${keyHint('sidebar')}`, () => ctx.toggleSidebar?.(), { 'aria-current': 'false', class: ['sb-item sb-toggle', pinned() && 'is-pinned'] }),
+      // Nov 29: no show/hide button — the rail slides in from the left edge and away again.
       item('more', 'dots', 'More', (b) => moreMenu(b), { class: 'sb-item sb-more' }));
     ctx.onRail?.(railSpec());
   }
@@ -159,9 +170,9 @@ export function mountSidebar(ctx) {
   // What the rail holds, for the phone's icon sidebar (the same icons, in the same order).
   const railSpec = () => [
     { id: 'space', svg: railIcon('logo'), label: 'Overview' },
-    { id: 'variables', svg: railIcon('atom'), label: 'Variables' },
-    { id: 'path', svg: railIcon('compass'), label: 'Path' },
-    { id: 'blueprints', svg: railIcon('hash'), label: 'Blueprints', run: () => ctx.openBlueprints?.() },
+    { id: 'variables', svg: railIcon('orbit'), label: 'Variables' },
+    { id: 'path', svg: railIcon('needle'), label: 'Path' },
+    { id: 'blueprints', svg: railIcon('sheet'), label: 'Blueprints', run: () => ctx.openBlueprints?.() },
     ...views().map((v) => ({ id: `custom:${v.id}`, svg: railIcon('square'), label: v.name || 'My view' })),
     { id: 'more', svg: railIcon('dots'), label: 'More', bottom: true },
   ];
@@ -177,17 +188,17 @@ export function mountSidebar(ctx) {
   }
 
   function moreMenu(anchor) {
-    const r = anchor.getBoundingClientRect();
-    menu({ x: r.right + 6, y: Math.min(r.top, innerHeight - 220) }, [
+    // Nov 29: right beside the button, its bottom edge level with the button's, opening upward
+    menu(anchor, [
       { label: 'Settings', icon: 'settings', onSelect: () => ctx.openSettings('general') },
       { label: 'Profile', icon: 'user', onSelect: () => ctx.openSettings('profile') },
       { label: 'Custom', icon: 'layers', onSelect: () => newView() },
       ...(views().length ? ['-', { header: 'Your views' }, ...views().map((v) => ({ label: v.name, icon: 'board', onSelect: () => show(`custom:${v.id}`) }))] : []),
       '-',
-      { label: personalLabel(), icon: 'home', onSelect: () => goPersonal() },
+      { label: personalLabel(), icon: 'repeat', onSelect: () => goPersonal() },
       ctx.changePassword ? { label: 'Change password', icon: 'key', onSelect: () => ctx.changePassword() } : null,
       ctx.signOut ? { label: 'Sign out', icon: 'logout', onSelect: () => ctx.signOut() } : null,
-    ].filter(Boolean));
+    ].filter(Boolean), { side: 'right', align: 'end', gap: 10 });
   }
 
   /* ---------------- switching ---------------- */
@@ -816,6 +827,7 @@ export function mountSidebar(ctx) {
         h('button', { type: 'button', class: 'sbv-icon', 'aria-label': 'Close the map', title: 'Close', onclick: closeMap }, icon('close', 15)));
       mapLayer.replaceChildren(h('div', { class: ['sbv-map-card is-field', `is-${mode}`], 'data-wkind': 'variables' }, field, ctl));
       mapLayer.hidden = false;
+      document.body.classList.add('sbv-map-open'); // Nov 29: only the Map's own rail while it's open
       mapLayer.classList.toggle('is-full', mode === 'full');
       mapCtl = mountVariables(body, { id: `sidebar-map-${me.id}-${cat}`, kind: 'variables', sections: [], entries: [] }, { host: { personal: false }, field: true, source: S() });
       mapCtl.show?.({ section: rootId(), sub: null, open: null });
@@ -836,7 +848,7 @@ export function mountSidebar(ctx) {
       while (s?.parent && !seen.has(s.id)) { seen.add(s.id); s = secById(s.parent); }
       return s?.id || null;
     }
-    function closeMap() { if (mapCtl?._watch) clearInterval(mapCtl._watch); mapCtl?.destroy(); mapCtl = null; mapMode = null; mapLayer.hidden = true; mapLayer.replaceChildren(); }
+    function closeMap() { if (mapCtl?._watch) clearInterval(mapCtl._watch); mapCtl?.destroy(); mapCtl = null; mapMode = null; mapLayer.hidden = true; mapLayer.replaceChildren(); document.body.classList.remove('sbv-map-open'); }
     const onEsc = (e) => { if (e.key === 'Escape' && mapMode && !document.querySelector('.dlg, .menu')) { e.preventDefault(); closeMap(); } };
     window.addEventListener('keydown', onEsc);
 
@@ -891,8 +903,8 @@ export function mountSidebar(ctx) {
         menu(anchor, [
           { header: s.name },
           { label: 'New organ', icon: 'plus', onSelect: () => { if (cat !== s.id) pickCat(s.id); adding = { parent: 'organs' }; paintList(); } },
-          { label: 'Rename…', icon: 'edit', onSelect: () => rename(s) },
-          { label: 'Color…', icon: 'textColor', onSelect: () => pickColor(anchor, s.color).then((c) => { if (c !== undefined) patchMine(s.id, { color: c }); }) },
+          { label: 'Rename', icon: 'edit', onSelect: () => rename(s) },
+          { label: 'Color', icon: 'textColor', onSelect: () => pickColor(anchor, s.color).then((c) => { if (c !== undefined) patchMine(s.id, { color: c }); }) },
           { label: s.img ? 'Change cover' : 'Add a cover', icon: 'image', onSelect: () => setCover(s) },
           { label: 'Messages are kept in…', icon: 'settings', onSelect: () => { if (cat !== s.id) pickCat(s.id); ensureOrgans().options(anchor); } },
           '-',
@@ -907,9 +919,9 @@ export function mountSidebar(ctx) {
       menu(anchor, [
         { header: s.name },
         { label: 'New chat', icon: 'plus', onSelect: () => { adding = { parent: s.id }; paintList(); } },
-        { label: 'New sub-section…', icon: 'folder', onSelect: () => newSub(s) },
-        { label: 'Rename…', icon: 'edit', onSelect: () => rename(s) },
-        { label: 'Color…', icon: 'textColor', onSelect: () => pickColor(anchor, s.color).then((c) => { if (c !== undefined) patchSec(s.id, { color: c }); }) },
+        { label: 'New sub-section', icon: 'folder', onSelect: () => newSub(s) },
+        { label: 'Rename', icon: 'edit', onSelect: () => rename(s) },
+        { label: 'Color', icon: 'textColor', onSelect: () => pickColor(anchor, s.color).then((c) => { if (c !== undefined) patchSec(s.id, { color: c }); }) },
         { label: s.img ? 'Change cover' : 'Add a cover', icon: 'image', onSelect: () => setCover(s) },
         s.img ? { label: 'Remove cover', icon: 'eyeOff', onSelect: () => patchSec(s.id, { img: null }) } : null,
         theirs ? null : { label: s.share?.item ? 'Make private' : 'Share with your Space', icon: s.share?.item ? 'lock' : 'users', onSelect: () => toggleShare(s) },
@@ -962,9 +974,9 @@ export function mountSidebar(ctx) {
       menu(anchor, [
         { header: s.name },
         { label: 'New chat here', icon: 'plus', onSelect: () => { adding = { parent: s.id }; paintList(); } },
-        { label: 'New sub-section…', icon: 'folder', onSelect: () => newSub(s) },
+        { label: 'New sub-section', icon: 'folder', onSelect: () => newSub(s) },
         { label: 'Rename', icon: 'edit', kbd: 'Dbl-click', onSelect: () => { renaming = { kind: 'sec', id: s.id }; paintList(); } },
-        { label: 'Color…', icon: 'textColor', onSelect: () => pickColor(anchor, s.color).then((c) => { if (c !== undefined) patchSec(s.id, { color: c }); }) },
+        { label: 'Color', icon: 'textColor', onSelect: () => pickColor(anchor, s.color).then((c) => { if (c !== undefined) patchSec(s.id, { color: c }); }) },
         '-',
         undoItem(),
         { label: 'Delete sub-section', icon: 'trash', danger: true, onSelect: async () => {
@@ -981,7 +993,7 @@ export function mountSidebar(ctx) {
       menu(anchor, [
         { header: x.name },
         { label: 'Rename', icon: 'edit', kbd: 'Dbl-click', onSelect: () => { renaming = { kind: 'entry', id: x.id }; paintList(); } },
-        { label: 'Color…', icon: 'textColor', onSelect: () => pickColor(anchor, x.color).then((c) => { if (c !== undefined) setV({ entries: entries().map((e) => (e.id === x.id ? { ...e, color: c } : e)) }); }) },
+        { label: 'Color', icon: 'textColor', onSelect: () => pickColor(anchor, x.color).then((c) => { if (c !== undefined) setV({ entries: entries().map((e) => (e.id === x.id ? { ...e, color: c } : e)) }); }) },
         // Nov 28: chat names keep their own style — bold only when you make them bold.
         { label: 'Bold', icon: 'bold', checked: !!x.bold, onSelect: () => setV({ entries: entries().map((e) => (e.id === x.id ? { ...e, bold: !x.bold } : e)) }) },
         dests.length ? { header: 'Move to' } : null,
@@ -1061,7 +1073,7 @@ export function mountSidebar(ctx) {
     paint();
     return {
       destroy() {
-        window.removeEventListener('keydown', onEsc);
+        window.removeEventListener('keydown', onEsc); document.body.classList.remove('sbv-map-open');
         offVars(); offShared(); offUndo(); closeMap(); destroyMini();
         try { chatCtl?.destroy?.(); } catch {}
         try { organs?.destroy(); } catch {}

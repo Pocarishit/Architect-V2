@@ -549,29 +549,102 @@ export function mountFreeView(o) {
     const resetB = btn(null, 'list', `Everything back to ${home}`, () => resetAll()); resetB.disabled = !laidOut;
     // Nov 27 — the Architect Space toolbar layout: tools in one rail, Undo / Redo in their own pill below.
     tools.classList.add('is-split');
+    // Nov 29 — the approved Architect rail, on every Variables canvas: Select, Sticky Note, Text, Arrow, Pen,
+    // dashed Area, grouped Shapes, + Insert. Hand is H / hold Space; Lasso, uploads, the Library, the dot grid and
+    // the layout resets are in + Insert, so the rail never grows.
     const mainTools = [
       btn('move', 'pointerFill', 'Select (V)', () => setTool('move')),
-      btn('hand', 'hand', 'Hand (H · hold Space)', () => setTool('hand')),
-      sep(),
-      // Nov 26 — the Blueprint's tools, names, icons and order; Zone (Z) is the Variables-only addition.
       btn('note', 'sticky', 'Sticky note (N)', () => setTool('note')),
       btn('text', 'text', 'Text (T)', () => setTool('text')),
-      btn('shape', shapeIc, 'Shapes (S)', () => flyFrom('shape', 'Shapes (S)', shapeFly), { fly: true }),
-      btn('link', lastLink === 'line' ? 'line' : 'arrow', 'Connector (L)', () => flyFrom('link', 'Connector (L)', linkFly), { fly: true }),
-      btn('pen', lastPen === 'eraser' ? 'eraser' : 'pen', 'Draw (P)', () => flyFrom('pen', 'Draw (P)', penFly), { fly: true }),
-      zonesOn ? btn('zone', 'frame', 'Zone (Z) — draw a named section', () => setTool('zone')) : null,
-      btn('lasso', 'lasso', 'Lasso select (Q)', () => setTool('lasso')),
-      sep(),
-      o.media ? btn(null, 'image', 'Upload image (U)', () => addImage()) : null,
-      zonesOn && o.library ? btn(null, 'layers', 'Library — Zone Cubes (B)', () => openLib()) : null,
-      btn(null, 'grid', 'Dot grid (G)', () => setGrid(!gridOn), { on: gridOn }),
-      sep(),
-      btn(null, 'home', 'Back to the start', () => scroller.scrollTo({ left: L * zoom, top: 0, behavior: 'smooth' })),
-      resetB].filter(Boolean);
+      btn('link', lastLink === 'line' ? 'line' : 'arrow', 'Arrow (L)', () => flyFrom('link', 'Arrow (L)', linkFly), { fly: true }),
+      btn('pen', lastPen === 'eraser' ? 'eraser' : 'pen', 'Pen (P)', () => flyFrom('pen', 'Pen (P)', penFly), { fly: true }),
+      zonesOn ? btn('zone', 'borderBox', 'Area (Z) — draw a named zone', () => setTool('zone')) : btn('lasso', 'borderBox', 'Area select (Q)', () => setTool('lasso')),
+      btn('shape', 'shapesGroup', 'Shapes (S)', () => flyFrom('shape', 'Shapes (S)', shapeFly), { fly: true, on: tool === 'shape' }),
+      btn(null, 'plus', 'Insert', (a) => insertFly(a, resetB), { fly: true })].filter(Boolean);
+    void shapeIc; void sep;
     tools.replaceChildren(h('div', { class: 'vr-fv-pill' }, ...mainTools), h('div', { class: 'vr-fv-pill is-hist' }, undoB, redoB, btn(null, 'chevronLeft', 'Hide tools', () => setRail(false))));
     paintSelbar();
   }
+  function insertFly(anchor, resetB) {
+    const row = (ic, label, fn, on) => h('button', { type: 'button', class: ['tool-opt wide', on && 'is-on'], onclick: () => { closeFloating(); fn(); } }, icon(ic, 18), h('span', {}, label));
+    popover(anchor, h('div', { class: 'pop' }, h('div', { class: 'opt-col' },
+      o.media ? row('image', 'Image (U)', () => addImage()) : null,
+      zonesOn && o.library ? row('layers', 'Library — Zone Cubes (B)', () => openLib()) : null,
+      zonesOn ? row('lasso', 'Lasso select (Q)', () => setTool('lasso'), tool === 'lasso') : null,
+      row('grid', gridOn ? 'Hide dot grid (G)' : 'Show dot grid (G)', () => setGrid(!gridOn), gridOn),
+      row('home', 'Back to the start', () => scroller.scrollTo({ left: L * zoom, top: 0, behavior: 'smooth' })),
+      resetB.disabled ? null : row('list', `Everything back to ${home}`, () => resetAll()))), flyOpts());
+  }
+  // Nov 29 — several things selected (Select All too): one box around all of them. Dragging one of its corners
+  // resizes every selected object together — sizes and the gaps between them scale by the same amount, so the
+  // layout keeps its shape. It's only a selection, not a group: deselect and each one is on its own again.
+  function paintGroupBox() {
+    world.querySelector(':scope > .vr-fv-gbox')?.remove();
+    if (selCount() < 2 || tool !== 'move' || o.preview) return;
+    const rs = [];
+    for (const id of sel.msgs) { const w0 = items.get(id)?.closest('.vr-fv-item'); const r = w0 ? { x: w0.offsetLeft, y: w0.offsetTop, w: w0.offsetWidth, h: w0.offsetHeight } : rectOf(id); if (r) rs.push(r); }
+    for (const id of sel.cards) { const r = itemRect('cards', id); if (r) rs.push(r); }
+    for (const q of free().shapes) if (sel.shapes.has(q.id)) { const sh = shapeOf(q); rs.push({ x: sh.x, y: sh.y, w: sh.w || 0, h: sh.h || 0 }); }
+    if (rs.length < 2) return;
+    const u = { x: Math.min(...rs.map((r) => r.x)), y: Math.min(...rs.map((r) => r.y)) };
+    u.w = Math.max(...rs.map((r) => r.x + r.w)) - u.x; u.h = Math.max(...rs.map((r) => r.y + r.h)) - u.y;
+    const box = h('div', { class: 'vr-fv-gbox', style: { left: `${u.x - 6}px`, top: `${u.y - 6}px`, width: `${u.w + 12}px`, height: `${u.h + 12}px` } },
+      ...['nw', 'ne', 'sw', 'se'].map((d) => {
+        const hd = h('i', { class: `vr-fv-gh is-${d}`, style: { cursor: CURSOR[d] }, 'aria-hidden': 'true' });
+        hd.addEventListener('pointerdown', (e) => groupResize(e, d, u));
+        return hd;
+      }));
+    world.append(box);
+  }
+  function groupResize(e, dir, u) {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const zoned = zonedMap();
+    const ax = dir.includes('w') ? u.x + u.w : u.x, ay = dir.includes('n') ? u.y + u.h : u.y; // the opposite corner stays put
+    const msgs = [...sel.msgs].filter((id) => !zoned.has(id)).map((id) => { const wrap = pullOut(id); return wrap ? { id, wrap, x0: wrap.offsetLeft, y0: wrap.offsetTop, w0: wrap.offsetWidth, h0: wrap.offsetHeight } : null; }).filter(Boolean);
+    const cards = [...sel.cards].filter((id) => !zoned.has(id)).map((id) => ({ id, node: cardEls.get(id) })).filter((c) => c.node).map((c) => {
+      const txt = c.node.querySelector('.vr-fv-note-text');
+      return { ...c, x0: c.node.offsetLeft, y0: c.node.offsetTop, w0: c.node.offsetWidth, h0: c.node.offsetHeight, txt, fs0: txt ? parseFloat(getComputedStyle(txt).fontSize) || 18 : 0 };
+    });
+    const shapes = free().shapes.filter((q) => sel.shapes.has(q.id));
+    let k = 1;
+    track((ev) => {
+      const p = local(ev);
+      const kx = Math.abs(p.x - ax) / Math.max(1, u.w), ky = Math.abs(p.y - ay) / Math.max(1, u.h);
+      k = Math.max(0.2, Math.min(6, Math.max(kx, ky)));
+      const X = (v) => Math.round(ax + (v - ax) * k), Y = (v) => Math.round(ay + (v - ay) * k);
+      for (const m of msgs) { m.wrap.style.left = `${X(m.x0)}px`; m.wrap.style.top = `${Math.max(0, Y(m.y0))}px`; applySize(m.wrap, { w: Math.round(m.w0 * k), h: Math.round(m.h0 * k) }); }
+      for (const c of cards) {
+        c.node.style.left = `${X(c.x0)}px`; c.node.style.top = `${Math.max(0, Y(c.y0))}px`; c.node.style.width = `${Math.round(c.w0 * k)}px`;
+        if (c.node.classList.contains('is-img')) c.node.style.height = `${Math.round(c.h0 * k)}px`; else c.node.style.minHeight = `${Math.round(c.h0 * k)}px`;
+        if (c.txt) c.txt.style.fontSize = `${Math.round(c.fs0 * k * 10) / 10}px`;
+      }
+      shapeLive = new Map(shapes.map((q) => [q.id, { ...q, x: X(q.x), y: Y(q.y), w: Math.round((q.w || 0) * k), h: Math.round((q.h || 0) * k) }]));
+      autoScroll(ev);
+      size(); draw();
+    }, () => {
+      const live = shapeLive; shapeLive = null;
+      if (Math.abs(k - 1) < 0.005) { draw(); return; }
+      eatClick();
+      const X = (v) => Math.round(ax + (v - ax) * k), Y = (v) => Math.max(0, Math.round(ay + (v - ay) * k));
+      const pos = { ...free().pos }, sz = { ...free().size };
+      for (const m of msgs) { pos[m.id] = { x: X(m.x0), y: Y(m.y0) }; sz[m.id] = { w: Math.round(m.w0 * k), h: Math.round(m.h0 * k) }; }
+      const at = new Map(cards.map((c) => [c.id, c]));
+      save({
+        pos, size: sz,
+        cards: free().cards.map((c) => {
+          const q = at.get(c.id); if (!q) return c;
+          const out = { ...c, x: X(q.x0), y: Y(q.y0), w: Math.round(q.w0 * k) };
+          if (q.node.classList.contains('is-img') || c.h) out.h = Math.round(q.h0 * k);
+          if (q.txt) out.fs = Math.round(q.fs0 * k * 10) / 10;
+          return out;
+        }),
+        shapes: free().shapes.map((q) => live?.get(q.id) || q),
+      });
+    });
+  }
   function paintSelbar() {
+    paintGroupBox();
     const n = selCount();
     stage.classList.toggle('has-sel', !!n);
     if (!n) { selbar.replaceChildren(); return; }
@@ -793,6 +866,7 @@ export function mountFreeView(o) {
   }
 
   function draw(live = null) {
+    if (selCount() > 1) queueMicrotask(paintGroupBox);
     const f = free();
     const out = [];
     for (const raw of f.shapes) {

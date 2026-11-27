@@ -191,7 +191,15 @@ export function lineGeom(line, byId) {
 
 /* ---------------- obstacle-avoiding routes ---------------- */
 const ROUTE_CACHE = new Map(); // line id → { key, pts }
-const AVOID = new Set(['sticky', 'shape', 'text', 'image', 'video', 'embed', 'link', 'widget', 'pdf', 'taskcard']);
+// Nov 29: every visible object is an obstacle — sticky notes, images, media, cards, widgets, text, shapes —
+// everything except other connectors, drawings, borders and frames (which contain things rather than block).
+const PASS = new Set(['line', 'pen', 'border', 'frame']);
+const rotBox = (el) => {
+  if (!el.rot) return { x: el.x, y: el.y, w: el.w, h: el.h };
+  const t = (el.rot * Math.PI) / 180, c = Math.abs(Math.cos(t)), s2 = Math.abs(Math.sin(t));
+  const w = el.w * c + el.h * s2, h = el.w * s2 + el.h * c;
+  return { x: el.x + el.w / 2 - w / 2, y: el.y + el.h / 2 - h / 2, w, h };
+};
 const M = 18; // clearance around obstacles
 function segHitsRect(p, q, r) {
   // Liang–Barsky
@@ -210,9 +218,9 @@ function routeAround(line, ta, tb, a, sa, b, sb, pts, byId) {
   const lo = { x: Math.min(a.x, b.x) - 400, y: Math.min(a.y, b.y) - 400, x2: Math.max(a.x, b.x) + 400, y2: Math.max(a.y, b.y) + 400 };
   const obs = [];
   for (const el of byId.values()) {
-    if (el === ta || el === tb || !AVOID.has(el.type) || el.rot) continue;
-    if (el.x > lo.x2 || el.y > lo.y2 || el.x + el.w < lo.x || el.y + el.h < lo.y) continue;
-    const r = { x: el.x, y: el.y, w: el.w, h: el.h };
+    if (el === ta || el === tb || PASS.has(el.type) || el.hidden || !Number.isFinite(el.x) || !(el.w > 0) || !(el.h > 0)) continue;
+    const r = rotBox(el);
+    if (r.x > lo.x2 || r.y > lo.y2 || r.x + r.w < lo.x || r.y + r.h < lo.y) continue;
     // an object that holds either end (a frame-like container, or overlapping) isn't an obstacle
     if (inside(a, r) || inside(b, r)) continue;
     obs.push(r);

@@ -888,6 +888,9 @@ export function mountSpace(root) {
     return [
       { label: 'Sticky note', icon: 'sticky', kbd: 'N', onSelect: () => ed.addEls([ed.makeEl('sticky', null, at)], { edit: true }) },
       { label: 'Text', icon: 'text', kbd: 'T', onSelect: () => ed.addEls([ed.makeEl('text', null, at)], { edit: true }) },
+      // Nov 29: a Moment anywhere on the board — it's saved into today's Fleeting Moments, and its card stays
+      // here (drag it wherever you like).
+      { label: 'Moment', icon: 'plus', onSelect: () => addMomentAt(at) },
       { label: 'Shape', icon: 'rect', kbd: 'S', onSelect: tool('shape') },
       { label: 'Connector', icon: 'arrow', kbd: 'L', onSelect: tool('line') },
       { label: 'Draw', icon: 'pen', kbd: 'P', onSelect: tool('pen') },
@@ -901,6 +904,18 @@ export function mountSpace(root) {
       { label: 'Settings…', icon: 'settings', onSelect: () => settings() },
     ];
   }
+
+  async function addMomentAt(at) {
+    const ed = editor();
+    const text = (await promptDialog('New Moment', { placeholder: 'What’s happening?', maxLength: 400, ok: 'Save' }))?.trim();
+    if (!text) return;
+    const [title, ...rest] = text.split(/\n|(?<=[.!?])\s+/);
+    const card = { ...ed.makeEl('sticky', null, at), moment: { at: Date.now() }, fill: '#221d19', color: '#f3ebe1', text: rest.length ? `<b>${esc(title)}</b><br>${esc(rest.join(' '))}` : `<b>${esc(title)}</b>`, w: 240, h: 96 };
+    card.x = at.x - 120; card.y = at.y - 48;
+    ed.addEls([card]);
+    document.dispatchEvent(new CustomEvent('fm-add-moment', { detail: { text } }));
+  }
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   async function widgetPicker(at) {
     const ed = editor();
